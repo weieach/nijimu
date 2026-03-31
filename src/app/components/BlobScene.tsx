@@ -144,10 +144,9 @@ function generateBlobs(count: number, isMobile: boolean): BlobData[] {
       shape: {
         modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
         colorIndex: colorIndex % COLOR_PALETTE.length, // Use the same color index
-        // Match manual flow: avoid stacking everything near max (was 0.5–1 on both).
-        fluidity: Math.random() * 0.55,
-        evolve: Math.random() * 0.35,
-        bumpAmount: i % 2 === 0 ? Math.random() * 0.03 : 0.03 + Math.random() * 0.1,
+        fluidity: Math.random() * 0.5 + 0.5,
+        evolve: Math.random() * 0.5 + 0.5,
+        bumpAmount: i % 2 === 0 ? Math.random() * 0.03 : 0.03 + Math.random() * 0.12,
       },
     };
   });

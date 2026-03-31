@@ -91,7 +91,7 @@ export function RevisitMemoryPage() {
             <SceneViewer
               modelPath={shape.modelPath}
               fluidity={shape.fluidity}
-              evolve={Math.min(shape.evolve ?? 0, 0.45)}
+              evolve={shape.evolve}
               bumpAmount={shape.bumpAmount}
               autoRotate={true}
               ready={true}
