@@ -330,7 +330,7 @@ export function ShapeTexturePage() {
         <p
           style={{
             position: "absolute",
-            top: 198,
+            top: 118,
             left: "50%",
             transform: "translateX(-50%)",
             fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
@@ -351,7 +351,7 @@ export function ShapeTexturePage() {
         <div
           style={{
             position: "absolute",
-            top: 275,
+            top: 195,
             left: "50%",
             transform: "translateX(-50%)",
             fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
