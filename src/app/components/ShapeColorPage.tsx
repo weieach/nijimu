@@ -19,6 +19,9 @@ export function ShapeColorPage() {
   const animationFrameRef = useRef<number | null>(null);
   const targetColorIndexRef = useRef<number>(location.state?.matPresetIndex ?? 0); // Target preset index (0-4)
   const smoothingFrameRef = useRef<number | null>(null);
+  const baselinePalmYRef = useRef<number | null>(null);
+  const gestureActiveRef = useRef(false);
+  const gestureFramesRef = useRef(0);
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -146,18 +149,37 @@ export function ShapeColorPage() {
                     ];
                     
                     const palmY = palmLandmarks.reduce((sum, lm) => sum + lm.y, 0) / palmLandmarks.length;
+
+                    // Avoid immediate jumps on first detection: require a small,
+                    // sustained movement away from baseline before applying updates.
+                    if (baselinePalmYRef.current == null) {
+                      baselinePalmYRef.current = palmY;
+                      gestureActiveRef.current = false;
+                      gestureFramesRef.current = 0;
+                    } else {
+                      const baseline = baselinePalmYRef.current;
+                      const movedEnough = Math.abs(palmY - baseline) > 0.04;
+                      if (movedEnough) {
+                        gestureFramesRef.current += 1;
+                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
+                      } else {
+                        gestureFramesRef.current = 0;
+                      }
+                    }
                     
-                    // Map palm Y position to preset index (0-4)
-                    // Lower Y = hand raised higher = warmer (higher index)
-                    const minY = 0.5;
-                    const maxY = 1.2;
-                    const clampedY = Math.max(minY, Math.min(maxY, palmY));
-                    const normalizedY = (clampedY - minY) / (maxY - minY);
-                    
-                    // Invert so raised hand = higher index (warmer)
-                    const colorIndex = Math.round((1 - normalizedY) * (MATERIAL_PRESETS.length - 1));
-                    
-                    targetColorIndexRef.current = colorIndex;
+                    if (gestureActiveRef.current) {
+                      // Map palm Y position to preset index (0-4)
+                      // Lower Y = hand raised higher = warmer (higher index)
+                      const minY = 0.5;
+                      const maxY = 1.2;
+                      const clampedY = Math.max(minY, Math.min(maxY, palmY));
+                      const normalizedY = (clampedY - minY) / (maxY - minY);
+                      
+                      // Invert so raised hand = higher index (warmer)
+                      const colorIndex = Math.round((1 - normalizedY) * (MATERIAL_PRESETS.length - 1));
+                      
+                      targetColorIndexRef.current = colorIndex;
+                    }
                     setHandDetected(true);
                     setDebugPalmY(palmY);
                   } else {

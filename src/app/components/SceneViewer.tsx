@@ -6,12 +6,7 @@ import React, {
   Suspense,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import {
-  useGLTF,
-  OrbitControls,
-  Environment,
-  ContactShadows,
-} from "@react-three/drei";
+import { useGLTF, OrbitControls, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { getShapeBuildEvolvePhase } from "../hooks/useOscillatingEvolve";
 
@@ -95,7 +90,16 @@ interface ModelProps {
   fitTargetSize?: number;
   /** When true, evolve breathing/env motion is driven inside useFrame (shape-build oscillation). */
   oscillatingEvolve?: boolean;
+  /** Called after center/scale is applied, so camera can fit. */
+  onBounds?: (box: THREE.Box3, sphere: THREE.Sphere) => void;
 }
+
+type DeformTarget = {
+  geometry: THREE.BufferGeometry;
+  posAttr: THREE.BufferAttribute;
+  origPos: Float32Array;
+  origNrm: Float32Array | null;
+};
 
 function Model({
   modelPath,
@@ -112,15 +116,14 @@ function Model({
   matOpacity = 0.1,
   fitTargetSize = 2.5,
   oscillatingEvolve = false,
+  onBounds,
 }: ModelProps) {
   const { scene } = useGLTF(modelPath);
   const { scene: threeScene } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
   const clock = useRef(0);
-  const originalPositions = useRef<Float32Array | null>(null);
-  const originalNormals = useRef<Float32Array | null>(null);
-  const meshRef = useRef<THREE.Mesh | null>(null);
-  const maxDimRef = useRef<number>(1);
+  const deformTargetsRef = useRef<DeformTarget[]>([]);
+  const normalFrameRef = useRef(0);
   const oscillatingEvolveRef = useRef(oscillatingEvolve);
   useLayoutEffect(() => {
     oscillatingEvolveRef.current = oscillatingEvolve;
@@ -151,10 +154,21 @@ function Model({
     box.getSize(size);
     const maxDim = Math.max(size.x, size.y, size.z);
     if (maxDim > 0) {
-      scene.scale.setScalar(fitTargetSize / maxDim);
-      maxDimRef.current = maxDim;
+      // Guard: some assets have tiny units → huge scale → camera ends up inside.
+      const desiredScale = fitTargetSize / maxDim;
+      const clampedScale = Math.min(Math.max(desiredScale, 0.02), 50);
+      scene.scale.setScalar(clampedScale);
     }
 
+    // Recompute bounds after transform and report to parent for camera fitting.
+    if (onBounds) {
+      const finalBox = new THREE.Box3().setFromObject(scene);
+      const finalSphere = new THREE.Sphere();
+      finalBox.getBoundingSphere(finalSphere);
+      onBounds(finalBox, finalSphere);
+    }
+
+    const nextTargets: DeformTarget[] = [];
     scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return;
       const mesh = child as THREE.Mesh;
@@ -178,17 +192,22 @@ function Model({
       });
       mesh.castShadow = false;
       mesh.receiveShadow = false;
-      meshRef.current = mesh;
 
       const geom = mesh.geometry as THREE.BufferGeometry;
       if (!geom.attributes.normal) geom.computeVertexNormals();
-      originalPositions.current = Float32Array.from(
-        geom.attributes.position.array as Float32Array,
-      );
-      originalNormals.current = Float32Array.from(
-        geom.attributes.normal.array as Float32Array,
-      );
+      const posAttr = geom.attributes.position as THREE.BufferAttribute;
+      nextTargets.push({
+        geometry: geom,
+        posAttr,
+        origPos: Float32Array.from(posAttr.array as Float32Array),
+        origNrm: geom.attributes.normal
+          ? Float32Array.from(
+              (geom.attributes.normal as THREE.BufferAttribute).array as Float32Array,
+            )
+          : null,
+      });
     });
+    deformTargetsRef.current = nextTargets;
   }, [modelPath, scene, fitTargetSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tint update — separate effect so we never re-apply center/scale on preset switch
@@ -223,7 +242,9 @@ function Model({
       if (e > 0) {
         const freq = 1.0 + e * 2.0;
         const freqEnv = freq / 1.2;
-        const amp = e * Math.PI;
+        // Keep env rotation subtle: large amps + transmission reads as "mesh exploding"
+        // even though vertices barely moved. Align perceived motion with manual slider use.
+        const amp = Math.min(0.42, e * 1.05);
         (threeScene as any).environmentRotation.set(
           amp * Math.sin(t * freqEnv + 1),
           amp * Math.sin(t * freqEnv + 0.5),
@@ -239,54 +260,62 @@ function Model({
     if (autoRotate) groupRef.current.rotation.y += delta * 0.07;
     groupRef.current.rotation.z = Math.sin(t * 0.3) * 0.015;
 
-    // Vertex effects: fluidity wave + surface bump — one pass from original positions
-    if (
-      originalPositions.current &&
-      meshRef.current?.geometry?.attributes?.position
-    ) {
-      const pos = meshRef.current.geometry.attributes.position;
-      const orig = originalPositions.current;
-      const norms = originalNormals.current;
-      const f = fluidity * 0.6;
-      const useBump = !!norms && bumpAmount > 1e-9;
+    // Vertex effects: scale-invariant spatial frequency so high `density` never
+    // folds the mesh (adjacent verts jumped to opposite sides of the wave).
+    const extent = Math.max(0.5, fitTargetSize);
+    const waveK = Math.min(4.5, 3.2 * (2.2 / extent));
+    const bumpCycles = Math.min(22, 7 + (density / 500) * 14);
+    const bumpK = bumpCycles / extent;
+    const f = fluidity * 0.55;
+    const useBump = bumpAmount > 1e-9;
+    const targets = deformTargetsRef.current;
 
-      for (let i = 0; i < pos.count; i++) {
-        const ox = orig[i * 3];
-        const oy = orig[i * 3 + 1];
-        const oz = orig[i * 3 + 2];
-        const wave =
-          f > 0
-            ? Math.sin(ox * 2.5 + t * f * 3) *
-              Math.cos(oz * 2.5 + t * f * 2) *
-              0.08 *
-              f
-            : 0;
-        let px = ox;
-        let py = oy + wave;
-        let pz = oz;
+    if (targets.length && (f > 1e-6 || useBump)) {
+      normalFrameRef.current += 1;
+      const recomputeNormals = normalFrameRef.current % 2 === 0;
 
-        if (useBump && norms) {
-          const nx = norms[i * 3];
-          const ny = norms[i * 3 + 1];
-          const nz = norms[i * 3 + 2];
-          const n1 = Math.sin(ox * density) * Math.cos(oy * density);
-          const n2 = Math.sin(oy * density) * Math.cos(oz * density);
-          const n3 = Math.sin(oz * density) * Math.cos(ox * density);
-          const raw = (n1 + n2 + n3) / 3;
-          const shaped = Math.pow(
-            Math.max(0, raw),
-            1.0 - bumpSpike * 0.98,
-          );
-          const amount = shaped * bumpAmount * 0.25;
-          px += nx * amount;
-          py += ny * amount;
-          pz += nz * amount;
+      for (const { posAttr, origPos: orig, origNrm: norms, geometry } of targets) {
+        const pos = posAttr;
+        const needBump = useBump && !!norms;
+
+        for (let i = 0; i < pos.count; i++) {
+          const ox = orig[i * 3];
+          const oy = orig[i * 3 + 1];
+          const oz = orig[i * 3 + 2];
+          const wave =
+            f > 0
+              ? Math.sin(ox * waveK + t * f * 3) *
+                Math.cos(oz * waveK + t * f * 2) *
+                0.055 *
+                f
+              : 0;
+          let px = ox;
+          let py = oy + wave;
+          let pz = oz;
+
+          if (needBump && norms) {
+            const nx = norms[i * 3];
+            const ny = norms[i * 3 + 1];
+            const nz = norms[i * 3 + 2];
+            const n1 = Math.sin(ox * bumpK) * Math.cos(oy * bumpK);
+            const n2 = Math.sin(oy * bumpK) * Math.cos(oz * bumpK);
+            const n3 = Math.sin(oz * bumpK) * Math.cos(ox * bumpK);
+            const raw = (n1 + n2 + n3) / 3;
+            const shaped = Math.pow(
+              Math.max(0, raw),
+              1.0 - bumpSpike * 0.98,
+            );
+            const amount = shaped * bumpAmount * 0.28;
+            px += nx * amount;
+            py += ny * amount;
+            pz += nz * amount;
+          }
+
+          pos.setXYZ(i, px, py, pz);
         }
-
-        pos.setXYZ(i, px, py, pz);
+        pos.needsUpdate = true;
+        if (recomputeNormals) geometry.computeVertexNormals();
       }
-      pos.needsUpdate = true;
-      meshRef.current.geometry.computeVertexNormals();
     }
 
     // Evolve: breathe the whole model (group), not a single mesh — multi-mesh GLBs were invisible before.
@@ -347,6 +376,15 @@ interface SceneViewerProps {
   matPresetIndex?: number;
   /** Shape-build flow: 10s oscillating evolve inside the render loop (env + subtle scale). */
   shapeBuildOscillatingEvolve?: boolean;
+  /** No OrbitControls — camera stays at auto-fitted (0,0,z) and looks at world origin. */
+  fixedCamera?: boolean;
+  /** Multiplier on auto-fit camera distance (1 = default). Clamped ~0.75–1.6. */
+  cameraDistanceMultiplier?: number;
+  /**
+   * After the first bounds fit, reuse that camera z for every subsequent modelPath change.
+   * Keeps preview scale consistent when switching items (e.g. connect-memories sidebar).
+   */
+  lockCameraDistanceToFirstFit?: boolean;
 }
 
 // ─── Main Scene ───────────────────────────────────────────────────────────────
@@ -369,7 +407,13 @@ export function SceneViewer({
   rectAreaLightColors,
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
+  fixedCamera = false,
+  cameraDistanceMultiplier = 1,
+  lockCameraDistanceToFirstFit = false,
 }: SceneViewerProps) {
+  const safeCamMult = Math.max(0.75, Math.min(1.6, cameraDistanceMultiplier));
+  const lockedFitZRef = useRef<number | null>(null);
+
   // Camera settings calibrated so fitTargetSize fills ~60-65% of viewport height
   // (whole shape visible with breathing room). Formula: cameraZ = fitTargetSize / (2*tan(fov/2) * 0.65)
   const fitTargetSize = constrainedViewport ? 2.2 : 2.5;
@@ -390,6 +434,9 @@ export function SceneViewer({
   // Shape-build flow: never use the `evolve` prop for motion — Model uses getShapeBuildEvolvePhase() in useFrame.
   const modelStaticEvolveScaled = shapeBuildOscillatingEvolve ? 0 : evolve * 0.6;
 
+  // Fixed camera: no orbit — also stop mesh Y-spin or it looks identical to orbiting.
+  const modelAutoRotate = fixedCamera ? false : autoRotate;
+
   // Resolve material colours: matPresetIndex → full preset, else fall back to
   // rectAreaLightColors.matColor with auto-derived attenuation/sheen.
   const preset =
@@ -405,12 +452,80 @@ export function SceneViewer({
     preset?.matAttenuationColor ?? scaledHex(matColor, 0.85);
   const matSheenColor = preset?.matSheenColor ?? scaledHex(matColor, 0.9);
 
+  // Clamp deformation inputs so random past-memory shapes never "tear" geometry.
+  const safeFluidity = Math.max(0, Math.min(1, fluidity));
+  const safeEvolve = Math.max(0, Math.min(1, modelStaticEvolveScaled));
+  const safeBumpAmount = Math.max(0, Math.min(0.15, bumpAmount));
+  const safeBumpSpike = Math.max(0, Math.min(1, bumpSpike));
+  const safeDensity = Math.max(80, Math.min(500, density));
+
+  const controlsRef = useRef<any>(null);
+  const [fitCam, setFitCam] = useState<{
+    z: number;
+    near: number;
+    far: number;
+  } | null>(null);
+
+  function handleBounds(_box: THREE.Box3, sphere: THREE.Sphere) {
+    const r = Math.max(0.001, sphere.radius);
+    // Fit to vertical FOV with a little breathing room.
+    const fovRad = (cameraFov * Math.PI) / 180;
+    const margin = constrainedViewport ? 1.42 : 1.28;
+    let z = (r / Math.sin(fovRad / 2)) * margin * safeCamMult;
+    if (lockCameraDistanceToFirstFit) {
+      if (lockedFitZRef.current === null) {
+        lockedFitZRef.current = z;
+      }
+      z = lockedFitZRef.current;
+    }
+    const distToFront = Math.max(0.02, z - r);
+    const near = Math.max(0.005, distToFront * 0.06);
+    const far = z + r * 10;
+    setFitCam({ z, near, far });
+  }
+
+  useEffect(() => {
+    setFitCam(null);
+  }, [modelPath, safeCamMult]);
+
+  useEffect(() => {
+    if (!lockCameraDistanceToFirstFit) {
+      lockedFitZRef.current = null;
+    }
+  }, [lockCameraDistanceToFirstFit]);
+
+  function SceneCameraSync() {
+    const { camera } = useThree();
+    useEffect(() => {
+      if (!fitCam) return;
+      camera.position.set(0, 0, fitCam.z);
+      (camera as THREE.PerspectiveCamera).near = fitCam.near;
+      (camera as THREE.PerspectiveCamera).far = fitCam.far;
+      camera.updateProjectionMatrix();
+      if (fixedCamera) {
+        camera.lookAt(0, 0, 0);
+      } else if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
+      }
+    }, [camera, fitCam, fixedCamera]);
+
+    useFrame(() => {
+      if (!fixedCamera) return;
+      const z = fitCam?.z ?? cameraZ;
+      camera.position.set(0, 0, z);
+      camera.lookAt(0, 0, 0);
+    });
+
+    return null;
+  }
+
   const containerStyle: React.CSSProperties = {
     width: "100%",
     height: "100%",
     position: "relative",
     zIndex: 1,
-    cursor: isDragging ? "grabbing" : "grab",
+    cursor: fixedCamera ? "default" : isDragging ? "grabbing" : "grab",
     ...style,
   };
 
@@ -420,15 +535,23 @@ export function SceneViewer({
   return (
     <div className={className} style={containerStyle}>
       <Canvas
-        camera={{ position: [0, 0, cameraZ], fov: cameraFov, near: 0.1, far: 100 }}
+        camera={{
+          position: [0, 0, fitCam?.z ?? cameraZ],
+          fov: cameraFov,
+          near: fitCam?.near ?? 0.1,
+          far: fitCam?.far ?? 100,
+        }}
         style={{ background: "transparent" }}
         gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
         flat={false}
         linear={false}
-        onPointerDown={() => setIsDragging(true)}
+        onPointerDown={() => {
+          if (!fixedCamera) setIsDragging(true);
+        }}
         onPointerUp={() => setIsDragging(false)}
         onPointerLeave={() => setIsDragging(false)}
       >
+        <SceneCameraSync />
         <ambientLight intensity={5} color="#758FDF" />
         <ambientLight intensity={2} color="#989BE8" />
         <directionalLight
@@ -463,16 +586,6 @@ export function SceneViewer({
           decay={0.1}
         />
         <Environment preset="city" environmentIntensity={1.5} />
-        <ContactShadows
-          position={[0, -1.6, 0]}
-          opacity={0.26}
-          scale={10}
-          blur={3}
-          near={0.1}
-          far={22}
-          resolution={1024}
-          color="#555555"
-        />
         <Suspense fallback={<Loader />}>
           <Model
             key={modelPath}
@@ -480,25 +593,29 @@ export function SceneViewer({
             matColor={matColor}
             matAttenuationColor={matAttenuationColor}
             matSheenColor={matSheenColor}
-            autoRotate={autoRotate}
-            fluidity={fluidity}
-            evolve={modelStaticEvolveScaled}
+            autoRotate={modelAutoRotate}
+            fluidity={safeFluidity}
+            evolve={safeEvolve}
             oscillatingEvolve={shapeBuildOscillatingEvolve}
-            bumpAmount={bumpAmount}
-            bumpSpike={bumpSpike}
-            density={density}
+            bumpAmount={safeBumpAmount}
+            bumpSpike={safeBumpSpike}
+            density={safeDensity}
             matOpacity={matOpacity}
             fitTargetSize={fitTargetSize}
+            onBounds={handleBounds}
           />
         </Suspense>
-        <OrbitControls
-          enableZoom={true}
-          enablePan={false}
-          minDistance={orbitMin}
-          maxDistance={orbitMax}
-          autoRotate={false}
-          onStart={() => setAutoRotate(false)}
-        />
+        {!fixedCamera && (
+          <OrbitControls
+            ref={controlsRef}
+            enableZoom={true}
+            enablePan={false}
+            minDistance={orbitMin}
+            maxDistance={orbitMax}
+            autoRotate={false}
+            onStart={() => setAutoRotate(false)}
+          />
+        )}
       </Canvas>
 
       {/* Frosted glass blur — main layer */}

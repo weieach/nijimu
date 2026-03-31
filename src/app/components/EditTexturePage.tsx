@@ -7,7 +7,7 @@ export function EditTexturePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [fadeIn, setFadeIn] = useState(false);
-  const [bumpAmount, setBumpAmount] = useState(location.state?.shape?.bumpAmount || 0.5);
+  const [bumpAmount, setBumpAmount] = useState(location.state?.shape?.bumpAmount ?? 0);
 
   const memory = location.state?.memory;
   const shape = location.state?.shape || {};
@@ -73,7 +73,7 @@ export function EditTexturePage() {
           >
             <SceneViewer
               modelPath={shape.modelPath}
-              fluidity={shape.fluidity || 0.5}
+              fluidity={shape.fluidity ?? 0}
               evolve={0.8}
               bumpAmount={bumpAmount}
               autoRotate={true}

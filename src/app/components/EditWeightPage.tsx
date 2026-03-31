@@ -8,11 +8,11 @@ export function EditWeightPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [fadeIn, setFadeIn] = useState(false);
-  const [fluidity, setFluidity] = useState(location.state?.shape?.fluidity || 0.5);
+  const [fluidity, setFluidity] = useState(location.state?.shape?.fluidity ?? 0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const targetFluidityRef = useRef<number>(location.state?.shape?.fluidity || 0.5);
+  const targetFluidityRef = useRef<number>(location.state?.shape?.fluidity ?? 0);
 
   const memory = location.state?.memory;
   const shape = location.state?.shape || {};
@@ -196,7 +196,7 @@ export function EditWeightPage() {
               modelPath={shape.modelPath}
               fluidity={fluidity}
               evolve={0}
-              bumpAmount={shape.bumpAmount || 0.5}
+              bumpAmount={shape.bumpAmount ?? 0}
               autoRotate={true}
               ready={true}
               constrainedViewport

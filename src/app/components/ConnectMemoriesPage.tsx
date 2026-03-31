@@ -55,12 +55,15 @@ interface Memory {
   };
 }
 
+/** Right-rail slots 2,4,6,8 (1-based list order): show clearer procedural bump in 3D preview. */
+const CONNECT_PAGE_BUMP_ROW_INDEXES = new Set([1, 3, 5, 7]);
+
 // Generate memories with random shape properties (matching scroll page)
 const generateMemories = (): Memory[] => {
-  return LIFE_EVENTS.map((event) => {
+  return LIFE_EVENTS.map((event, index) => {
     // Use the same color index for both 2D watercolor and 3D shape
     const colorIndex = event.color;
-    
+
     return {
       id: event.id,
       title: event.event,
@@ -71,7 +74,9 @@ const generateMemories = (): Memory[] => {
         colorIndex: colorIndex % COLOR_PALETTE.length, // Match 2D and 3D colors
         fluidity: Math.random(),
         evolve: Math.random(),
-        bumpAmount: Math.random(),
+        bumpAmount: CONNECT_PAGE_BUMP_ROW_INDEXES.has(index)
+          ? 0.11
+          : Math.random() * 0.05,
       },
     };
   });
@@ -219,6 +224,9 @@ export function ConnectMemoriesPage() {
               autoRotate={true}
               ready={true}
               constrainedViewport
+              lockCameraDistanceToFirstFit
+              cameraDistanceMultiplier={1.25}
+              canvasBlurPx={0}
               rectAreaLightColors={{
                 color1: selectedColor.light1,
                 color2: selectedColor.light2,

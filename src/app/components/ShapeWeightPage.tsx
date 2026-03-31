@@ -23,6 +23,9 @@ export function ShapeWeightPage() {
   const animationFrameRef = useRef<number | null>(null);
   const targetFluidityRef = useRef<number>(location.state?.fluidity ?? 0);
   const smoothingFrameRef = useRef<number | null>(null);
+  const baselinePinchDistanceRef = useRef<number | null>(null);
+  const gestureActiveRef = useRef(false);
+  const gestureFramesRef = useRef(0);
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -160,14 +163,32 @@ export function ShapeWeightPage() {
                       Math.pow(indexTip.z - thumbTip.z, 2)
                     );
 
-                    // Map distance 0.05 (minimum weight) to 0.5 (maximum weight)
-                    const minDistance = 0.05;
-                    const maxDistance = 0.5;
-                    const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
-                    const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
-                    const newFluidity = normalizedValue; // Direct mapping: closer = lower weight
-                    
-                    targetFluidityRef.current = newFluidity;
+                    // Avoid "non-smooth initial state": don't apply MediaPipe output until
+                    // user meaningfully changes pose from the first detected baseline.
+                    if (baselinePinchDistanceRef.current == null) {
+                      baselinePinchDistanceRef.current = distance;
+                      gestureActiveRef.current = false;
+                      gestureFramesRef.current = 0;
+                    } else {
+                      const baseline = baselinePinchDistanceRef.current;
+                      const movedEnough = Math.abs(distance - baseline) > 0.02;
+                      if (movedEnough) {
+                        gestureFramesRef.current += 1;
+                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
+                      } else {
+                        gestureFramesRef.current = 0;
+                      }
+                    }
+
+                    if (gestureActiveRef.current) {
+                      // Map distance 0.05 (minimum weight) to 0.5 (maximum weight)
+                      const minDistance = 0.05;
+                      const maxDistance = 0.5;
+                      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
+                      const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
+                      const newFluidity = normalizedValue; // Direct mapping: closer = lower weight
+                      targetFluidityRef.current = newFluidity;
+                    }
                     setHandsDetected(1);
                     setDebugPinchDistance(distance);
                   } else {

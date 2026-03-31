@@ -31,21 +31,29 @@ interface Memory {
   };
 }
 
+// A few catalogue memories get clearer surface texture; the rest stay mostly smooth.
+const TEXTURED_MEMORY_IDS = new Set(["2", "5", "9", "12", "15"]);
+
 // Generate memories with random shape properties
 const generateMemories = (): Memory[] => {
-  return LIFE_EVENTS.map((event) => ({
-    id: event.id,
-    title: event.event,
-    year: event.year,
-    color: event.color,
-    shape: {
-      modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
-      colorIndex: Math.floor(Math.random() * COLOR_PALETTE.length),
-      fluidity: Math.random(), // 0-1 for weight
-      evolve: Math.random(), // 0-1 for evolve
-      bumpAmount: Math.random(), // 0-1 for texture
-    },
-  }));
+  return LIFE_EVENTS.map((event) => {
+    const isTextured = TEXTURED_MEMORY_IDS.has(event.id);
+    return {
+      id: event.id,
+      title: event.event,
+      year: event.year,
+      color: event.color,
+      shape: {
+        modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
+        colorIndex: Math.floor(Math.random() * COLOR_PALETTE.length),
+        fluidity: Math.random(), // 0-1 for weight
+        evolve: 0, // catalogue: env-spin + transmission is easy to misread as geometry tearing
+        bumpAmount: isTextured
+          ? 0.09 + Math.random() * 0.055 // ~0.09–0.145, capped in SceneViewer
+          : Math.random() * 0.04, // mostly smooth / slight grain
+      },
+    };
+  });
 };
 
 export function MemoryScrollPage() {
@@ -102,7 +110,7 @@ export function MemoryScrollPage() {
         shape: {
           modelPath: memory.shape.modelPath,
           fluidity: memory.shape.fluidity,
-          evolve: memory.shape.evolve,
+          evolve: 0,
           bumpAmount: memory.shape.bumpAmount,
           colors: {
             color1: COLOR_PALETTE[memory.shape.colorIndex].light1,
@@ -133,11 +141,13 @@ export function MemoryScrollPage() {
           <SceneViewer
             modelPath={selectedMemory.shape.modelPath}
             fluidity={selectedMemory.shape.fluidity}
-            evolve={selectedMemory.shape.evolve}
+            evolve={0}
             bumpAmount={selectedMemory.shape.bumpAmount}
-            autoRotate={true}
             ready={true}
             constrainedViewport
+            fixedCamera
+            canvasBlurPx={0}
+            matOpacity={0.42}
             rectAreaLightColors={{
               color1: selectedColor.light1,
               color2: selectedColor.light2,

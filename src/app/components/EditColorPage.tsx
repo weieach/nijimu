@@ -105,9 +105,9 @@ export function EditColorPage() {
           >
             <SceneViewer
               modelPath={shape.modelPath}
-              fluidity={shape.fluidity || 0.5}
+              fluidity={shape.fluidity ?? 0}
               evolve={0.4}
-              bumpAmount={shape.bumpAmount || 0.5}
+              bumpAmount={shape.bumpAmount ?? 0}
               autoRotate={true}
               ready={true}
               constrainedViewport

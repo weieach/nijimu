@@ -22,6 +22,9 @@ export function ShapeTexturePage() {
   const animationFrameRef = useRef<number | null>(null);
   const targetBumpAmountRef = useRef<number>(location.state?.bumpAmount ?? 0);
   const smoothingFrameRef = useRef<number | null>(null);
+  const baselineHandsDistanceRef = useRef<number | null>(null);
+  const gestureActiveRef = useRef(false);
+  const gestureFramesRef = useRef(0);
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -166,18 +169,37 @@ export function ShapeTexturePage() {
                       Math.pow(hand2Center.y - hand1Center.y, 2) +
                       Math.pow(hand2Center.z - hand1Center.z, 2)
                     );
-                    
-                    // Map distance to bump amount + density (texture)
-                    // Closer hands = smooth surface; far apart = rough texture
-                    // Reference ranges: bump 0→0.15, density 150→500
-                    // Maximum reached at distance = 0.55
-                    const minDistance = 0.15;
-                    const maxDistance = 0.55;
-                    const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
-                    const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
 
-                    targetBumpAmountRef.current = normalizedValue * 0.15;
-                    targetDensityRef.current = 150 + normalizedValue * 350; // 150 → 500
+                    // Avoid "non-smooth initial state": don't apply MediaPipe output until
+                    // user meaningfully changes pose from the first detected baseline.
+                    if (baselineHandsDistanceRef.current == null) {
+                      baselineHandsDistanceRef.current = distance;
+                      gestureActiveRef.current = false;
+                      gestureFramesRef.current = 0;
+                    } else {
+                      const baseline = baselineHandsDistanceRef.current;
+                      const movedEnough = Math.abs(distance - baseline) > 0.03;
+                      if (movedEnough) {
+                        gestureFramesRef.current += 1;
+                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
+                      } else {
+                        gestureFramesRef.current = 0;
+                      }
+                    }
+
+                    if (gestureActiveRef.current) {
+                      // Map distance to bump amount + density (texture)
+                      // Closer hands = smooth surface; far apart = rough texture
+                      // Reference ranges: bump 0→0.15, density 150→500
+                      // Maximum reached at distance = 0.55
+                      const minDistance = 0.15;
+                      const maxDistance = 0.55;
+                      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
+                      const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
+
+                      targetBumpAmountRef.current = normalizedValue * 0.15;
+                      targetDensityRef.current = 150 + normalizedValue * 350; // 150 → 500
+                    }
                     setHandsDetected(2);
                     setDebugDistance(distance);
                   } else {
