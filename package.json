@@ -8,6 +8,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
     "@mediapipe/tasks-vision": "^0.10.32",
@@ -52,10 +53,10 @@
     "motion": "12.23.24",
     "next-themes": "0.4.6",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "react-day-picker": "8.10.1",
     "react-dnd": "16.0.1",
     "react-dnd-html5-backend": "16.0.1",
+    "react-dom": "^19.0.0",
     "react-hook-form": "7.55.0",
     "react-popper": "2.3.0",
     "react-resizable-panels": "2.1.7",
@@ -70,9 +71,9 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.1.12",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
     "vite": "6.3.5"
@@ -90,6 +91,10 @@
     }
   },
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@tailwindcss/oxide"
+    ],
     "overrides": {
       "vite": "6.3.5",
       "rollup": "npm:@rollup/wasm-node@4.59.0"

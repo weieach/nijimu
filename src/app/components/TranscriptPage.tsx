@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
+import { requestPolish } from "../lib/polish";
 import exposureTrialFontUrl from "../../assets/fonts/ExposureTrial-20.otf?url";
 import exposureTrial10Url from "../../assets/fonts/ExposureTrial+10.otf?url";
 
@@ -13,8 +14,16 @@ export function TranscriptPage() {
   const transcript =
     (location.state as { transcript?: string } | null)?.transcript || SAMPLE_TRANSCRIPT;
 
-  const words = transcript.split(/\s+/);
-  
+  // AI polish: original vs polished version choice
+  const [activeText, setActiveText] = useState(transcript);
+  const [polished, setPolished] = useState<string | null>(null);
+  const [polishState, setPolishState] = useState<"idle" | "loading" | "compare" | "error">("idle");
+  const [polishError, setPolishError] = useState<string | null>(null);
+  const [chosenVersion, setChosenVersion] = useState<"original" | "polished" | null>(null);
+  const compareMode = polishState === "compare";
+
+  const words = activeText.split(/\s+/);
+
   // State for typing effect
   const [visibleWordCount, setVisibleWordCount] = useState(0);
   const [isTyping, setIsTyping] = useState(true);
@@ -29,8 +38,14 @@ export function TranscriptPage() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const [showBottomFade, setShowBottomFade] = useState(false);
 
-  // Word-by-word typing effect
+  // Word-by-word typing effect (runs once, on the original transcript)
+  const typingDoneRef = useRef(false);
   useEffect(() => {
+    if (typingDoneRef.current) {
+      // Text was swapped after typing finished (polish choice) — show it all
+      setVisibleWordCount(words.length);
+      return;
+    }
     const typingSpeed = 80; // milliseconds per word
 
     typingIntervalRef.current = window.setInterval(() => {
@@ -42,6 +57,7 @@ export function TranscriptPage() {
           if (typingIntervalRef.current) {
             clearInterval(typingIntervalRef.current);
           }
+          typingDoneRef.current = true;
           setIsTyping(false);
           // Small delay before showing continue button
           setTimeout(() => {
@@ -60,7 +76,16 @@ export function TranscriptPage() {
   }, [words.length]);
 
   const handleContinue = () => {
-    if (!highlightMode) {
+    if (compareMode) {
+      // Confirm version choice, then move on to highlighting
+      if (!chosenVersion) return;
+      if (chosenVersion === "polished" && polished) {
+        setActiveText(polished);
+      }
+      setPolishState("idle");
+      setHighlightMode(true);
+      setShowContinue(false);
+    } else if (!highlightMode) {
       // First continue: enter highlight mode
       setHighlightMode(true);
       setShowContinue(false);
@@ -68,13 +93,33 @@ export function TranscriptPage() {
       // Second continue: fade out and navigate to naming page
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate("/record/name", { 
-          state: { 
-            transcript,
+        navigate("/record/name", {
+          state: {
+            transcript: activeText,
             highlightedWords: Array.from(highlightedWords).map(i => words[i])
-          } 
+          }
         });
       }, 1000);
+    }
+  };
+
+  const canPolish =
+    !highlightMode &&
+    polished === null &&
+    polishState !== "loading" &&
+    transcript.trim().split(/\s+/).length >= 10;
+
+  const handlePolish = async () => {
+    setPolishState("loading");
+    setPolishError(null);
+    const result = await requestPolish(transcript);
+    if (result.polished) {
+      setPolished(result.polished);
+      setChosenVersion(null);
+      setPolishState("compare");
+    } else {
+      setPolishError(result.error);
+      setPolishState("error");
     }
   };
 
@@ -232,11 +277,13 @@ export function TranscriptPage() {
                   textAlign: "center",
                 }}
               >
-                What's been lingering on your mind?
+                {compareMode
+                  ? "keep your words, or the polished version?"
+                  : "What's been lingering on your mind?"}
               </p>
 
-              {/* Transcribing... text (only visible while typing) */}
-              {isTyping && (
+              {/* Status line: transcribing / polishing / polish error */}
+              {(isTyping || polishState === "loading" || polishState === "error") && (
                 <p
                   style={{
                     fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
@@ -251,7 +298,11 @@ export function TranscriptPage() {
                     marginLeft: 0,
                   }}
                 >
-                  transcribing...
+                  {isTyping
+                    ? "transcribing..."
+                    : polishState === "loading"
+                      ? "polishing..."
+                      : `couldn't polish — your words are safe${polishError ? ` (${polishError.toLowerCase()})` : ""}`}
                 </p>
               )}
             </div>
@@ -321,12 +372,81 @@ export function TranscriptPage() {
           <div
             className="overflow-y-auto overflow-x-hidden relative"
             style={{
-              width: "60%",
+              width: compareMode ? "90%" : "60%",
               maxHeight: "100%",
               position: "relative",
-              paddingTop: "100px", // Position body text 100px from top
+              paddingTop: compareMode ? "40px" : "100px", // Position body text from top
             }}
           >
+            {compareMode && polished ? (
+              /* Side-by-side version choice (stacks when narrow) */
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "clamp(16px, 3vw, 32px)",
+                  justifyContent: "center",
+                  alignItems: "stretch",
+                }}
+              >
+                {([
+                  { key: "original" as const, label: "your words", text: transcript },
+                  { key: "polished" as const, label: "polished", text: polished },
+                ]).map(({ key, label, text }) => {
+                  const isChosen = chosenVersion === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setChosenVersion(key)}
+                      style={{
+                        flex: "1 1 320px",
+                        maxWidth: 520,
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "flex-start",
+                        textAlign: "center",
+                        background: isChosen ? "rgba(175, 163, 163, 0.14)" : "transparent",
+                        border: isChosen
+                          ? "1px solid rgba(123, 123, 135, 0.35)"
+                          : "1px solid rgba(123, 123, 135, 0.12)",
+                        borderRadius: 16,
+                        padding: "clamp(20px, 3vw, 32px)",
+                        cursor: "pointer",
+                        transition: "background 0.3s ease, border-color 0.3s ease",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                          fontSize: 12,
+                          color: isChosen ? "#7b7b87" : "#acacac",
+                          textTransform: "lowercase",
+                          marginBottom: 16,
+                          transition: "color 0.3s ease",
+                        }}
+                      >
+                        {label}
+                      </span>
+                      <span
+                        style={{
+                          display: "block",
+                          fontFamily: "'Exposure Trial Plus', 'Playfair Display', Georgia, serif",
+                          fontSize: "clamp(15px, 1.8vw, 18px)",
+                          fontWeight: 400,
+                          lineHeight: 1.6,
+                          letterSpacing: "0.02em",
+                          color: "#2D2727",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        {text}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
             <div
               ref={transcriptRef}
               style={{
@@ -381,7 +501,8 @@ export function TranscriptPage() {
                 );
               })}
             </div>
-            
+            )}
+
             {/* Bottom gradient mask - only shows when not at bottom */}
             {showBottomFade && (
               <div
@@ -401,60 +522,116 @@ export function TranscriptPage() {
           </div>
         </div>
 
-        {/* Continue button - fixed at bottom */}
-        {showContinue && (
-          <button
-            onClick={handleContinue}
-            disabled={highlightMode && !hasHighlights}
-            className="transition-opacity duration-500"
-            style={{
-              position: "fixed",
-              left: "50%",
-              transform: "translateX(-50%)",
-              bottom: "clamp(40px, 8vh, 80px)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-              padding: "12px 24px",
-              borderRadius: 100,
-              border: "none",
-              background: (highlightMode && !hasHighlights) 
-                ? "rgba(175, 163, 163, 0.1)" 
-                : "rgba(175, 163, 163, 0.2)",
-              cursor: (highlightMode && !hasHighlights) ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
-              opacity: showContinue ? 1 : 0,
-              zIndex: 20,
-            }}
-          >
-            <span
+        {/* Action buttons - fixed at bottom */}
+        {showContinue && (() => {
+          const continueDisabled =
+            (highlightMode && !hasHighlights) ||
+            (compareMode && !chosenVersion) ||
+            polishState === "loading";
+          const dimmed = "rgba(140, 140, 140, 0.5)";
+          return (
+            <div
+              className="transition-opacity duration-500"
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
-                fontSize: 16,
-                fontWeight: 400,
-                lineHeight: 1.5,
-                color: (highlightMode && !hasHighlights) ? "rgba(140, 140, 140, 0.5)" : "#8C8C8C",
-                textShadow: "none",
-                textTransform: "lowercase",
+                position: "fixed",
+                left: "50%",
+                transform: "translateX(-50%)",
+                bottom: "clamp(40px, 8vh, 80px)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 16,
+                whiteSpace: "nowrap",
+                zIndex: 20,
               }}
             >
-              continue
-            </span>
-            {/* Arrow icon */}
-            <span
-              style={{
-                fontFamily: "SF Pro, system-ui, sans-serif",
-                fontSize: 14,
-                lineHeight: 0,
-                color: (highlightMode && !hasHighlights) ? "rgba(140, 140, 140, 0.5)" : "#8C8C8C",
-                fontVariationSettings: "'wdth' 100",
-              }}
-            >
-              ›
-            </span>
-          </button>
-        )}
+              {canPolish && (
+                <button
+                  onClick={handlePolish}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 12,
+                    padding: "12px 24px",
+                    borderRadius: 100,
+                    border: "1px solid rgba(175, 163, 163, 0.35)",
+                    background: "transparent",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                      fontSize: 16,
+                      fontWeight: 400,
+                      lineHeight: 1.5,
+                      color: "#8C8C8C",
+                      textShadow: "none",
+                      textTransform: "lowercase",
+                    }}
+                  >
+                    polish
+                  </span>
+                  {/* Sparkle icon */}
+                  <span
+                    style={{
+                      fontFamily: "SF Pro, system-ui, sans-serif",
+                      fontSize: 13,
+                      lineHeight: 0,
+                      color: "#8C8C8C",
+                    }}
+                  >
+                    ✦
+                  </span>
+                </button>
+              )}
+              <button
+                onClick={handleContinue}
+                disabled={continueDisabled}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                  padding: "12px 24px",
+                  borderRadius: 100,
+                  border: "none",
+                  background: continueDisabled
+                    ? "rgba(175, 163, 163, 0.1)"
+                    : "rgba(175, 163, 163, 0.2)",
+                  cursor: continueDisabled ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                    fontSize: 16,
+                    fontWeight: 400,
+                    lineHeight: 1.5,
+                    color: continueDisabled ? dimmed : "#8C8C8C",
+                    textShadow: "none",
+                    textTransform: "lowercase",
+                  }}
+                >
+                  continue
+                </span>
+                {/* Arrow icon */}
+                <span
+                  style={{
+                    fontFamily: "SF Pro, system-ui, sans-serif",
+                    fontSize: 14,
+                    lineHeight: 0,
+                    color: continueDisabled ? dimmed : "#8C8C8C",
+                    fontVariationSettings: "'wdth' 100",
+                  }}
+                >
+                  ›
+                </span>
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Back button */}
