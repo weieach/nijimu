@@ -28,14 +28,19 @@ export async function polishTranscript(
   apiKey: string | undefined,
   model = "claude-opus-4-8",
 ): Promise<{ status: number; body: PolishSuccess | PolishFailure }> {
+  if (!transcript || transcript.trim().split(/\s+/).length < 3) {
+    return { status: 400, body: { error: "Transcript is too short to polish." } };
+  }
+  // Cost guardrail — recordings cap at ~60s of speech, so anything beyond
+  // this is not a real transcript (matters once the endpoint is public).
+  if (transcript.length > 5000) {
+    return { status: 400, body: { error: "Transcript is too long to polish." } };
+  }
   if (!apiKey) {
     return {
       status: 500,
       body: { error: "ANTHROPIC_API_KEY is not set. Add it to nijimu/.env.local" },
     };
-  }
-  if (!transcript || transcript.trim().split(/\s+/).length < 3) {
-    return { status: 400, body: { error: "Transcript is too short to polish." } };
   }
 
   const client = new Anthropic({ apiKey });
