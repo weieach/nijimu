@@ -1,21 +1,38 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
+import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
+
+// Fallback transcript for browsers without the Web Speech API
+const MOCK_TRANSCRIPT = "I remember the day we sat by the river, watching the sun set behind the mountains. The air was crisp and I could feel the warmth of your hand in mine. It was one of those perfect moments that I wish I could hold onto forever.";
+
+const MAX_RECORDING_SECONDS = 60;
+const MOCK_RECORDING_SECONDS = 10;
 
 export function RecordingStartPage() {
   const navigate = useNavigate();
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [showBlobs, setShowBlobs] = useState(false);
-  const [isRecording, setIsRecording] = useState(false); // Track recording state
-  const [transcript, setTranscript] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
   const [displayedTranscript, setDisplayedTranscript] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const recordingTimerRef = useRef<number | null>(null);
   const typingIntervalRef = useRef<number | null>(null);
 
-  // Mock transcript that will appear gradually
-  const mockTranscript = "I remember the day we sat by the river, watching the sun set behind the mountains. The air was crisp and I could feel the warmth of your hand in mine. It was one of those perfect moments that I wish I could hold onto forever.";
+  const speech = useSpeechRecognition();
+  const useMock = !speech.isSupported;
+
+  // Latest live transcript, readable from timers/timeouts without stale closures
+  const liveTranscriptRef = useRef("");
+  useEffect(() => {
+    liveTranscriptRef.current = [speech.finalText, speech.interimText]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }, [speech.finalText, speech.interimText]);
+
+  const maxDuration = useMock ? MOCK_RECORDING_SECONDS : MAX_RECORDING_SECONDS;
 
   // Auto-fade in blobs on mount
   useEffect(() => {
@@ -28,55 +45,56 @@ export function RecordingStartPage() {
   const handleStartRecording = () => {
     setIsRecording(true);
     setRecordingDuration(0);
-    setTranscript("");
     setDisplayedTranscript("");
-    
+    speech.reset();
+
+    if (!useMock) {
+      speech.start();
+    }
+
     // Start timer
     recordingTimerRef.current = window.setInterval(() => {
       setRecordingDuration((prev) => {
         const newDuration = prev + 1;
-        
-        // Auto-stop at 10 seconds
-        if (newDuration >= 10) {
+
+        if (newDuration >= maxDuration) {
           handleStopRecording();
         }
-        
+
         return newDuration;
       });
     }, 1000);
 
-    // Start transcript simulation after 1 second
-    setTimeout(() => {
-      setTranscript(mockTranscript);
-      setIsTyping(true);
-      
-      let currentIndex = 0;
-      typingIntervalRef.current = window.setInterval(() => {
-        if (currentIndex < mockTranscript.length) {
-          setDisplayedTranscript(mockTranscript.slice(0, currentIndex + 1));
-          currentIndex++;
-        } else {
-          if (typingIntervalRef.current) {
-            clearInterval(typingIntervalRef.current);
-            typingIntervalRef.current = null;
+    // Mock mode: simulate a transcript typing in, as before
+    if (useMock) {
+      setTimeout(() => {
+        setIsTyping(true);
+
+        let currentIndex = 0;
+        typingIntervalRef.current = window.setInterval(() => {
+          if (currentIndex < MOCK_TRANSCRIPT.length) {
+            setDisplayedTranscript(MOCK_TRANSCRIPT.slice(0, currentIndex + 1));
+            currentIndex++;
+          } else {
+            if (typingIntervalRef.current) {
+              clearInterval(typingIntervalRef.current);
+              typingIntervalRef.current = null;
+            }
+            setIsTyping(false);
           }
-          setIsTyping(false);
-        }
-      }, 50); // Type one character every 50ms
-    }, 1000);
+        }, 50);
+      }, 1000);
+    }
   };
 
-  // Handle clicking on transcript to skip animation
+  // Handle clicking on transcript to skip animation (mock mode only)
   const handleTranscriptClick = () => {
-    if (isTyping && transcript) {
-      // Stop typing animation
+    if (useMock && isTyping) {
       if (typingIntervalRef.current) {
         clearInterval(typingIntervalRef.current);
         typingIntervalRef.current = null;
       }
-      
-      // Show full transcript immediately
-      setDisplayedTranscript(transcript);
+      setDisplayedTranscript(MOCK_TRANSCRIPT);
       setIsTyping(false);
     }
   };
@@ -99,31 +117,31 @@ export function RecordingStartPage() {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
     }
-    
+
     if (typingIntervalRef.current) {
       clearInterval(typingIntervalRef.current);
       typingIntervalRef.current = null;
     }
-    
+
+    if (!useMock) {
+      speech.stop();
+    }
+
     // Fade out blobs before navigating
     setShowBlobs(false);
     setTimeout(() => {
-      // Navigate to transcript page
-      navigate("/record/transcript");
+      // Read the freshest transcript — final words can still land after stop()
+      const transcript = useMock ? MOCK_TRANSCRIPT : liveTranscriptRef.current;
+      navigate("/record/transcript", {
+        state: transcript ? { transcript } : undefined,
+      });
     }, 500);
-  };
-
-  // Format duration as MM:SS
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   return (
     <div className="relative w-full h-screen overflow-hidden" style={{ background: "#434343" }}>
       {/* BlobScene background (no annotations, zoomed in, non-interactive) */}
-      <div 
+      <div
         className="absolute inset-0 pointer-events-none transition-opacity duration-500"
         style={{
           transform: "scale(1.3)",
@@ -231,6 +249,22 @@ export function RecordingStartPage() {
           >
             how it happened, how it leave a shape in your heart, how do you feel...
           </p>
+          {useMock && (
+            <p
+              style={{
+                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontSize: 11,
+                letterSpacing: "0px",
+                color: "#ebebeb",
+                opacity: 0.45,
+                lineHeight: 1.6,
+                margin: 0,
+                marginTop: 12,
+              }}
+            >
+              (live transcription needs chrome — a sample memory will be used here)
+            </p>
+          )}
         </div>
       ) : (
         <p
@@ -248,7 +282,9 @@ export function RecordingStartPage() {
             margin: 0,
           }}
         >
-          recording...({recordingDuration}s)
+          {speech.error === "not-allowed"
+            ? "microphone access was denied — your words can't be heard"
+            : `recording...(${recordingDuration}s)`}
         </p>
       )}
 
@@ -326,7 +362,7 @@ export function RecordingStartPage() {
         </button>
       )}
 
-      {/* Transcript display */}
+      {/* Transcript display: live speech (final solid, interim faded) or mock typing */}
       <div
         onClick={handleTranscriptClick}
         style={{
@@ -335,6 +371,8 @@ export function RecordingStartPage() {
           transform: "translateX(-50%)",
           bottom: 150,
           maxWidth: "80%",
+          maxHeight: "30vh",
+          overflowY: "auto",
           textAlign: "center",
           opacity: showBlobs ? 1 : 0,
           transition: "opacity 1.5s ease-in-out, transform 1.5s ease-in-out",
@@ -352,7 +390,19 @@ export function RecordingStartPage() {
             margin: 0,
           }}
         >
-          {displayedTranscript}
+          {useMock ? (
+            displayedTranscript
+          ) : (
+            <>
+              {speech.finalText}
+              {speech.interimText && (
+                <span style={{ opacity: 0.5 }}>
+                  {speech.finalText ? " " : ""}
+                  {speech.interimText}
+                </span>
+              )}
+            </>
+          )}
         </p>
       </div>
     </div>
