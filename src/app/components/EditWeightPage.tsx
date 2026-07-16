@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import { landmarkDistance, useHandTracking } from "../hooks/useHandTracking";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { PillButton } from "./PillButton";
 
@@ -12,16 +12,11 @@ export function EditWeightPage() {
   const [fadeIn, setFadeIn] = useState(false);
   const [fluidity, setFluidity] = useState(location.state?.shape?.fluidity ?? 0);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const targetFluidityRef = useRef<number>(location.state?.shape?.fluidity ?? 0);
 
   const memory = location.state?.memory;
   const shape = location.state?.shape || {};
   const cameraPermission = location.state?.cameraPermission || "prompt";
-
-  console.log("EditWeightPage - memory:", memory);
-  console.log("EditWeightPage - shape:", shape);
 
   useEffect(() => {
     setTimeout(() => setFadeIn(true), 100);
@@ -29,104 +24,21 @@ export function EditWeightPage() {
 
   useEffect(() => {
     if (!memory) {
-      console.log("No memory data in EditWeightPage, redirecting");
       navigate("/memory/scroll");
     }
   }, [memory, navigate]);
 
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    if (cameraPermission !== "granted") return;
-
-    let active = true;
-
-    const initializeHandTracking = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
-
-        const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          numHands: 2,
-        });
-
-        if (!active) return;
-        handLandmarkerRef.current = handLandmarker;
-
-        // Start camera
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-        });
-        if (videoRef.current && active) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.error("Hand tracking initialization error:", err);
-      }
-    };
-
-    initializeHandTracking();
-
-    return () => {
-      active = false;
-      if (handLandmarkerRef.current) {
-        handLandmarkerRef.current.close();
-      }
-    };
-  }, [cameraPermission]);
-
-  // Hand tracking loop
-  useEffect(() => {
-    if (!handLandmarkerRef.current || !videoRef.current) return;
-
-    const detectHands = () => {
-      if (
-        !videoRef.current ||
-        !handLandmarkerRef.current ||
-        videoRef.current.readyState < 2
-      ) {
-        animationFrameRef.current = requestAnimationFrame(detectHands);
-        return;
-      }
-
-      const results = handLandmarkerRef.current.detectForVideo(
-        videoRef.current,
-        performance.now()
-      );
-
-      if (results.landmarks && results.landmarks.length === 2) {
-        // Get thumb tips (landmark 4) from both hands
-        const hand1Thumb = results.landmarks[0][4];
-        const hand2Thumb = results.landmarks[1][4];
-
-        // Calculate Euclidean distance
-        const dx = hand1Thumb.x - hand2Thumb.x;
-        const dy = hand1Thumb.y - hand2Thumb.y;
-        const dz = hand1Thumb.z - hand2Thumb.z;
-        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        // Map distance to fluidity (0-1)
-        const normalizedDistance = Math.max(0, Math.min(1, distance / 0.5));
-        targetFluidityRef.current = normalizedDistance;
-      }
-
-      animationFrameRef.current = requestAnimationFrame(detectHands);
-    };
-
-    detectHands();
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-  }, [cameraPermission]);
+  // Distance between the two thumb tips drives weight.
+  useHandTracking({
+    enabled: cameraPermission === "granted",
+    videoRef,
+    numHands: 2,
+    onLandmarks: (hands) => {
+      if (hands.length !== 2) return;
+      const distance = landmarkDistance(hands[0][4], hands[1][4]);
+      targetFluidityRef.current = Math.max(0, Math.min(1, distance / 0.5));
+    },
+  });
 
   // Smooth animation
   useEffect(() => {

@@ -6,7 +6,11 @@ import {
   getShapeBuildEvolvePhase,
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import {
+  createGestureGate,
+  landmarkDistance,
+  useHandTracking,
+} from "../hooks/useHandTracking";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
@@ -22,13 +26,11 @@ export function ShapeWeightPage() {
   const [debugEvolvePhase, setDebugEvolvePhase] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const targetFluidityRef = useRef<number>(location.state?.fluidity ?? 0);
   const smoothingFrameRef = useRef<number | null>(null);
-  const baselinePinchDistanceRef = useRef<number | null>(null);
-  const gestureActiveRef = useRef(false);
-  const gestureFramesRef = useRef(0);
+  // Ignore MediaPipe output until the pinch meaningfully changes from its
+  // first detected pose, so the shape doesn't jump when a hand appears.
+  const gateRef = useRef(createGestureGate(0.02));
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -89,136 +91,25 @@ export function ShapeWeightPage() {
     };
   }, []);
 
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    // Auto-start camera if permission was already granted
-    if (cameraPermission === "granted") {
-      initializeCamera();
-    }
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+  // Pinch (thumb tip ↔ index tip) drives weight; hook owns camera + model.
+  const { isTracking } = useHandTracking({
+    enabled: cameraPermission === "granted",
+    videoRef,
+    numHands: 1,
+    onLandmarks: (hands) => {
+      const distance = landmarkDistance(hands[0][4], hands[0][8]);
+      if (gateRef.current.update(distance)) {
+        // Map distance 0.05 (minimum weight) to 0.5 (maximum weight)
+        const minDistance = 0.05;
+        const maxDistance = 0.5;
+        const clamped = Math.max(minDistance, Math.min(maxDistance, distance));
+        targetFluidityRef.current = (clamped - minDistance) / (maxDistance - minDistance);
       }
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (handLandmarkerRef.current) {
-        handLandmarkerRef.current.close();
-      }
-    };
-  }, [cameraPermission]);
-
-  const initializeCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        const onVideoReady = async () => {
-          try {
-            const vision = await FilesetResolver.forVisionTasks(
-              "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
-            );
-
-            const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-              baseOptions: {
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-                delegate: "GPU",
-              },
-              numHands: 1,
-              runningMode: "VIDEO",
-              minHandDetectionConfidence: 0.5,
-              minHandPresenceConfidence: 0.5,
-              minTrackingConfidence: 0.5,
-            });
-
-            handLandmarkerRef.current = handLandmarker;
-            
-            // Start detection loop
-            const detectHands = () => {
-              if (!videoRef.current || !handLandmarkerRef.current) return;
-
-              const video = videoRef.current;
-              if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                try {
-                  const results = handLandmarkerRef.current.detectForVideo(
-                    video,
-                    performance.now()
-                  );
-
-                  if (results.landmarks && results.landmarks.length > 0) {
-                    const landmarks = results.landmarks[0];
-                    const indexTip = landmarks[8];
-                    const thumbTip = landmarks[4];
-
-                    const distance = Math.sqrt(
-                      Math.pow(indexTip.x - thumbTip.x, 2) +
-                      Math.pow(indexTip.y - thumbTip.y, 2) +
-                      Math.pow(indexTip.z - thumbTip.z, 2)
-                    );
-
-                    // Avoid "non-smooth initial state": don't apply MediaPipe output until
-                    // user meaningfully changes pose from the first detected baseline.
-                    if (baselinePinchDistanceRef.current == null) {
-                      baselinePinchDistanceRef.current = distance;
-                      gestureActiveRef.current = false;
-                      gestureFramesRef.current = 0;
-                    } else {
-                      const baseline = baselinePinchDistanceRef.current;
-                      const movedEnough = Math.abs(distance - baseline) > 0.02;
-                      if (movedEnough) {
-                        gestureFramesRef.current += 1;
-                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
-                      } else {
-                        gestureFramesRef.current = 0;
-                      }
-                    }
-
-                    if (gestureActiveRef.current) {
-                      // Map distance 0.05 (minimum weight) to 0.5 (maximum weight)
-                      const minDistance = 0.05;
-                      const maxDistance = 0.5;
-                      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
-                      const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
-                      const newFluidity = normalizedValue; // Direct mapping: closer = lower weight
-                      targetFluidityRef.current = newFluidity;
-                    }
-                    setHandsDetected(1);
-                    setDebugPinchDistance(distance);
-                  } else {
-                    setHandsDetected(0);
-                  }
-                } catch (error) {
-                  // Silently handle detection errors
-                }
-              }
-
-              animationFrameRef.current = requestAnimationFrame(detectHands);
-            };
-
-            detectHands();
-          } catch (error) {
-            // Fall back to manual mode if MediaPipe initialization fails
-            console.error("MediaPipe initialization failed:", error);
-          }
-        };
-        
-        videoRef.current.addEventListener("loadeddata", onVideoReady, { once: true });
-      }
-    } catch (error) {
-      // Camera initialization failed
-      console.error("Camera initialization failed:", error);
-    }
-  };
+      setHandsDetected(1);
+      setDebugPinchDistance(distance);
+    },
+    onNoHands: () => setHandsDetected(0),
+  });
 
   const handleContinue = () => {
     navigate("/record/shape/color", {
@@ -446,7 +337,7 @@ export function ShapeWeightPage() {
               Evolve (0–100%, 10s cycle): {(debugEvolvePhase * 100).toFixed(0)}%
             </p>
             <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
-              MediaPipe: {handLandmarkerRef.current ? "✓ Loaded" : "✗ Not loaded"}
+              MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
             </p>
           </div>
         )}

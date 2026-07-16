@@ -2,7 +2,12 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import {
+  createGestureGate,
+  handCenter,
+  landmarkDistance,
+  useHandTracking,
+} from "../hooks/useHandTracking";
 import {
   getShapeBuildEvolvePhase,
   stripLegacyEvolveFromState,
@@ -21,13 +26,9 @@ export function ShapeTexturePage() {
   const [debugDistance, setDebugDistance] = useState(0);
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const targetBumpAmountRef = useRef<number>(location.state?.bumpAmount ?? 0);
   const smoothingFrameRef = useRef<number | null>(null);
-  const baselineHandsDistanceRef = useRef<number | null>(null);
-  const gestureActiveRef = useRef(false);
-  const gestureFramesRef = useRef(0);
+  const gateRef = useRef(createGestureGate(0.03));
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -83,153 +84,33 @@ export function ShapeTexturePage() {
     };
   }, []);
 
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    // Auto-start camera if permission was already granted
-    if (cameraPermission === "granted") {
-      initializeCamera();
-    }
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+  // Distance between the two hand centers drives texture roughness.
+  const { isTracking } = useHandTracking({
+    enabled: cameraPermission === "granted",
+    videoRef,
+    numHands: 2,
+    onLandmarks: (hands) => {
+      if (hands.length !== 2) {
+        setHandsDetected(hands.length);
+        return;
       }
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((track) => track.stop());
+      const distance = landmarkDistance(handCenter(hands[0]), handCenter(hands[1]));
+      if (gateRef.current.update(distance)) {
+        // Closer hands = smooth surface; far apart = rough texture
+        // Reference ranges: bump 0→0.15, density 150→500
+        // Maximum reached at distance = 0.55
+        const minDistance = 0.15;
+        const maxDistance = 0.55;
+        const clamped = Math.max(minDistance, Math.min(maxDistance, distance));
+        const normalized = (clamped - minDistance) / (maxDistance - minDistance);
+        targetBumpAmountRef.current = normalized * 0.15;
+        targetDensityRef.current = 150 + normalized * 350; // 150 → 500
       }
-      if (handLandmarkerRef.current) {
-        handLandmarkerRef.current.close();
-      }
-    };
-  }, [cameraPermission]);
-
-  const initializeCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        const onVideoReady = async () => {
-          try {
-            const vision = await FilesetResolver.forVisionTasks(
-              "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
-            );
-
-            const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-              baseOptions: {
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-                delegate: "GPU",
-              },
-              numHands: 2, // Detect both hands
-              runningMode: "VIDEO",
-              minHandDetectionConfidence: 0.5,
-              minHandPresenceConfidence: 0.5,
-              minTrackingConfidence: 0.5,
-            });
-
-            handLandmarkerRef.current = handLandmarker;
-            
-            // Start detection loop
-            const detectHands = () => {
-              if (!videoRef.current || !handLandmarkerRef.current) return;
-
-              const video = videoRef.current;
-              if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                try {
-                  const results = handLandmarkerRef.current.detectForVideo(
-                    video,
-                    performance.now()
-                  );
-
-                  if (results.landmarks && results.landmarks.length === 2) {
-                    // Calculate center of each hand (average of all landmarks)
-                    const hand1Landmarks = results.landmarks[0];
-                    const hand2Landmarks = results.landmarks[1];
-                    
-                    const hand1Center = {
-                      x: hand1Landmarks.reduce((sum, lm) => sum + lm.x, 0) / hand1Landmarks.length,
-                      y: hand1Landmarks.reduce((sum, lm) => sum + lm.y, 0) / hand1Landmarks.length,
-                      z: hand1Landmarks.reduce((sum, lm) => sum + lm.z, 0) / hand1Landmarks.length,
-                    };
-                    
-                    const hand2Center = {
-                      x: hand2Landmarks.reduce((sum, lm) => sum + lm.x, 0) / hand2Landmarks.length,
-                      y: hand2Landmarks.reduce((sum, lm) => sum + lm.y, 0) / hand2Landmarks.length,
-                      z: hand2Landmarks.reduce((sum, lm) => sum + lm.z, 0) / hand2Landmarks.length,
-                    };
-                    
-                    // Calculate 3D distance between hand centers
-                    const distance = Math.sqrt(
-                      Math.pow(hand2Center.x - hand1Center.x, 2) +
-                      Math.pow(hand2Center.y - hand1Center.y, 2) +
-                      Math.pow(hand2Center.z - hand1Center.z, 2)
-                    );
-
-                    // Avoid "non-smooth initial state": don't apply MediaPipe output until
-                    // user meaningfully changes pose from the first detected baseline.
-                    if (baselineHandsDistanceRef.current == null) {
-                      baselineHandsDistanceRef.current = distance;
-                      gestureActiveRef.current = false;
-                      gestureFramesRef.current = 0;
-                    } else {
-                      const baseline = baselineHandsDistanceRef.current;
-                      const movedEnough = Math.abs(distance - baseline) > 0.03;
-                      if (movedEnough) {
-                        gestureFramesRef.current += 1;
-                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
-                      } else {
-                        gestureFramesRef.current = 0;
-                      }
-                    }
-
-                    if (gestureActiveRef.current) {
-                      // Map distance to bump amount + density (texture)
-                      // Closer hands = smooth surface; far apart = rough texture
-                      // Reference ranges: bump 0→0.15, density 150→500
-                      // Maximum reached at distance = 0.55
-                      const minDistance = 0.15;
-                      const maxDistance = 0.55;
-                      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
-                      const normalizedValue = (clampedDistance - minDistance) / (maxDistance - minDistance);
-
-                      targetBumpAmountRef.current = normalizedValue * 0.15;
-                      targetDensityRef.current = 150 + normalizedValue * 350; // 150 → 500
-                    }
-                    setHandsDetected(2);
-                    setDebugDistance(distance);
-                  } else {
-                    setHandsDetected(results.landmarks?.length || 0);
-                  }
-                } catch (error) {
-                  // Silently handle detection errors
-                }
-              }
-
-              animationFrameRef.current = requestAnimationFrame(detectHands);
-            };
-
-            detectHands();
-          } catch (error) {
-            // Fall back to manual mode if MediaPipe initialization fails
-            console.error("MediaPipe initialization failed:", error);
-          }
-        };
-        
-        videoRef.current.addEventListener("loadeddata", onVideoReady, { once: true });
-      }
-    } catch (error) {
-      // Camera initialization failed
-      console.error("Camera initialization failed:", error);
-    }
-  };
+      setHandsDetected(2);
+      setDebugDistance(distance);
+    },
+    onNoHands: () => setHandsDetected(0),
+  });
 
   const handleContinue = () => {
     navigate("/record/connect", {
@@ -465,7 +346,7 @@ export function ShapeTexturePage() {
             <p style={{ margin: "5px 0" }}>Current Texture: {bumpAmount.toFixed(3)} / 0.15</p>
             <p style={{ margin: "5px 0" }}>Density: {Math.round(density)} / 500</p>
             <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
-              MediaPipe: {handLandmarkerRef.current ? "✓ Loaded" : "✗ Not loaded"}
+              MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
             </p>
           </div>
         )}

@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer, MATERIAL_PRESETS } from "./SceneViewer";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import { createGestureGate, useHandTracking } from "../hooks/useHandTracking";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
@@ -18,13 +18,9 @@ export function ShapeColorPage() {
   const [debugPalmY, setDebugPalmY] = useState(0);
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const targetColorIndexRef = useRef<number>(location.state?.matPresetIndex ?? 0); // Target preset index (0-4)
   const smoothingFrameRef = useRef<number | null>(null);
-  const baselinePalmYRef = useRef<number | null>(null);
-  const gestureActiveRef = useRef(false);
-  const gestureFramesRef = useRef(0);
+  const gateRef = useRef(createGestureGate(0.04));
 
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
@@ -71,145 +67,31 @@ export function ShapeColorPage() {
     };
   }, []);
 
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    // Auto-start camera if permission was already granted
-    if (cameraPermission === "granted") {
-      initializeCamera();
-    }
+  // Palm height drives the material preset: raised hand = warmer.
+  const { isTracking } = useHandTracking({
+    enabled: cameraPermission === "granted",
+    videoRef,
+    numHands: 1,
+    onLandmarks: (hands) => {
+      // Palm center from wrist + the five finger bases
+      const palm = [0, 1, 5, 9, 13, 17].map((i) => hands[0][i]);
+      const palmY = palm.reduce((sum, lm) => sum + lm.y, 0) / palm.length;
 
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (gateRef.current.update(palmY)) {
+        // Map palm Y position to preset index (0-4)
+        // Lower Y = hand raised higher = warmer (higher index)
+        const minY = 0.5;
+        const maxY = 1.2;
+        const clampedY = Math.max(minY, Math.min(maxY, palmY));
+        const normalizedY = (clampedY - minY) / (maxY - minY);
+        // Invert so raised hand = higher index (warmer)
+        targetColorIndexRef.current = Math.round((1 - normalizedY) * (MATERIAL_PRESETS.length - 1));
       }
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (handLandmarkerRef.current) {
-        handLandmarkerRef.current.close();
-      }
-    };
-  }, [cameraPermission]);
-
-  const initializeCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        const onVideoReady = async () => {
-          try {
-            const vision = await FilesetResolver.forVisionTasks(
-              "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
-            );
-
-            const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-              baseOptions: {
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-                delegate: "GPU",
-              },
-              numHands: 1,
-              runningMode: "VIDEO",
-              minHandDetectionConfidence: 0.5,
-              minHandPresenceConfidence: 0.5,
-              minTrackingConfidence: 0.5,
-            });
-
-            handLandmarkerRef.current = handLandmarker;
-            
-            // Start detection loop
-            const detectHands = () => {
-              if (!videoRef.current || !handLandmarkerRef.current) return;
-
-              const video = videoRef.current;
-              if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                try {
-                  const results = handLandmarkerRef.current.detectForVideo(
-                    video,
-                    performance.now()
-                  );
-
-                  if (results.landmarks && results.landmarks.length > 0) {
-                    const landmarks = results.landmarks[0];
-                    
-                    // Calculate palm center from wrist and palm base landmarks
-                    // Landmarks: 0 (wrist), 1, 5, 9, 13, 17 (bases of fingers)
-                    const palmLandmarks = [
-                      landmarks[0],  // wrist
-                      landmarks[1],  // thumb base
-                      landmarks[5],  // index base
-                      landmarks[9],  // middle base
-                      landmarks[13], // ring base
-                      landmarks[17], // pinky base
-                    ];
-                    
-                    const palmY = palmLandmarks.reduce((sum, lm) => sum + lm.y, 0) / palmLandmarks.length;
-
-                    // Avoid immediate jumps on first detection: require a small,
-                    // sustained movement away from baseline before applying updates.
-                    if (baselinePalmYRef.current == null) {
-                      baselinePalmYRef.current = palmY;
-                      gestureActiveRef.current = false;
-                      gestureFramesRef.current = 0;
-                    } else {
-                      const baseline = baselinePalmYRef.current;
-                      const movedEnough = Math.abs(palmY - baseline) > 0.04;
-                      if (movedEnough) {
-                        gestureFramesRef.current += 1;
-                        if (gestureFramesRef.current >= 3) gestureActiveRef.current = true;
-                      } else {
-                        gestureFramesRef.current = 0;
-                      }
-                    }
-                    
-                    if (gestureActiveRef.current) {
-                      // Map palm Y position to preset index (0-4)
-                      // Lower Y = hand raised higher = warmer (higher index)
-                      const minY = 0.5;
-                      const maxY = 1.2;
-                      const clampedY = Math.max(minY, Math.min(maxY, palmY));
-                      const normalizedY = (clampedY - minY) / (maxY - minY);
-                      
-                      // Invert so raised hand = higher index (warmer)
-                      const colorIndex = Math.round((1 - normalizedY) * (MATERIAL_PRESETS.length - 1));
-                      
-                      targetColorIndexRef.current = colorIndex;
-                    }
-                    setHandDetected(true);
-                    setDebugPalmY(palmY);
-                  } else {
-                    setHandDetected(false);
-                  }
-                } catch (error) {
-                  // Silently handle detection errors
-                }
-              }
-
-              animationFrameRef.current = requestAnimationFrame(detectHands);
-            };
-
-            detectHands();
-          } catch (error) {
-            // Fall back to manual mode if MediaPipe initialization fails
-            console.error("MediaPipe initialization failed:", error);
-          }
-        };
-        
-        videoRef.current.addEventListener("loadeddata", onVideoReady, { once: true });
-      }
-    } catch (error) {
-      // Camera initialization failed
-      console.error("Camera initialization failed:", error);
-    }
-  };
+      setHandDetected(true);
+      setDebugPalmY(palmY);
+    },
+    onNoHands: () => setHandDetected(false),
+  });
 
   const handleContinue = () => {
     navigate("/record/shape/texture", {
@@ -461,7 +343,7 @@ export function ShapeColorPage() {
             <p style={{ margin: "5px 0" }}>Current Preset: {currentPresetIndex} ({activePreset.id})</p>
             <p style={{ margin: "5px 0" }}>Color: {activePreset.matColor}</p>
             <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
-              MediaPipe: {handLandmarkerRef.current ? "✓ Loaded" : "✗ Not loaded"}
+              MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
             </p>
           </div>
         )}
