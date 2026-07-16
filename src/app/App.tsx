@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, useNavigate } from "react-router";
+import { createBrowserRouter, Outlet, RouterProvider, useNavigate } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import { HomePage } from "./components/HomePage";
 import { RecordingStartPage } from "./components/RecordingStartPage";
@@ -30,186 +30,40 @@ const routerBasename =
     ? undefined
     : import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
 
+function RootLayout() {
+  return (
+    <>
+      <GlobalControls />
+      <Outlet />
+    </>
+  );
+}
+
 const router = createBrowserRouter([
   {
-    path: "/",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <HomePage />
-      </>
-    ),
-  },
-  {
-    path: "/record/click",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ClickToRecordPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/start",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <RecordingStartPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/process",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <RecordingProcessPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/transcript",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <TranscriptPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/name",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <NameMemoryPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/build",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <BuildObjectPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/shape",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ShapeEditorPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/shape/weight",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ShapeWeightPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/shape/color",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ShapeColorPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/shape/texture",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ShapeTexturePage />
-      </>
-    ),
-  },
-  {
-    path: "/record/connect",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ConnectMemoriesPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/saved",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <MemorySavedPage />
-      </>
-    ),
-  },
-  {
-    path: "/record/orb",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <OrbPage />
-      </>
-    ),
-  },
-  {
-    path: "/profile",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <ProfilePage />
-      </>
-    ),
-  },
-  {
-    path: "/memory/scroll",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <MemoryScrollPage />
-      </>
-    ),
-  },
-  {
-    path: "/memory/revisit",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <RevisitMemoryPage />
-      </>
-    ),
-  },
-  {
-    path: "/memory/edit/weight",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <EditWeightPage />
-      </>
-    ),
-  },
-  {
-    path: "/memory/edit/color",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <EditColorPage />
-      </>
-    ),
-  },
-  {
-    path: "/memory/edit/texture",
-    Component: () => (
-      <>
-        <GlobalControls />
-        <EditTexturePage />
-      </>
-    ),
+    Component: RootLayout,
+    children: [
+      { path: "/", Component: HomePage },
+      { path: "/record/click", Component: ClickToRecordPage },
+      { path: "/record/start", Component: RecordingStartPage },
+      { path: "/record/process", Component: RecordingProcessPage },
+      { path: "/record/transcript", Component: TranscriptPage },
+      { path: "/record/name", Component: NameMemoryPage },
+      { path: "/record/build", Component: BuildObjectPage },
+      { path: "/record/shape", Component: ShapeEditorPage },
+      { path: "/record/shape/weight", Component: ShapeWeightPage },
+      { path: "/record/shape/color", Component: ShapeColorPage },
+      { path: "/record/shape/texture", Component: ShapeTexturePage },
+      { path: "/record/connect", Component: ConnectMemoriesPage },
+      { path: "/record/saved", Component: MemorySavedPage },
+      { path: "/record/orb", Component: OrbPage },
+      { path: "/profile", Component: ProfilePage },
+      { path: "/memory/scroll", Component: MemoryScrollPage },
+      { path: "/memory/revisit", Component: RevisitMemoryPage },
+      { path: "/memory/edit/weight", Component: EditWeightPage },
+      { path: "/memory/edit/color", Component: EditColorPage },
+      { path: "/memory/edit/texture", Component: EditTexturePage },
+    ],
   },
 ], { basename: routerBasename });
 
