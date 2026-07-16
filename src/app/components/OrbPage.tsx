@@ -57,7 +57,7 @@ export function OrbPage() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const rafRef            = useRef<number>();
+  const rafRef            = useRef<number | undefined>(undefined);
   const streamRef         = useRef<MediaStream | null>(null);
 
   // Smooth size tracking (refs = no re-render on frame)
