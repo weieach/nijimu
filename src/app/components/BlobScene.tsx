@@ -3,19 +3,9 @@ import svgPaths from "../../imports/svg-t19vgojqiy";
 import NewMomoryIdle from "../../imports/NewMomoryIdle";
 import { LIFE_EVENTS, COLORS as MEMORY_COLORS } from "../data/memoryData";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { SANS, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
 
-// Color palette for 3D shapes
-const COLOR_PALETTE = [
-  { id: "slate", color: "#9496a6", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "cloud", color: "#D6DADB", light1: "#e8eaeb", light2: "#c8d0d4" },
-  { id: "mist", color: "#C8D0D4", light1: "#e0e4e6", light2: "#d6dadb" },
-  { id: "sand", color: "#CBBFBC", light1: "#e5dbd9", light2: "#d6cbc8" },
-  { id: "sky", color: "#A4B6BE", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "rose", color: "#B8969A", light1: "#d8c8ca", light2: "#e5dbd9" },
-  { id: "sage", color: "#8C9FA8", light1: "#b8c4ca", light2: "#c8d0d4" },
-  { id: "ocean", color: "#6488A0", light1: "#9cb4c8", light2: "#b8c8d4" },
-  { id: "night", color: "#1C2C35", light1: "#4a5a62", light2: "#7a8a92" },
-];
 
 /* ───────── types ───────── */
 interface BlobData {
@@ -951,7 +941,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
                   {/* Year */}
                   <div
                     style={{
-                      fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                      fontFamily: SERIF,
                       fontSize: 12,
                       color: "#504A4A",
                       opacity: 0.8,
@@ -964,7 +954,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
                   {/* Memory text */}
                   <div
                     style={{
-                      fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                      fontFamily: SERIF,
                       fontSize: isMobile ? "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)" : 16,
                       color: "#2A2018",
                       opacity: 0.9,
@@ -1003,7 +993,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
         className="absolute inset-0 pointer-events-none flex items-end justify-center"
         style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.12}px` }}
       >
-        <div className="text-center" style={{ fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif", fontStyle: "italic" }}>
+        <div className="text-center" style={{ fontFamily: SERIF, fontStyle: "italic" }}>
           <p style={{ color: "#2a2a2a", marginBottom: 6 }}>{blobs[activeIdx]?.event}</p>
           <p style={{ color: "#999" }}>{blobs[activeIdx]?.year}</p>
         </div>
@@ -1055,7 +1045,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
         style={{
           opacity: clamp((morphVal - 0.8) / 0.2, 0, 0.45),
           color: "#aaa",
-          fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+          fontFamily: SANS,
           fontSize: 12,
           letterSpacing: "0.05em",
           zIndex: 20,
@@ -1099,7 +1089,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
               left: "50%",
               transform: "translateX(-50%)",
               top: 30,
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontStyle: "normal",
               color: "#e2e2e3",
               fontSize: 12,
@@ -1122,7 +1112,7 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
               left: "50%",
               transform: "translateX(-50%)",
               top: 65,
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               color: "#D6DADB",
               fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
               letterSpacing: "0.24px",

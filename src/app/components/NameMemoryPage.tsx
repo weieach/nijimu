@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useRef, useEffect } from "react";
 import { BackButton } from "./BackButton";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
 
 export function NameMemoryPage() {
   const location = useLocation();
@@ -79,7 +80,7 @@ export function NameMemoryPage() {
               navigate("/");
             }}
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontStyle: "normal",
               fontSize: 12,
               lineHeight: 1.5,
@@ -102,7 +103,7 @@ export function NameMemoryPage() {
           {/* Header text */}
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
               fontWeight: 500,
               lineHeight: "39.2px",
@@ -146,7 +147,7 @@ export function NameMemoryPage() {
                 style={{
                   width: "100%",
                   padding: "8px 0 12px 0",
-                  fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                  fontFamily: SERIF,
                   fontSize: 12,
                   lineHeight: "normal",
                   color: "#2a2018",
@@ -182,7 +183,7 @@ export function NameMemoryPage() {
                 style={{
                   width: "100%",
                   padding: "8px 0 12px 0",
-                  fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                  fontFamily: SERIF,
                   fontSize: 12,
                   lineHeight: "normal",
                   color: year ? "rgba(42, 32, 24, 1)" : "rgba(42, 32, 24, 0.5)",
@@ -265,7 +266,7 @@ export function NameMemoryPage() {
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                            fontFamily: SERIF,
                             fontSize: 18,
                             color: year === y.toString() ? "#2a2018" : "rgba(42, 32, 24, 0.5)",
                             fontWeight: year === y.toString() ? 500 : 400,
@@ -334,7 +335,7 @@ export function NameMemoryPage() {
         >
           <span
             style={{
-              fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+              fontFamily: SANS,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -348,7 +349,7 @@ export function NameMemoryPage() {
           {/* Arrow icon */}
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 14,
               lineHeight: 0,
               color: canContinue ? "#8C8C8C" : "rgba(140, 140, 140, 0.5)",

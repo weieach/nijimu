@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
 
 export function MemorySavedPage() {
   const location = useLocation();
@@ -52,7 +53,7 @@ export function MemorySavedPage() {
             left: "50%",
             transform: "translateX(-50%)",
             top: 30,
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontStyle: "normal",
             fontSize: 12,
             lineHeight: 1.5,
@@ -92,7 +93,7 @@ export function MemorySavedPage() {
           >
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
                 fontWeight: 500,
                 lineHeight: "140%",
@@ -110,7 +111,7 @@ export function MemorySavedPage() {
             {/* Gentle reminder */}
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 12,
                 lineHeight: 1.7,
                 letterSpacing: "0px",
@@ -152,7 +153,7 @@ export function MemorySavedPage() {
           >
             <span
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 16,
                 fontWeight: 400,
                 lineHeight: 1.5,
@@ -166,7 +167,7 @@ export function MemorySavedPage() {
             {/* Arrow icon */}
             <span
               style={{
-                fontFamily: "SF Pro, system-ui, sans-serif",
+                fontFamily: SANS_UI,
                 fontSize: 14,
                 lineHeight: 0,
                 color: "#8C8C8C",

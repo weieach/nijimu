@@ -4,6 +4,7 @@ import { BackButton } from "./BackButton";
 import { requestPolish } from "../lib/polish";
 import exposureTrialFontUrl from "../../assets/fonts/ExposureTrial-20.otf?url";
 import exposureTrial10Url from "../../assets/fonts/ExposureTrial+10.otf?url";
+import { SANS, SANS_UI, SERIF, SERIF_DISPLAY } from "../lib/theme";
 
 const SAMPLE_TRANSCRIPT = 
   "I keep coming back to that summer. Not to him, exactly — but to who I was when I was around him. Someone who still had time to notice things. The light on a wall. The sound of a city at 2am. He gave me a camera and said, just feel for the click. I think what he actually meant was — slow down. Pay attention. I didn't. And then he was gone. And I kept moving. But sometimes I wonder if that version of me is still somewhere, waiting on that island, wondering why I never came back.";
@@ -235,7 +236,7 @@ export function TranscriptPage() {
               navigate("/");
             }}
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontStyle: "normal",
               fontSize: 12,
               lineHeight: 1.5,
@@ -261,7 +262,7 @@ export function TranscriptPage() {
               {/* Question text */}
               <p
                 style={{
-                  fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                  fontFamily: SERIF,
                   fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
                   fontWeight: 500,
                   lineHeight: "140%",
@@ -286,7 +287,7 @@ export function TranscriptPage() {
               {(isTyping || polishState === "loading" || polishState === "error") && (
                 <p
                   style={{
-                    fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                    fontFamily: SERIF,
                     fontSize: 12,
                     fontWeight: 400,
                     lineHeight: "170%",
@@ -310,7 +311,7 @@ export function TranscriptPage() {
             /* Highlight mode header */
             <div
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 16,
                 fontWeight: 500,
                 lineHeight: "150%",
@@ -418,7 +419,7 @@ export function TranscriptPage() {
                       <span
                         style={{
                           display: "block",
-                          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                          fontFamily: SERIF,
                           fontSize: 12,
                           color: isChosen ? "#7b7b87" : "#acacac",
                           textTransform: "lowercase",
@@ -431,7 +432,7 @@ export function TranscriptPage() {
                       <span
                         style={{
                           display: "block",
-                          fontFamily: "'Exposure Trial Plus', 'Playfair Display', Georgia, serif",
+                          fontFamily: SERIF_DISPLAY,
                           fontSize: "clamp(15px, 1.8vw, 18px)",
                           fontWeight: 400,
                           lineHeight: 1.6,
@@ -450,7 +451,7 @@ export function TranscriptPage() {
             <div
               ref={transcriptRef}
               style={{
-                fontFamily: "'Exposure Trial Plus', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF_DISPLAY,
                 fontSize: "clamp(18px, 2.5vw, 22px)",
                 fontWeight: 400,
                 lineHeight: 1.5,
@@ -561,7 +562,7 @@ export function TranscriptPage() {
                 >
                   <span
                     style={{
-                      fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                      fontFamily: SANS,
                       fontSize: 16,
                       fontWeight: 400,
                       lineHeight: 1.5,
@@ -575,7 +576,7 @@ export function TranscriptPage() {
                   {/* Sparkle icon */}
                   <span
                     style={{
-                      fontFamily: "SF Pro, system-ui, sans-serif",
+                      fontFamily: SANS_UI,
                       fontSize: 13,
                       lineHeight: 0,
                       color: "#8C8C8C",
@@ -605,7 +606,7 @@ export function TranscriptPage() {
               >
                 <span
                   style={{
-                    fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                    fontFamily: SANS,
                     fontSize: 16,
                     fontWeight: 400,
                     lineHeight: 1.5,
@@ -619,7 +620,7 @@ export function TranscriptPage() {
                 {/* Arrow icon */}
                 <span
                   style={{
-                    fontFamily: "SF Pro, system-ui, sans-serif",
+                    fontFamily: SANS_UI,
                     fontSize: 14,
                     lineHeight: 0,
                     color: continueDisabled ? dimmed : "#8C8C8C",

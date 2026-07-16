@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
 
 export function EditTexturePage() {
   const location = useLocation();
@@ -48,7 +49,7 @@ export function EditTexturePage() {
         {/* Header */}
         <p
           style={{
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 28,
             fontWeight: 400,
             lineHeight: "39.2px",
@@ -100,7 +101,7 @@ export function EditTexturePage() {
           >
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 18,
                 color: "#7b7b87",
               }}
@@ -134,7 +135,7 @@ export function EditTexturePage() {
           <span
             style={{
               fontFamily:
-                "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                SANS,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -146,7 +147,7 @@ export function EditTexturePage() {
           </span>
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 14,
               lineHeight: 0,
               color: "#8C8C8C",

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
+import { SANS_UI, SERIF } from "../lib/theme";
 
 // Fallback transcript for browsers without the Web Speech API
 const MOCK_TRANSCRIPT = "I remember the day we sat by the river, watching the sun set behind the mountains. The air was crisp and I could feel the warmth of your hand in mine. It was one of those perfect moments that I wish I could hold onto forever.";
@@ -173,7 +174,7 @@ export function RecordingStartPage() {
           left: "50%",
           transform: "translateX(-50%)",
           top: 30,
-          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+          fontFamily: SERIF,
           fontStyle: "normal",
           fontSize: 12,
           lineHeight: 1.5,
@@ -196,7 +197,7 @@ export function RecordingStartPage() {
           left: "50%",
           transform: "translateX(-50%)",
           top: 171,
-          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+          fontFamily: SERIF,
           fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
           letterSpacing: "0px",
           color: "white",
@@ -224,7 +225,7 @@ export function RecordingStartPage() {
         >
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 12,
               letterSpacing: "0px",
               color: "#ebebeb",
@@ -238,7 +239,7 @@ export function RecordingStartPage() {
           </p>
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 12,
               letterSpacing: "0px",
               color: "#ebebeb",
@@ -252,7 +253,7 @@ export function RecordingStartPage() {
           {useMock && (
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 11,
                 letterSpacing: "0px",
                 color: "#ebebeb",
@@ -273,7 +274,7 @@ export function RecordingStartPage() {
             left: "50%",
             transform: "translateX(-50%)",
             top: 270,
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 12,
             letterSpacing: "0px",
             color: "#ebebeb",
@@ -311,7 +312,7 @@ export function RecordingStartPage() {
         >
           <span
             style={{
-              fontFamily: "'SF Pro', sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 16,
               fontWeight: 300,
               lineHeight: 1.5,
@@ -348,7 +349,7 @@ export function RecordingStartPage() {
           </svg>
           <span
             style={{
-              fontFamily: "'SF Pro', sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 16,
               fontWeight: 300,
               lineHeight: 1.5,
@@ -381,7 +382,7 @@ export function RecordingStartPage() {
       >
         <p
           style={{
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 12,
             letterSpacing: "0px",
             color: "#ebebeb",

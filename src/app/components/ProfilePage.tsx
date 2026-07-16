@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router";
 import { BackButton } from "./BackButton";
+import { SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 
 export function ProfilePage() {
   const navigate = useNavigate();
@@ -25,7 +26,7 @@ export function ProfilePage() {
           left: "50%",
           transform: "translateX(-50%)",
           top: 71,
-          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+          fontFamily: SERIF,
           fontStyle: "normal",
           fontSize: 12,
           lineHeight: 1.5,
@@ -72,7 +73,7 @@ export function ProfilePage() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 40,
               fontWeight: 500,
               color: "white",
@@ -86,7 +87,7 @@ export function ProfilePage() {
           {/* User name */}
           <h1
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 36,
               fontWeight: 500,
               lineHeight: "140%",
@@ -102,7 +103,7 @@ export function ProfilePage() {
           {/* One-liner */}
           <p
             style={{
-              fontFamily: "Exposure Trial, 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF_EXPOSURE,
               fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
               lineHeight: 1.6,
               color: "rgba(123, 123, 135, 0.7)",
@@ -139,7 +140,7 @@ export function ProfilePage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
             <label
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 13,
                 fontWeight: 500,
                 letterSpacing: "0.5px",
@@ -151,7 +152,7 @@ export function ProfilePage() {
             </label>
             <p
               style={{
-                fontFamily: "Exposure Trial, 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF_EXPOSURE,
                 fontSize: 18,
                 lineHeight: 1.5,
                 color: "#7b7b87",
@@ -166,7 +167,7 @@ export function ProfilePage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
             <label
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 13,
                 fontWeight: 500,
                 letterSpacing: "0.5px",
@@ -178,7 +179,7 @@ export function ProfilePage() {
             </label>
             <p
               style={{
-                fontFamily: "Exposure Trial, 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF_EXPOSURE,
                 fontSize: 18,
                 lineHeight: 1.5,
                 color: "#7b7b87",
@@ -193,7 +194,7 @@ export function ProfilePage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
             <label
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 13,
                 fontWeight: 500,
                 letterSpacing: "0.5px",
@@ -205,7 +206,7 @@ export function ProfilePage() {
             </label>
             <p
               style={{
-                fontFamily: "Exposure Trial, 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF_EXPOSURE,
                 fontSize: 18,
                 lineHeight: 1.5,
                 color: "#7b7b87",
@@ -227,7 +228,7 @@ export function ProfilePage() {
             border: "1px solid rgba(123, 123, 135, 0.25)",
             background: "transparent",
             cursor: "pointer",
-            fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+            fontFamily: SANS,
             fontSize: 14,
             fontWeight: 400,
             color: "#7b7b87",

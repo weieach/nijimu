@@ -2,18 +2,9 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
 
-const COLOR_PALETTE = [
-  { id: "slate", color: "#9496a6", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "cloud", color: "#D6DADB", light1: "#e8eaeb", light2: "#c8d0d4" },
-  { id: "mist", color: "#C8D0D4", light1: "#e0e4e6", light2: "#d6dadb" },
-  { id: "sand", color: "#CBBFBC", light1: "#e5dbd9", light2: "#d6cbc8" },
-  { id: "sky", color: "#A4B6BE", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "rose", color: "#B8969A", light1: "#d8c8ca", light2: "#e5dbd9" },
-  { id: "sage", color: "#8C9FA8", light1: "#b8c4ca", light2: "#c8d0d4" },
-  { id: "ocean", color: "#6488A0", light1: "#9cb4c8", light2: "#b8c8d4" },
-  { id: "night", color: "#1C2C35", light1: "#4a5a62", light2: "#7a8a92" },
-];
 
 export function EditColorPage() {
   const location = useLocation();
@@ -80,7 +71,7 @@ export function EditColorPage() {
         {/* Header */}
         <p
           style={{
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 28,
             fontWeight: 400,
             lineHeight: "39.2px",
@@ -136,7 +127,7 @@ export function EditColorPage() {
           >
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 18,
                 color: "#7b7b87",
                 textTransform: "lowercase",
@@ -171,7 +162,7 @@ export function EditColorPage() {
           <span
             style={{
               fontFamily:
-                "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                SANS,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -183,7 +174,7 @@ export function EditColorPage() {
           </span>
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 14,
               lineHeight: 0,
               color: "#8C8C8C",

@@ -3,19 +3,9 @@ import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { LIFE_EVENTS, COLORS } from "../data/memoryData";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
 
-// Color palette for 3D shapes
-const COLOR_PALETTE = [
-  { id: "slate", color: "#9496a6", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "cloud", color: "#D6DADB", light1: "#e8eaeb", light2: "#c8d0d4" },
-  { id: "mist", color: "#C8D0D4", light1: "#e0e4e6", light2: "#d6dadb" },
-  { id: "sand", color: "#CBBFBC", light1: "#e5dbd9", light2: "#d6cbc8" },
-  { id: "sky", color: "#A4B6BE", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "rose", color: "#B8969A", light1: "#d8c8ca", light2: "#e5dbd9" },
-  { id: "sage", color: "#8C9FA8", light1: "#b8c4ca", light2: "#c8d0d4" },
-  { id: "ocean", color: "#6488A0", light1: "#9cb4c8", light2: "#b8c8d4" },
-  { id: "night", color: "#1C2C35", light1: "#4a5a62", light2: "#7a8a92" },
-];
 
 // Watercolor gradients matching COLOR_PALETTE exactly
 const WATERCOLOR_GRADIENTS = [
@@ -160,7 +150,7 @@ export function ConnectMemoriesPage() {
           >
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(16px, 1vw, 18px)",
                 fontWeight: 500,
                 lineHeight: "140%",
@@ -175,7 +165,7 @@ export function ConnectMemoriesPage() {
             </p>
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(14px, 0.9vw, 16px)",
                 fontWeight: 500,
                 lineHeight: "140%",
@@ -191,7 +181,7 @@ export function ConnectMemoriesPage() {
             {/* Counter */}
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(12px, 0.9vw, 14px)",
                 fontWeight: 400,
                 lineHeight: "normal",
@@ -244,7 +234,7 @@ export function ConnectMemoriesPage() {
           >
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(16px, 1.5vw, 18px)",
                 fontStyle: "italic",
                 color: "#7b7b87",
@@ -257,7 +247,7 @@ export function ConnectMemoriesPage() {
             </p>
             <p
               style={{
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(13px, 1vw, 15px)",
                 color: "#a0a0a8",
                 lineHeight: 1.3,
@@ -279,7 +269,7 @@ export function ConnectMemoriesPage() {
           >
             <p
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: "clamp(9px, 0.8vw, 12px)",
                 color: "#a8a8b0",
                 letterSpacing: "0.15em",
@@ -296,7 +286,7 @@ export function ConnectMemoriesPage() {
                 border: "none",
                 background: "transparent",
                 cursor: "pointer",
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: "clamp(10px, 0.9vw, 12px)",
                 fontWeight: 400,
                 lineHeight: "normal",
@@ -406,7 +396,7 @@ export function ConnectMemoriesPage() {
           <span
             style={{
               fontFamily:
-                "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                SANS,
               fontSize: 18,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -420,7 +410,7 @@ export function ConnectMemoriesPage() {
           {/* Arrow icon */}
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 20,
               lineHeight: 0,
               color: "#8C8C8C",

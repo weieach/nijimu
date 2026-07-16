@@ -1,4 +1,5 @@
 // Shared memory data used across the application
+export { MEMORY_COLORS as COLORS } from "../lib/colors";
 
 export interface MemoryEvent {
   id: string;
@@ -26,15 +27,3 @@ export const LIFE_EVENTS: MemoryEvent[] = [
   { id: "15", year: "2026", event: "Still figuring out what love means", color: 5 },
 ];
 
-export const COLORS = [
-  "#9496a6",
-  "#D6DADB",
-  "#C8D0D4",
-  "#CBBFBC",
-  "#A4B6BE",
-  "#B8969A",
-  "#8C9FA8",
-  "#6488A0",
-  "#9496a6",
-  "#1C2C35",
-];

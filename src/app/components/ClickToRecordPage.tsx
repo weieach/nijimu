@@ -4,6 +4,7 @@ import { BlobScene } from "./BlobScene";
 import { BackButton } from "./BackButton";
 import svgPaths from "../../imports/svg-h5bca79tjj";
 import svgPathsStop from "../../imports/svg-v4a6nixv89";
+import { SANS, SERIF } from "../lib/theme";
 
 export function ClickToRecordPage() {
   const navigate = useNavigate();
@@ -120,7 +121,7 @@ export function ClickToRecordPage() {
             left: "50%",
             transform: "translateX(-50%)",
             top: 171,
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 16,
             fontWeight: 500,
             lineHeight: "120%",
@@ -237,7 +238,7 @@ export function ClickToRecordPage() {
           left: "50%",
           transform: "translateX(-50%)",
           top: 171,
-          fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+          fontFamily: SERIF,
           fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
           fontWeight: 500,
           lineHeight: "120%",
@@ -300,7 +301,7 @@ export function ClickToRecordPage() {
         </svg>
         <span
           style={{
-            fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+            fontFamily: SANS,
             fontSize: 24,
             fontWeight: 400,
             lineHeight: 1.5,

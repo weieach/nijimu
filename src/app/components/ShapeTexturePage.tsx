@@ -7,6 +7,7 @@ import {
   getShapeBuildEvolvePhase,
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
 
 export function ShapeTexturePage() {
   const location = useLocation();
@@ -305,7 +306,7 @@ export function ShapeTexturePage() {
             navigate("/");
           }}
           style={{
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontStyle: "normal",
             fontSize: 12,
             lineHeight: 1.5,
@@ -333,7 +334,7 @@ export function ShapeTexturePage() {
             top: 118,
             left: "50%",
             transform: "translateX(-50%)",
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 20,
             lineHeight: 1.2,
             letterSpacing: "-1px",
@@ -354,7 +355,7 @@ export function ShapeTexturePage() {
             top: 195,
             left: "50%",
             transform: "translateX(-50%)",
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 17,
             lineHeight: 1.2,
             letterSpacing: "-1px",
@@ -396,7 +397,7 @@ export function ShapeTexturePage() {
               >
                 <label
                   style={{
-                    fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                    fontFamily: SANS,
                     fontSize: 12,
                     color: "#8C8C8C",
                     textTransform: "lowercase",
@@ -406,7 +407,7 @@ export function ShapeTexturePage() {
                 </label>
                 <span
                   style={{
-                    fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                    fontFamily: SANS,
                     fontSize: 12,
                     color: "#8C8C8C",
                   }}
@@ -442,7 +443,7 @@ export function ShapeTexturePage() {
                 bottom: 250,
                 left: "50%",
                 transform: "translateX(-50%)",
-                fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+                fontFamily: SERIF,
                 fontSize: 15,
                 lineHeight: 1,
                 color: "rgba(42, 32, 24, 0.6)",
@@ -481,7 +482,7 @@ export function ShapeTexturePage() {
           <span
             style={{
               fontFamily:
-                "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                SANS,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -495,7 +496,7 @@ export function ShapeTexturePage() {
           {/* Arrow icon */}
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 14,
               lineHeight: 0,
               color: "#8C8C8C",

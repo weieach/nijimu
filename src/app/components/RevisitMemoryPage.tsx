@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
 import svgPaths from "../../imports/svg-f02d7wi360";
+import { SANS, SERIF } from "../lib/theme";
 
 export function RevisitMemoryPage() {
   const location = useLocation();
@@ -57,7 +58,7 @@ export function RevisitMemoryPage() {
         {/* Header text */}
         <p
           style={{
-            fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+            fontFamily: SERIF,
             fontSize: 28,
             fontWeight: 400,
             lineHeight: "39.2px",
@@ -117,7 +118,7 @@ export function RevisitMemoryPage() {
         >
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 28,
               fontWeight: 400,
               lineHeight: "39.2px",
@@ -132,7 +133,7 @@ export function RevisitMemoryPage() {
           </p>
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: "39.2px",
@@ -178,7 +179,7 @@ export function RevisitMemoryPage() {
           <span
             style={{
               fontFamily:
-                "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                SANS,
               fontSize: 24,
               fontWeight: 400,
               lineHeight: 1.5,

@@ -3,19 +3,9 @@ import { useNavigate } from "react-router";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { LIFE_EVENTS, COLORS } from "../data/memoryData";
 import { BackButton } from "./BackButton";
+import { SANS, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
 
-// Color palette from homescreen
-const COLOR_PALETTE = [
-  { id: "slate", color: "#9496a6", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "cloud", color: "#D6DADB", light1: "#e8eaeb", light2: "#c8d0d4" },
-  { id: "mist", color: "#C8D0D4", light1: "#e0e4e6", light2: "#d6dadb" },
-  { id: "sand", color: "#CBBFBC", light1: "#e5dbd9", light2: "#d6cbc8" },
-  { id: "sky", color: "#A4B6BE", light1: "#c8d0d4", light2: "#d6dadb" },
-  { id: "rose", color: "#B8969A", light1: "#d8c8ca", light2: "#e5dbd9" },
-  { id: "sage", color: "#8C9FA8", light1: "#b8c4ca", light2: "#c8d0d4" },
-  { id: "ocean", color: "#6488A0", light1: "#9cb4c8", light2: "#b8c8d4" },
-  { id: "night", color: "#1C2C35", light1: "#4a5a62", light2: "#7a8a92" },
-];
 
 interface Memory {
   id: string;
@@ -161,7 +151,7 @@ export function MemoryScrollPage() {
         >
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: "clamp(18px, 2.5vw, 28px)",
               fontStyle: "italic",
               color: "#7b7b87",
@@ -174,7 +164,7 @@ export function MemoryScrollPage() {
           </p>
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: "clamp(14px, 1.8vw, 20px)",
               color: "#a0a0a8",
               lineHeight: 1.3,
@@ -196,7 +186,7 @@ export function MemoryScrollPage() {
         >
           <p
             style={{
-              fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+              fontFamily: SANS,
               fontSize: "clamp(10px, 1.2vw, 13px)",
               color: "#a8a8b0",
               letterSpacing: "0.15em",

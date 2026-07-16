@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer, MODEL_PATHS, MATERIAL_PRESETS } from "./SceneViewer";
+import { SANS, SANS_UI, SERIF } from "../lib/theme";
 
 export function ShapeEditorPage() {
   const location = useLocation();
@@ -58,7 +59,7 @@ export function ShapeEditorPage() {
               navigate("/");
             }}
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontStyle: "normal",
               fontSize: 12,
               lineHeight: 1.5,
@@ -81,7 +82,7 @@ export function ShapeEditorPage() {
           {/* Header text */}
           <p
             style={{
-              fontFamily: "'GenRyuMin2 TW', 'Playfair Display', Georgia, serif",
+              fontFamily: SERIF,
               fontSize: 16,
               fontWeight: 500,
               lineHeight: "39.2px",
@@ -150,7 +151,7 @@ export function ShapeEditorPage() {
           <div style={{ marginBottom: 32 }}>
             <label
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 12,
                 color: "#8C8C8C",
                 textTransform: "lowercase",
@@ -199,7 +200,7 @@ export function ShapeEditorPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <label
                 style={{
-                  fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                  fontFamily: SANS,
                   fontSize: 12,
                   color: "#8C8C8C",
                   textTransform: "lowercase",
@@ -209,7 +210,7 @@ export function ShapeEditorPage() {
               </label>
               <span
                 style={{
-                  fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                  fontFamily: SANS,
                   fontSize: 12,
                   color: "#8C8C8C",
                 }}
@@ -238,7 +239,7 @@ export function ShapeEditorPage() {
           <div style={{ marginBottom: 24 }}>
             <label
               style={{
-                fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                fontFamily: SANS,
                 fontSize: 12,
                 color: "#8C8C8C",
                 textTransform: "lowercase",
@@ -270,7 +271,7 @@ export function ShapeEditorPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <label
                 style={{
-                  fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                  fontFamily: SANS,
                   fontSize: 12,
                   color: "#8C8C8C",
                   textTransform: "lowercase",
@@ -280,7 +281,7 @@ export function ShapeEditorPage() {
               </label>
               <span
                 style={{
-                  fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+                  fontFamily: SANS,
                   fontSize: 12,
                   color: "#8C8C8C",
                 }}
@@ -330,7 +331,7 @@ export function ShapeEditorPage() {
         >
           <span
             style={{
-              fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', sans-serif",
+              fontFamily: SANS,
               fontSize: 16,
               fontWeight: 400,
               lineHeight: 1.5,
@@ -344,7 +345,7 @@ export function ShapeEditorPage() {
           {/* Arrow icon */}
           <span
             style={{
-              fontFamily: "SF Pro, system-ui, sans-serif",
+              fontFamily: SANS_UI,
               fontSize: 14,
               lineHeight: 0,
               color: "#8C8C8C",
