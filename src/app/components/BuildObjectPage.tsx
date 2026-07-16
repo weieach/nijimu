@@ -7,12 +7,13 @@ import {
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
 
-// Pick one random model for the entire session on first mount
-const sessionModelPath = MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)];
-
 export function BuildObjectPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  // Fresh random model each time the user starts building a memory
+  const [sessionModelPath] = useState(
+    () => MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
+  );
   const [fadeIn, setFadeIn] = useState(false);
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [cameraPermission, setCameraPermission] = useState<"pending" | "granted" | "denied">("pending");
