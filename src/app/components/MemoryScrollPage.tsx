@@ -5,6 +5,7 @@ import { LIFE_EVENTS, COLORS } from "../data/memoryData";
 import { BackButton } from "./BackButton";
 import { SANS, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
+import { loadMemories } from "../lib/memoryStore";
 
 
 interface Memory {
@@ -21,9 +22,10 @@ interface Memory {
   };
 }
 
-// Generate memories with random shape properties
+// Curated life events get a generated shape; memories the user saved replay
+// the shape they actually sculpted.
 const generateMemories = (): Memory[] => {
-  return LIFE_EVENTS.map((event) => ({
+  const curated = LIFE_EVENTS.map((event) => ({
     id: event.id,
     title: event.event,
     year: event.year,
@@ -37,6 +39,22 @@ const generateMemories = (): Memory[] => {
       bumpAmount: Math.random() * 0.12, // 0-0.12
     },
   }));
+
+  const saved = loadMemories().map((memory) => ({
+    id: memory.id,
+    title: memory.title,
+    year: memory.year,
+    color: memory.colorIndex,
+    shape: {
+      modelPath: memory.shape.modelPath,
+      colorIndex: memory.shape.matPresetIndex,
+      fluidity: memory.shape.fluidity,
+      evolve: memory.shape.evolve,
+      bumpAmount: memory.shape.bumpAmount,
+    },
+  }));
+
+  return [...curated, ...saved];
 };
 
 export function MemoryScrollPage() {

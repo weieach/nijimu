@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import svgPaths from "../../imports/svg-t19vgojqiy";
 import NewMomoryIdle from "../../imports/NewMomoryIdle";
-import { LIFE_EVENTS, COLORS as MEMORY_COLORS } from "../data/memoryData";
+import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memoryData";
+import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { SANS, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
@@ -85,14 +86,16 @@ function connectionCount(idx: number): number {
  * gallerySortOrder[slot] = blobIndex
  * gallerySlot[blobIndex] = slot position (0 = leftmost = newest)
  */
-const gallerySortOrder = LIFE_EVENTS
-  .map((_, i) => i)
-  .sort((a, b) => parseInt(LIFE_EVENTS[b].year) - parseInt(LIFE_EVENTS[a].year));
-
-const gallerySlot: number[] = new Array(LIFE_EVENTS.length);
-gallerySortOrder.forEach((blobIdx, slot) => {
-  gallerySlot[blobIdx] = slot;
-});
+function computeGalleryOrder(events: { year: string }[]) {
+  const sortOrder = events
+    .map((_, i) => i)
+    .sort((a, b) => parseInt(events[b].year) - parseInt(events[a].year));
+  const slot: number[] = new Array(events.length);
+  sortOrder.forEach((blobIdx, s) => {
+    slot[blobIdx] = s;
+  });
+  return { sortOrder, slot };
+}
 
 /* ───────── helpers ───────── */
 function generateBorderRadius(): string {
@@ -100,8 +103,12 @@ function generateBorderRadius(): string {
   return `${v[0]}% ${v[1]}% ${v[2]}% ${v[3]}% / ${v[4]}% ${v[5]}% ${v[6]}% ${v[7]}%`;
 }
 
-function generateBlobs(count: number, isMobile: boolean): BlobData[] {
-  const raw = Array.from({ length: count }, (_, i) => {
+function generateBlobs(
+  events: MemoryEvent[],
+  saved: SavedMemory[],
+  isMobile: boolean,
+): BlobData[] {
+  const raw = Array.from({ length: events.length }, (_, i) => {
     let x, y;
     if (isMobile) {
       // Mobile: 2x width, blobs can be generated across 200% width
@@ -113,8 +120,11 @@ function generateBlobs(count: number, isMobile: boolean): BlobData[] {
       y = 10 + Math.random() * 70;
     }
     
-    // Use the color index from LIFE_EVENTS to ensure 2D and 3D colors match
-    const colorIndex = LIFE_EVENTS[i % LIFE_EVENTS.length].color;
+    // Use the color index from the event to ensure 2D and 3D colors match
+    const colorIndex = events[i].color;
+    // Saved memories replay the shape the user actually sculpted; the curated
+    // LIFE_EVENTS get a generated one.
+    const savedMemory = i >= LIFE_EVENTS.length ? saved[i - LIFE_EVENTS.length] : undefined;
     
     return {
       id: i,
@@ -128,20 +138,28 @@ function generateBlobs(count: number, isMobile: boolean): BlobData[] {
       animDuration: 33 + Math.random() * 50,
       animDelay: -Math.random() * 33,
       rotate: Math.random() * 360,
-      year: LIFE_EVENTS[i % LIFE_EVENTS.length].year,
-      event: LIFE_EVENTS[i % LIFE_EVENTS.length].event,
+      year: events[i].year,
+      event: events[i].event,
       distFromCentroid: 0,
-      shape: {
-        modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
-        colorIndex: colorIndex % COLOR_PALETTE.length, // Use the same color index
-        fluidity: Math.random() * 0.5 + 0.5,
-        evolve: Math.random() * 0.5 + 0.5,
-        bumpAmount: i % 2 === 0 ? Math.random() * 0.03 : 0.03 + Math.random() * 0.12,
-      },
+      shape: savedMemory
+        ? {
+            modelPath: savedMemory.shape.modelPath,
+            colorIndex: colorIndex % COLOR_PALETTE.length,
+            fluidity: savedMemory.shape.fluidity,
+            evolve: savedMemory.shape.evolve,
+            bumpAmount: savedMemory.shape.bumpAmount,
+          }
+        : {
+            modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
+            colorIndex: colorIndex % COLOR_PALETTE.length, // Use the same color index
+            fluidity: Math.random() * 0.5 + 0.5,
+            evolve: Math.random() * 0.5 + 0.5,
+            bumpAmount: i % 2 === 0 ? Math.random() * 0.03 : 0.03 + Math.random() * 0.12,
+          },
     };
   });
-  const cx = raw.reduce((s, b) => s + b.x, 0) / count;
-  const cy = raw.reduce((s, b) => s + b.y, 0) / count;
+  const cx = raw.reduce((s, b) => s + b.x, 0) / raw.length;
+  const cy = raw.reduce((s, b) => s + b.y, 0) / raw.length;
   for (const b of raw) {
     b.distFromCentroid =
       Math.sqrt(((b.x - cx) / 100) ** 2 + ((b.y - cy) / 100) ** 2) * 2;
@@ -200,7 +218,20 @@ function textScale(idx: number): number {
    COMPONENT
    ═══════════════════════════════════════════════ */
 export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemory?: () => void; hideAnnotations?: boolean }) {
-  const [blobs] = useState<BlobData[]>(() => generateBlobs(16, window.innerWidth <= 768));
+  // Curated life events plus whatever the user has saved, so their memories
+  // blend into the same field.
+  const [savedMemories] = useState<SavedMemory[]>(() => loadMemories());
+  const events = useMemo(
+    () => [...LIFE_EVENTS, ...savedMemories.map(toMemoryEvent)],
+    [savedMemories],
+  );
+  const { sortOrder: gallerySortOrder, slot: gallerySlot } = useMemo(
+    () => computeGalleryOrder(events),
+    [events],
+  );
+  const [blobs] = useState<BlobData[]>(() =>
+    generateBlobs(events, savedMemories, window.innerWidth <= 768),
+  );
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const blobEls = useRef<(HTMLDivElement | null)[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);

@@ -1,32 +1,75 @@
 import { useLocation, useNavigate } from "react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
+import { saveMemory } from "../lib/memoryStore";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+
+interface SavedState {
+  memoryName?: string;
+  year?: string;
+  isEditing?: boolean;
+  transcript?: string;
+  highlightedWords?: string[];
+  matPresetIndex?: number;
+  shape?: {
+    modelPath?: string;
+    fluidity?: number;
+    evolve?: number;
+    bumpAmount?: number;
+  };
+}
 
 export function MemorySavedPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  
+
   // Extract memoryName, year, and isEditing from location state
-  const state = location.state as { memoryName?: string; year?: string; isEditing?: boolean } | null;
+  const state = location.state as SavedState | null;
   const memoryName = state?.memoryName || "";
   const year = state?.year || "";
   const isEditing = state?.isEditing || false;
-  
+
   const [fadeIn, setFadeIn] = useState(false);
   const [showText, setShowText] = useState(false);
   const [showButton, setShowButton] = useState(false);
+  const persistedRef = useRef(false);
 
   useEffect(() => {
     // Orchestrate the reveal animation - more subtle fades
     setTimeout(() => setFadeIn(true), 100);
     setTimeout(() => setShowText(true), 800);
     setTimeout(() => setShowButton(true), 1600);
-    
-    // Debug log
-    console.log("MemorySavedPage received state:", { memoryName, year, isEditing, fullState: state });
   }, []);
+
+  // Persist the finished memory. Editing an existing one re-saves nothing yet —
+  // the edit flow has no id to update against.
+  useEffect(() => {
+    if (persistedRef.current || isEditing) return;
+    if (!state?.shape?.modelPath || !memoryName) return;
+    persistedRef.current = true; // guards against StrictMode's double effect
+
+    const matPresetIndex = state.matPresetIndex ?? 0;
+    saveMemory({
+      id: crypto.randomUUID(),
+      title: memoryName,
+      year,
+      transcript: state.transcript ?? "",
+      highlightedWords: state.highlightedWords ?? [],
+      shape: {
+        modelPath: state.shape.modelPath,
+        matPresetIndex,
+        fluidity: state.shape.fluidity ?? 0,
+        evolve: state.shape.evolve ?? 0.5,
+        bumpAmount: state.shape.bumpAmount ?? 0,
+      },
+      // Material presets (5) are a coarser scale than the blob palette (9);
+      // spread them across it so saved blobs vary in tint like the curated ones.
+      colorIndex: Math.round((matPresetIndex / 4) * (COLOR_PALETTE.length - 1)),
+      createdAt: new Date().toISOString(),
+    });
+  }, [isEditing, memoryName, state, year]);
 
   const displayName = memoryName || "your memory";
   const displayYear = year || "the archive";
