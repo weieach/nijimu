@@ -4,6 +4,7 @@ import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { PillButton } from "./PillButton";
 
 export function EditWeightPage() {
   const location = useLocation();
@@ -233,50 +234,12 @@ export function EditWeightPage() {
         </div>
 
         {/* Continue button */}
-        <button
+        <PillButton
+          label="continue"
           onClick={handleContinue}
-          style={{
-            position: "fixed",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: "clamp(80px, 12vh, 120px)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 24px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(175, 163, 163, 0.2)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            zIndex: 10,
-          }}
-        >
-          <span
-            style={{
-              fontFamily:
-                SANS,
-              fontSize: 16,
-              fontWeight: 400,
-              lineHeight: 1.5,
-              color: "#8C8C8C",
-              textTransform: "lowercase",
-            }}
-          >
-            continue
-          </span>
-          <span
-            style={{
-              fontFamily: SANS_UI,
-              fontSize: 14,
-              lineHeight: 0,
-              color: "#8C8C8C",
-            }}
-          >
-            ›
-          </span>
-        </button>
+          trailing="›"
+          style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "clamp(80px, 12vh, 120px)", zIndex: 10 }}
+        />
       </div>
 
       {/* Hidden video for hand tracking */}

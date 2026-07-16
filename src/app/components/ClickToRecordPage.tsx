@@ -5,6 +5,8 @@ import { BackButton } from "./BackButton";
 import svgPaths from "../../imports/svg-h5bca79tjj";
 import svgPathsStop from "../../imports/svg-v4a6nixv89";
 import { SANS, SERIF } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 export function ClickToRecordPage() {
   const navigate = useNavigate();
@@ -86,33 +88,8 @@ export function ClickToRecordPage() {
           }}
         />
 
-        {/* nijimu text */}
-        <a
-          href={import.meta.env.BASE_URL}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/");
-          }}
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            top: 30,
-            fontFamily: "Georgia, serif",
-            fontStyle: "italic",
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: "#d7d6d6",
-            textTransform: "lowercase",
-            whiteSpace: "nowrap",
-            margin: 0,
-            textDecoration: "none",
-            cursor: "pointer",
-            zIndex: 100,
-          }}
-        >
-          nijimu
-        </a>
+        {/* nijimu wordmark */}
+      <PageHeader layout="absolute" tone="dark" />
 
         {/* Question text */}
         <p
@@ -157,42 +134,13 @@ export function ClickToRecordPage() {
         </p>
 
         {/* Stop button */}
-        <button
+        <PillButton
+          label="stop"
           onClick={handleStopRecording}
-          style={{
-            position: "absolute",
-            bottom: 80,
-            left: "50%",
-            transform: "translateX(-50%)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 19,
-            padding: "15px 30px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(218, 218, 218, 0.25)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d={svgPathsStop.p220b0800} fill="white" />
-          </svg>
-          <span
-            style={{
-              fontFamily: "'Neue Haas Grotesk Display Pro', 'Neue Montreal', 'SF Pro', sans-serif",
-              fontSize: 24,
-              fontWeight: 300,
-              lineHeight: 1.5,
-              color: "white",
-              textShadow: "0px 4px 100px black",
-              textTransform: "lowercase",
-            }}
-          >
-            stop
-          </span>
-        </button>
+          variant="dark"
+          icon={<svg width="20" height="20" viewBox="0 0 20 20" fill="none"> <path d={svgPathsStop.p220b0800} fill="white" /> </svg>}
+          style={{ position: "absolute", bottom: 80, left: "50%", transform: "translateX(-50%)" }}
+        />
       </div>
     );
   }
@@ -203,33 +151,8 @@ export function ClickToRecordPage() {
       className="relative w-full h-screen overflow-hidden select-none flex flex-col items-center justify-center"
       style={{ background: "#e0e0e0" }}
     >
-      {/* nijimu text */}
-      <a
-        href={import.meta.env.BASE_URL}
-        onClick={(e) => {
-          e.preventDefault();
-          navigate("/");
-        }}
-        style={{
-          position: "absolute",
-          left: "50%",
-          transform: "translateX(-50%)",
-          top: 30,
-          fontFamily: "Georgia, serif",
-          fontStyle: "italic",
-          fontSize: 12,
-          lineHeight: 1.5,
-          color: "#9b9ba3",
-          textTransform: "lowercase",
-          whiteSpace: "nowrap",
-          margin: 0,
-          textDecoration: "none",
-          cursor: "pointer",
-          zIndex: 100,
-        }}
-      >
-        nijimu
-      </a>
+      {/* nijimu wordmark */}
+      <PageHeader layout="absolute" />
 
       {/* Question text */}
       <p

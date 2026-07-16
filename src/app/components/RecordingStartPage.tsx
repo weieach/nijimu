@@ -4,6 +4,8 @@ import { BlobScene } from "./BlobScene";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { SANS_UI, SERIF } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 // Fallback transcript for browsers without the Web Speech API
 const MOCK_TRANSCRIPT = "I remember the day we sat by the river, watching the sun set behind the mountains. The air was crisp and I could feel the warmth of your hand in mine. It was one of those perfect moments that I wish I could hold onto forever.";
@@ -162,33 +164,8 @@ export function RecordingStartPage() {
         }}
       />
 
-      {/* nijimu text */}
-      <a
-        href={import.meta.env.BASE_URL}
-        onClick={(e) => {
-          e.preventDefault();
-          navigate("/");
-        }}
-        style={{
-          position: "absolute",
-          left: "50%",
-          transform: "translateX(-50%)",
-          top: 30,
-          fontFamily: SERIF,
-          fontStyle: "normal",
-          fontSize: 12,
-          lineHeight: 1.5,
-          color: "#d7d6d6",
-          textTransform: "lowercase",
-          whiteSpace: "nowrap",
-          margin: 0,
-          textDecoration: "none",
-          cursor: "pointer",
-          zIndex: 100,
-        }}
-      >
-        nijimu
-      </a>
+      {/* nijimu wordmark */}
+      <PageHeader layout="absolute" tone="dark" />
 
       {/* Question text */}
       <p
@@ -291,76 +268,20 @@ export function RecordingStartPage() {
 
       {/* Click to record button (pre-recording) or Stop button (during recording) */}
       {!isRecording ? (
-        <button
+        <PillButton
+          label="click to record"
           onClick={handleStartRecording}
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 80,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 24px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(218, 218, 218, 0.25)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: SANS_UI,
-              fontSize: 16,
-              fontWeight: 300,
-              lineHeight: 1.5,
-              color: "white",
-              textShadow: "0px 4px 100px black",
-              textTransform: "lowercase",
-            }}
-          >
-            click to record
-          </span>
-        </button>
+          variant="dark"
+          style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 80 }}
+        />
       ) : (
-        <button
+        <PillButton
+          label="stop"
           onClick={handleStopRecording}
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 80,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 24px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(218, 218, 218, 0.25)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-            <path d={svgPathsStop.p220b0800} fill="white" />
-          </svg>
-          <span
-            style={{
-              fontFamily: SANS_UI,
-              fontSize: 16,
-              fontWeight: 300,
-              lineHeight: 1.5,
-              color: "white",
-              textShadow: "0px 4px 100px black",
-              textTransform: "lowercase",
-            }}
-          >
-            stop
-          </span>
-        </button>
+          variant="dark"
+          icon={<svg width="14" height="14" viewBox="0 0 20 20" fill="none"> <path d={svgPathsStop.p220b0800} fill="white" /> </svg>}
+          style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 80 }}
+        />
       )}
 
       {/* Transcript display: live speech (final solid, interim faded) or mock typing */}

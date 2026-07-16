@@ -5,6 +5,8 @@ import { requestPolish } from "../lib/polish";
 import exposureTrialFontUrl from "../../assets/fonts/ExposureTrial-20.otf?url";
 import exposureTrial10Url from "../../assets/fonts/ExposureTrial+10.otf?url";
 import { SANS, SANS_UI, SERIF, SERIF_DISPLAY } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 const SAMPLE_TRANSCRIPT = 
   "I keep coming back to that summer. Not to him, exactly — but to who I was when I was around him. Someone who still had time to notice things. The light on a wall. The sound of a city at 2am. He gave me a camera and said, just feel for the click. I think what he actually meant was — slow down. Pay attention. I didn't. And then he was gone. And I kept moving. But sometimes I wonder if that version of me is still somewhere, waiting on that island, wondering why I never came back.";
@@ -228,33 +230,8 @@ export function TranscriptPage() {
       >
         {/* Top section - nijimu and header */}
         <div className="flex-shrink-0" style={{ paddingTop: 0 }}>
-          {/* nijimu text */}
-          <a
-            href={import.meta.env.BASE_URL}
-            onClick={(e) => {
-              e.preventDefault();
-              navigate("/");
-            }}
-            style={{
-              fontFamily: SERIF,
-              fontStyle: "normal",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "#9b9ba3",
-              textTransform: "lowercase",
-              whiteSpace: "nowrap",
-              marginTop: 30,
-              marginRight: 0,
-              marginLeft: 0,
-              textAlign: "center",
-              marginBottom: "clamp(60px, 15vh, 100px)",
-              display: "block",
-              textDecoration: "none",
-              cursor: "pointer",
-            }}
-          >
-            nijimu
-          </a>
+          {/* nijimu wordmark */}
+      <PageHeader layout="block" />
 
           {/* Header text - changes based on mode */}
           {!highlightMode ? (
@@ -546,90 +523,19 @@ export function TranscriptPage() {
               }}
             >
               {canPolish && (
-                <button
+                <PillButton
+                  label="polish"
                   onClick={handlePolish}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 12,
-                    padding: "12px 24px",
-                    borderRadius: 100,
-                    border: "1px solid rgba(175, 163, 163, 0.35)",
-                    background: "transparent",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: SANS,
-                      fontSize: 16,
-                      fontWeight: 400,
-                      lineHeight: 1.5,
-                      color: "#8C8C8C",
-                      textShadow: "none",
-                      textTransform: "lowercase",
-                    }}
-                  >
-                    polish
-                  </span>
-                  {/* Sparkle icon */}
-                  <span
-                    style={{
-                      fontFamily: SANS_UI,
-                      fontSize: 13,
-                      lineHeight: 0,
-                      color: "#8C8C8C",
-                    }}
-                  >
-                    ✦
-                  </span>
-                </button>
+                  variant="outline"
+                  trailing="✦"
+                />
               )}
-              <button
+              <PillButton
+                label="continue"
                 onClick={handleContinue}
                 disabled={continueDisabled}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 12,
-                  padding: "12px 24px",
-                  borderRadius: 100,
-                  border: "none",
-                  background: continueDisabled
-                    ? "rgba(175, 163, 163, 0.1)"
-                    : "rgba(175, 163, 163, 0.2)",
-                  cursor: continueDisabled ? "not-allowed" : "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: 16,
-                    fontWeight: 400,
-                    lineHeight: 1.5,
-                    color: continueDisabled ? dimmed : "#8C8C8C",
-                    textShadow: "none",
-                    textTransform: "lowercase",
-                  }}
-                >
-                  continue
-                </span>
-                {/* Arrow icon */}
-                <span
-                  style={{
-                    fontFamily: SANS_UI,
-                    fontSize: 14,
-                    lineHeight: 0,
-                    color: continueDisabled ? dimmed : "#8C8C8C",
-                    fontVariationSettings: "'wdth' 100",
-                  }}
-                >
-                  ›
-                </span>
-              </button>
+                trailing="›"
+              />
             </div>
           );
         })()}

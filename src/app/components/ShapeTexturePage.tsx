@@ -8,6 +8,8 @@ import {
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 export function ShapeTexturePage() {
   const location = useLocation();
@@ -298,34 +300,8 @@ export function ShapeTexturePage() {
         className="flex flex-col h-full transition-opacity duration-1000"
         style={{ opacity: fadeIn ? 1 : 0, position: "relative", zIndex: 2 }}
       >
-        {/* nijimu text */}
-        <a
-          href={import.meta.env.BASE_URL}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/");
-          }}
-          style={{
-            fontFamily: SERIF,
-            fontStyle: "normal",
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: "#9b9ba3",
-            textTransform: "lowercase",
-            whiteSpace: "nowrap",
-            marginTop: 30,
-            marginRight: 0,
-            marginLeft: 0,
-            textAlign: "center",
-            marginBottom: "clamp(60px, 15vh, 100px)",
-            display: "block",
-            textDecoration: "none",
-            cursor: "pointer",
-            zIndex: 10,
-          }}
-        >
-          nijimu
-        </a>
+        {/* nijimu wordmark */}
+      <PageHeader layout="block" />
 
         {/* Title */}
         <p
@@ -458,54 +434,13 @@ export function ShapeTexturePage() {
         )}
 
         {/* Continue button - positioned from Figma */}
-        <button
+        <PillButton
+          label="continue"
           onClick={handleContinue}
+          trailing="›"
           className="transition-opacity duration-500"
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 40,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 24px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(163, 167, 175, 0.2)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            zIndex: 10,
-          }}
-        >
-          <span
-            style={{
-              fontFamily:
-                SANS,
-              fontSize: 16,
-              fontWeight: 400,
-              lineHeight: 1.5,
-              color: "#8C8C8C",
-              textShadow: "none",
-              textTransform: "lowercase",
-            }}
-          >
-            continue
-          </span>
-          {/* Arrow icon */}
-          <span
-            style={{
-              fontFamily: SANS_UI,
-              fontSize: 14,
-              lineHeight: 0,
-              color: "#8C8C8C",
-              fontVariationSettings: "'wdth' 100",
-            }}
-          >
-            ›
-          </span>
-        </button>
+          style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 40, zIndex: 10 }}
+        />
 
         {/* Debug information */}
         {debugMode && (

@@ -2,6 +2,8 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useRef, useEffect } from "react";
 import { BackButton } from "./BackButton";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 export function NameMemoryPage() {
   const location = useLocation();
@@ -72,33 +74,8 @@ export function NameMemoryPage() {
       >
         {/* Top section */}
         <div className="flex-shrink-0" style={{ paddingTop: 0 }}>
-          {/* nijimu text */}
-          <a
-            href={import.meta.env.BASE_URL}
-            onClick={(e) => {
-              e.preventDefault();
-              navigate("/");
-            }}
-            style={{
-              fontFamily: SERIF,
-              fontStyle: "normal",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "#9b9ba3",
-              textTransform: "lowercase",
-              whiteSpace: "nowrap",
-              marginTop: 30,
-              marginRight: 0,
-              marginLeft: 0,
-              textAlign: "center",
-              marginBottom: "clamp(60px, 15vh, 100px)",
-              display: "block",
-              textDecoration: "none",
-              cursor: "pointer",
-            }}
-          >
-            nijimu
-          </a>
+          {/* nijimu wordmark */}
+      <PageHeader layout="block" />
 
           {/* Header text */}
           <p
@@ -311,54 +288,20 @@ export function NameMemoryPage() {
         </div>
 
         {/* Save to archive button - fixed at bottom */}
-        <button
+        <PillButton
+          label="save to archive"
           onClick={handleContinue}
           disabled={!canContinue}
+          trailing="›"
           className="transition-opacity duration-500"
           style={{
             position: "fixed",
             left: "50%",
             transform: "translateX(-50%)",
             bottom: "clamp(40px, 8vh, 80px)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 24px",
-            borderRadius: 100,
-            border: "none",
-            background: canContinue ? "rgba(175, 163, 163, 0.2)" : "rgba(175, 163, 163, 0.1)",
-            cursor: canContinue ? "pointer" : "not-allowed",
-            whiteSpace: "nowrap",
             zIndex: 10,
           }}
-        >
-          <span
-            style={{
-              fontFamily: SANS,
-              fontSize: 16,
-              fontWeight: 400,
-              lineHeight: 1.5,
-              color: canContinue ? "#8C8C8C" : "rgba(140, 140, 140, 0.5)",
-              textShadow: "none",
-              textTransform: "lowercase",
-            }}
-          >
-            save to archive
-          </span>
-          {/* Arrow icon */}
-          <span
-            style={{
-              fontFamily: SANS_UI,
-              fontSize: 14,
-              lineHeight: 0,
-              color: canContinue ? "#8C8C8C" : "rgba(140, 140, 140, 0.5)",
-              fontVariationSettings: "'wdth' 100",
-            }}
-          >
-            ›
-          </span>
-        </button>
+        />
       </div>
 
       {/* Back button */}

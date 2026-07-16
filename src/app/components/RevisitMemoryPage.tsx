@@ -4,6 +4,7 @@ import { BackButton } from "./BackButton";
 import { SceneViewer } from "./SceneViewer";
 import svgPaths from "../../imports/svg-f02d7wi360";
 import { SANS, SERIF } from "../lib/theme";
+import { PillButton } from "./PillButton";
 
 export function RevisitMemoryPage() {
   const location = useLocation();
@@ -146,51 +147,12 @@ export function RevisitMemoryPage() {
         </div>
 
         {/* Continue button */}
-        <button
+        <PillButton
+          label="click to record"
           onClick={handleContinue}
-          style={{
-            position: "fixed",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: "clamp(80px, 12vh, 120px)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 19,
-            padding: "15px 30px",
-            borderRadius: 100,
-            border: "none",
-            background: "rgba(163, 167, 175, 0.2)",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            zIndex: 10,
-          }}
-        >
-          <div className="relative shrink-0 size-[18.75px]">
-            <svg
-              className="absolute block size-full"
-              fill="none"
-              preserveAspectRatio="none"
-              viewBox="0 0 18.75 18.75"
-            >
-              <path d={svgPaths.p12d5cb00} fill="white" />
-            </svg>
-          </div>
-          <span
-            style={{
-              fontFamily:
-                SANS,
-              fontSize: 24,
-              fontWeight: 400,
-              lineHeight: 1.5,
-              color: "white",
-              textShadow: "0px 4px 100px black",
-              textTransform: "lowercase",
-            }}
-          >
-            click to record
-          </span>
-        </button>
+          icon={<svg className="absolute block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 18.75 18.75" > <path d={svgPaths.p12d5cb00} fill="white" /> </svg>}
+          style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "clamp(80px, 12vh, 120px)", zIndex: 10 }}
+        />
       </div>
 
       {/* Back button */}

@@ -1,6 +1,8 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { PageHeader } from "./PageHeader";
+import { PillButton } from "./PillButton";
 
 export function MemorySavedPage() {
   const location = useLocation();
@@ -41,33 +43,8 @@ export function MemorySavedPage() {
         className="absolute inset-0 transition-opacity duration-1000"
         style={{ opacity: fadeIn ? 1 : 0 }}
       >
-        {/* nijimu text */}
-        <a
-          href={import.meta.env.BASE_URL}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/");
-          }}
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            top: 30,
-            fontFamily: SERIF,
-            fontStyle: "normal",
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: "#9b9ba3",
-            textTransform: "lowercase",
-            whiteSpace: "nowrap",
-            margin: 0,
-            zIndex: 2,
-            textDecoration: "none",
-            cursor: "pointer",
-          }}
-        >
-          nijimu
-        </a>
+        {/* nijimu wordmark */}
+      <PageHeader layout="absolute" />
 
         {/* Center content */}
         <div
@@ -130,53 +107,19 @@ export function MemorySavedPage() {
 
         {/* Continue button */}
         {showButton && (
-          <button
+          <PillButton
+            label="return home"
             onClick={() => navigate("/")}
+            trailing="›"
             className="transition-all duration-1000"
             style={{
               position: "absolute",
               left: "50%",
               transform: "translateX(-50%)",
               bottom: 80,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-              padding: "12px 24px",
-              borderRadius: 100,
-              border: "none",
-              background: "rgba(175, 163, 163, 0.2)",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
               opacity: showButton ? 1 : 0,
             }}
-          >
-            <span
-              style={{
-                fontFamily: SANS,
-                fontSize: 16,
-                fontWeight: 400,
-                lineHeight: 1.5,
-                color: "#8C8C8C",
-                textShadow: "none",
-                textTransform: "lowercase",
-              }}
-            >
-              return home
-            </span>
-            {/* Arrow icon */}
-            <span
-              style={{
-                fontFamily: SANS_UI,
-                fontSize: 14,
-                lineHeight: 0,
-                color: "#8C8C8C",
-                fontVariationSettings: "'wdth' 100",
-              }}
-            >
-              ›
-            </span>
-          </button>
+          />
         )}
       </div>
     </div>
