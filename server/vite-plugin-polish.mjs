@@ -1,16 +1,13 @@
-import type { Plugin } from "vite";
-import { polishTranscript } from "./polish";
-
-interface PolishPluginOptions {
-  apiKey: string | undefined;
-  model?: string;
-}
+import { polishTranscript } from "./polish.mjs";
 
 /**
- * Mounts POST /api/polish on the Vite dev server.
- * The API key stays server-side; it is never part of the client bundle.
+ * Mounts POST /api/polish on the Vite dev server, mirroring the production
+ * Vercel function in api/polish.mjs. The API key stays server-side; it is
+ * never part of the client bundle.
+ * @param {{ apiKey: string | undefined, model?: string }} options
+ * @returns {import("vite").Plugin}
  */
-export function polishApiPlugin({ apiKey, model }: PolishPluginOptions): Plugin {
+export function polishApiPlugin({ apiKey, model }) {
   return {
     name: "nijimu-polish-api",
     configureServer(server) {

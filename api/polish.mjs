@@ -1,11 +1,16 @@
-// Vercel serverless function — same handler the Vite dev server uses.
+// Vercel serverless function — plain JavaScript so @vercel/node bundles it
+// with esbuild and never invokes a TypeScript compile step.
 // Deployed at https://nijimu.space/api/polish
-import { polishTranscript } from "../server/polish";
+import { polishTranscript } from "../server/polish.mjs";
 
-export async function POST(request: Request): Promise<Response> {
+/**
+ * @param {Request} request
+ * @returns {Promise<Response>}
+ */
+export async function POST(request) {
   let transcript = "";
   try {
-    const json = (await request.json()) as { transcript?: unknown };
+    const json = await request.json();
     transcript = String(json?.transcript ?? "");
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });

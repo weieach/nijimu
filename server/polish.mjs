@@ -1,5 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+// Plain JavaScript (not TypeScript) on purpose: this file is bundled into the
+// Vercel serverless function by @vercel/node. Keeping the whole function path
+// free of TypeScript avoids @vercel/node's TS-compilation step, which crashed
+// the build on this project's toolchain. Frontend code stays TypeScript.
+
 const SYSTEM_PROMPT = `You polish spoken memories for nijimu, a quiet, contemplative memory-keeping app.
 
 The user spoke a personal memory aloud and it was transcribed. Rewrite it as literary written prose.
@@ -12,22 +17,14 @@ Rules:
 - Fix transcription artifacts (dropped punctuation, run-ons, filler words like "um" and "you know").
 - Return only the rewritten text — no preamble, no quotes, no commentary.`;
 
-export interface PolishSuccess {
-  polished: string;
-}
-export interface PolishFailure {
-  error: string;
-}
-
 /**
  * Rewrites a raw spoken transcript as literary prose via the Anthropic API.
- * Plain function so it can move to a serverless function unchanged.
+ * @param {string} transcript
+ * @param {string | undefined} apiKey
+ * @param {string} [model]
+ * @returns {Promise<{ status: number, body: { polished: string } | { error: string } }>}
  */
-export async function polishTranscript(
-  transcript: string,
-  apiKey: string | undefined,
-  model = "claude-opus-4-8",
-): Promise<{ status: number; body: PolishSuccess | PolishFailure }> {
+export async function polishTranscript(transcript, apiKey, model = "claude-opus-4-8") {
   if (!transcript || transcript.trim().split(/\s+/).length < 3) {
     return { status: 400, body: { error: "Transcript is too short to polish." } };
   }

@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { polishApiPlugin } from './server/vite-plugin-polish'
+import { polishApiPlugin } from './server/vite-plugin-polish.mjs'
 
 // GitHub Project Page: https://<user>.github.io/<repo>/
 // Put VITE_BASE_PATH=/repo-name/ in .env.production (leading and trailing slash)

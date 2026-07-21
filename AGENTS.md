@@ -74,11 +74,10 @@ nijimu/
 │   ├── assets/fonts/               # self-hosted Exposure Trial .otf files
 │   └── imports/                    # Figma-export raw SVG/asset files (9 kept, still referenced)
 ├── server/
-│   ├── polish.ts                   # THE AI polish handler (pure function; single source of truth)
-│   └── vite-plugin-polish.ts       # mounts POST /api/polish on the Vite DEV server
+│   ├── polish.mjs                  # THE AI polish handler (pure JS function; single source of truth)
+│   └── vite-plugin-polish.mjs      # mounts POST /api/polish on the Vite DEV server
 ├── api/
-│   ├── polish.ts                   # Vercel serverless function — wraps server/polish.ts for PROD
-│   └── tsconfig.json               # Node-oriented TS config for the function (see §9, important)
+│   └── polish.mjs                  # Vercel serverless function — wraps server/polish.mjs for PROD
 ├── docs/superpowers/               # design specs + deploy/refactor plans (context, not code)
 ├── scripts/copy-404.mjs            # GH-Pages SPA fallback (leftover, harmless on Vercel)
 ├── vercel.json                     # SPA rewrites (everything except /api → index.html)
@@ -156,14 +155,14 @@ lowercase "nijimu" wordmark link). Prefer these over hand-rolling.
 Browser: TranscriptPage
    └ lib/polish.ts  requestPolish()  ──POST /api/polish──┐
                                                          │
-   DEV:  server/vite-plugin-polish.ts  ─────────────────┤─→ server/polish.ts
-   PROD: api/polish.ts (Vercel function) ───────────────┘     polishTranscript()
+   DEV:  server/vite-plugin-polish.mjs  ────────────────┤─→ server/polish.mjs
+   PROD: api/polish.mjs (Vercel function) ──────────────┘     polishTranscript()
                                                                     └─→ Anthropic API (Claude)
 ```
 
-- **`server/polish.ts`** holds the real logic (`polishTranscript()`) and the
+- **`server/polish.mjs`** holds the real logic (`polishTranscript()`) and the
   system prompt. It is the single source of truth, imported by both the dev
-  plugin and the Vercel function.
+  plugin and the Vercel function. It is **plain JavaScript on purpose** (see §9).
 - The **API key lives only server-side** (`ANTHROPIC_API_KEY` env var, no `VITE_`
   prefix). It is never in the client bundle.
 - Model default: `claude-opus-4-8`, overridable via `POLISH_MODEL`.
@@ -176,13 +175,15 @@ Local setup: copy `.env.local.example` → `.env.local` and set `ANTHROPIC_API_K
 
 ## 9. Non-obvious rules & gotchas (read before editing)
 
-1. **Two separate tsconfigs, on purpose.** `tsconfig.json` is browser/Vite
-   (`types: ["vite/client"]`, DOM libs). `api/tsconfig.json` is Node
-   (`types: ["node"]`, emit-friendly) so Vercel's `@vercel/node` can compile the
-   serverless function. **Do not merge them** and **do not add
-   `allowImportingTsExtensions` to the root** — that flag forces `noEmit` and
-   breaks the Vercel function build. Don't import `.ts`/`.tsx` with the file
-   extension anywhere.
+1. **The AI-polish function path is plain JavaScript (`.mjs`), not TypeScript —
+   on purpose.** `api/polish.mjs` + `server/polish.mjs` are JS so Vercel's
+   `@vercel/node` bundles them with esbuild and never runs a TypeScript compile
+   step (that step repeatedly crashed the Vercel build with "Cannot read
+   properties of undefined (reading 'readFile')" on this toolchain). **Keep this
+   path JS.** If you must add types, use JSDoc — don't convert these files back
+   to `.ts`. The frontend (`src/`) stays TypeScript; `tsconfig.json` covers only
+   that. Also don't add `allowImportingTsExtensions` to the root tsconfig or
+   import files with a `.ts`/`.tsx` extension.
 
 2. **pnpm only.** `npm install` fails on React 19 peer deps.
 
