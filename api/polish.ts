@@ -5,7 +5,7 @@ import { polishTranscript } from "../server/polish";
 export async function POST(request: Request): Promise<Response> {
   let transcript = "";
   try {
-    const json = await request.json();
+    const json = (await request.json()) as { transcript?: unknown };
     transcript = String(json?.transcript ?? "");
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
