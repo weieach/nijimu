@@ -90,8 +90,92 @@ interface ModelProps {
   fitTargetSize?: number;
   /** When true, evolve breathing/env motion is driven inside useFrame (shape-build oscillation). */
   oscillatingEvolve?: boolean;
+  /**
+   * Manual morph weight: 0 = sphere rest pose, 1 = form rest pose.
+   * Ignored while `introMorph` is animating internally.
+   */
+  morphProgress?: number;
+  /** Play sphere→form morph once on mount (slow organic growth). */
+  introMorph?: boolean;
+  /** Duration in seconds for introMorph. */
+  introMorphDuration?: number;
   /** Called after center/scale is applied, so camera can fit. */
   onBounds?: (box: THREE.Box3, sphere: THREE.Sphere) => void;
+}
+
+/** Slow rise, soft settle — reads more like growth than a snap morph. */
+function easeOrganicGrowth(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  // Quintic in-out: long quiet start, gentle middle, soft landing.
+  return x < 0.5
+    ? 16 * x * x * x * x * x
+    : 1 - Math.pow(-2 * x + 2, 5) / 2;
+}
+
+/** Mild cubic ease for gesture-driven morph — mostly linear, soft ends. */
+export function easeSoftMorph(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  const eased = x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  // Blend toward linear so it stays responsive.
+  return x * 0.55 + eased * 0.45;
+}
+
+/**
+ * Project each form vertex onto a sphere that shares the mesh centroid and
+ * mean radius — same vertex count / order as the GLB (Path A morph targets).
+ */
+/**
+ * Pristine form vertices for a geometry. `useGLTF` shares one BufferGeometry
+ * across mounts and we mutate positions every frame, so the untouched pose is
+ * cached on the geometry the first time it is seen.
+ */
+export function readFormRestPose(geom: THREE.BufferGeometry): Float32Array {
+  const attr = geom.attributes.position;
+  if (!geom.userData.__nijimuFormRest) {
+    geom.userData.__nijimuFormRest = Float32Array.from(
+      attr.array as Float32Array,
+    );
+  }
+  return Float32Array.from(geom.userData.__nijimuFormRest as Float32Array);
+}
+
+export function buildSphereRestPose(formPos: Float32Array): Float32Array {
+  const count = formPos.length / 3;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (let i = 0; i < count; i++) {
+    cx += formPos[i * 3];
+    cy += formPos[i * 3 + 1];
+    cz += formPos[i * 3 + 2];
+  }
+  cx /= count;
+  cy /= count;
+  cz /= count;
+
+  let meanR = 0;
+  const dirs = new Float32Array(formPos.length);
+  for (let i = 0; i < count; i++) {
+    const dx = formPos[i * 3] - cx;
+    const dy = formPos[i * 3 + 1] - cy;
+    const dz = formPos[i * 3 + 2] - cz;
+    const len = Math.hypot(dx, dy, dz) || 1e-6;
+    meanR += len;
+    dirs[i * 3] = dx / len;
+    dirs[i * 3 + 1] = dy / len;
+    dirs[i * 3 + 2] = dz / len;
+  }
+  meanR /= count;
+  // Match average radius — no inflate, so the start sphere sits calmly in frame.
+  const radius = meanR;
+
+  const sphere = new Float32Array(formPos.length);
+  for (let i = 0; i < count; i++) {
+    sphere[i * 3] = cx + dirs[i * 3] * radius;
+    sphere[i * 3 + 1] = cy + dirs[i * 3 + 1] * radius;
+    sphere[i * 3 + 2] = cz + dirs[i * 3 + 2] * radius;
+  }
+  return sphere;
 }
 
 function Model({
@@ -109,6 +193,9 @@ function Model({
   matOpacity = 0.1,
   fitTargetSize = 2.5,
   oscillatingEvolve = false,
+  morphProgress = 1,
+  introMorph = false,
+  introMorphDuration = 5.5,
   onBounds,
 }: ModelProps) {
   const { scene } = useGLTF(modelPath);
@@ -116,13 +203,25 @@ function Model({
   const groupRef = useRef<THREE.Group>(null!);
   const clock = useRef(0);
   const originalPositions = useRef<Float32Array | null>(null);
+  const spherePositions = useRef<Float32Array | null>(null);
   const originalNormals = useRef<Float32Array | null>(null);
   const meshRef = useRef<THREE.Mesh | null>(null);
   const maxDimRef = useRef<number>(1);
+  const morphRef = useRef(introMorph ? 0 : morphProgress);
+  const introMorphRef = useRef(introMorph);
+  const introDurationRef = useRef(introMorphDuration);
   const oscillatingEvolveRef = useRef(oscillatingEvolve);
   useLayoutEffect(() => {
     oscillatingEvolveRef.current = oscillatingEvolve;
   }, [oscillatingEvolve]);
+  useLayoutEffect(() => {
+    introMorphRef.current = introMorph;
+    introDurationRef.current = introMorphDuration;
+    if (introMorph) morphRef.current = 0;
+  }, [introMorph, introMorphDuration]);
+  useLayoutEffect(() => {
+    if (!introMorphRef.current) morphRef.current = morphProgress;
+  }, [morphProgress]);
 
   const matTransmission = 0.94;
   const matThickness = 3;
@@ -191,12 +290,30 @@ function Model({
 
       const geom = mesh.geometry as THREE.BufferGeometry;
       if (!geom.attributes.normal) geom.computeVertexNormals();
-      originalPositions.current = Float32Array.from(
-        geom.attributes.position.array as Float32Array,
-      );
+
+      const attr = geom.attributes.position;
+      const formPos = readFormRestPose(geom);
+      // Restore pristine form before building sphere / starting morph.
+      (attr.array as Float32Array).set(formPos);
+      attr.needsUpdate = true;
+
+      originalPositions.current = formPos;
+      spherePositions.current = buildSphereRestPose(formPos);
+      if (!geom.attributes.normal) geom.computeVertexNormals();
       originalNormals.current = Float32Array.from(
         geom.attributes.normal.array as Float32Array,
       );
+
+      // Start visually as a sphere when playing the archive intro morph.
+      if (introMorphRef.current && spherePositions.current) {
+        const sph = spherePositions.current;
+        for (let i = 0; i < attr.count; i++) {
+          attr.setXYZ(i, sph[i * 3], sph[i * 3 + 1], sph[i * 3 + 2]);
+        }
+        attr.needsUpdate = true;
+        geom.computeVertexNormals();
+        morphRef.current = 0;
+      }
     });
   }, [modelPath, scene, fitTargetSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -243,16 +360,89 @@ function Model({
       }
     }
 
-    // Float, auto-rotate, subtle tilt
-    groupRef.current.position.y = Math.sin(t * 0.6) * floatAmplitude;
-    if (autoRotate) groupRef.current.rotation.y += delta * 0.07;
-    groupRef.current.rotation.z = Math.sin(t * 0.3) * 0.015;
+    // Float, auto-rotate, subtle tilt (tilt follows float — still when amplitude is 0)
+    groupRef.current.position.y = Math.sin(t * 1) * floatAmplitude;
+    if (autoRotate) groupRef.current.rotation.y += delta * 0.16;
+    groupRef.current.rotation.z =
+      floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
 
-    // Vertex effects: fluidity wave + surface bump — one pass from original positions
+    // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in
     if (
+      originalPositions.current &&
+      spherePositions.current &&
+      meshRef.current?.geometry?.attributes?.position
+    ) {
+      // Advance intro morph inside the render loop (no React setState per frame).
+      if (introMorphRef.current && morphRef.current < 1) {
+        const dur = Math.max(0.05, introDurationRef.current);
+        morphRef.current = Math.min(1, morphRef.current + delta / dur);
+      }
+
+      const mt = Math.min(1, Math.max(0, morphRef.current));
+      // Intro: slow organic; gesture: nearly linear with a touch of ease.
+      const formBlend = introMorphRef.current
+        ? easeOrganicGrowth(mt)
+        : easeSoftMorph(mt);
+      // Keep surface detail quiet until the body has mostly emerged.
+      const detailGain =
+        mt < 0.62 ? 0 : Math.pow((mt - 0.62) / 0.38, 2);
+
+      const pos = meshRef.current.geometry.attributes.position;
+      const form = originalPositions.current;
+      const sph = spherePositions.current;
+      const norms = originalNormals.current;
+      const f = fluidity * 0.6 * detailGain;
+      const useBump = !!norms && bumpAmount > 1e-9 && detailGain > 1e-4;
+
+      for (let i = 0; i < pos.count; i++) {
+        const i3 = i * 3;
+        const sx = sph[i3];
+        const sy = sph[i3 + 1];
+        const sz = sph[i3 + 2];
+        const ox = form[i3];
+        const oy = form[i3 + 1];
+        const oz = form[i3 + 2];
+
+        let px = sx + (ox - sx) * formBlend;
+        let py = sy + (oy - sy) * formBlend;
+        let pz = sz + (oz - sz) * formBlend;
+
+        const wave =
+          f > 0
+            ? Math.sin(ox * 2.5 + t * f * 3) *
+              Math.cos(oz * 2.5 + t * f * 2) *
+              0.08 *
+              f
+            : 0;
+        py += wave;
+
+        if (useBump && norms) {
+          const nx = norms[i3];
+          const ny = norms[i3 + 1];
+          const nz = norms[i3 + 2];
+          const n1 = Math.sin(ox * density) * Math.cos(oy * density);
+          const n2 = Math.sin(oy * density) * Math.cos(oz * density);
+          const n3 = Math.sin(oz * density) * Math.cos(ox * density);
+          const raw = (n1 + n2 + n3) / 3;
+          const shaped = Math.pow(
+            Math.max(0, raw),
+            1.0 - bumpSpike * 0.98,
+          );
+          const amount = shaped * bumpAmount * 0.25 * detailGain;
+          px += nx * amount;
+          py += ny * amount;
+          pz += nz * amount;
+        }
+
+        pos.setXYZ(i, px, py, pz);
+      }
+      pos.needsUpdate = true;
+      meshRef.current.geometry.computeVertexNormals();
+    } else if (
       originalPositions.current &&
       meshRef.current?.geometry?.attributes?.position
     ) {
+      // Fallback: no sphere pose yet — original fluidity/bump path
       const pos = meshRef.current.geometry.attributes.position;
       const orig = originalPositions.current;
       const norms = originalNormals.current;
@@ -356,6 +546,16 @@ interface SceneViewerProps {
   matPresetIndex?: number;
   /** Shape-build flow: 10s oscillating evolve inside the render loop (env + subtle scale). */
   shapeBuildOscillatingEvolve?: boolean;
+  /** Vertical bob amplitude; 0 = still. */
+  floatAmplitude?: number;
+  /**
+   * Morph weight 0–1 (sphere→form). Default 1 = settled form (other pages unchanged).
+   * Prefer `introMorph` for one-shot archive entrance.
+   */
+  morphProgress?: number;
+  /** Archive/revisit: play sphere→form organic growth morph once on mount. */
+  introMorph?: boolean;
+  introMorphDuration?: number;
 }
 
 // ─── Main Scene ───────────────────────────────────────────────────────────────
@@ -378,6 +578,10 @@ export function SceneViewer({
   rectAreaLightColors,
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
+  floatAmplitude = 0.08,
+  morphProgress = 1,
+  introMorph = false,
+  introMorphDuration = 5.5,
 }: SceneViewerProps) {
   // Camera settings calibrated so fitTargetSize fills ~60-65% of viewport height
   // (whole shape visible with breathing room). Formula: cameraZ = fitTargetSize / (2*tan(fov/2) * 0.65)
@@ -521,12 +725,13 @@ export function SceneViewer({
         <Environment preset="city" environmentIntensity={1.5} />
         <Suspense fallback={<Loader />}>
           <Model
-            key={modelPath}
+            key={`${modelPath}-${introMorph ? "intro" : "static"}`}
             modelPath={modelPath}
             matColor={matColor}
             matAttenuationColor={matAttenuationColor}
             matSheenColor={matSheenColor}
             autoRotate={autoRotate}
+            floatAmplitude={floatAmplitude}
             fluidity={safeFluidity}
             evolve={safeEvolve}
             oscillatingEvolve={shapeBuildOscillatingEvolve}
@@ -535,6 +740,9 @@ export function SceneViewer({
             density={safeDensity}
             matOpacity={matOpacity}
             fitTargetSize={fitTargetSize}
+            morphProgress={morphProgress}
+            introMorph={introMorph}
+            introMorphDuration={introMorphDuration}
             onBounds={handleBounds}
           />
         </Suspense>

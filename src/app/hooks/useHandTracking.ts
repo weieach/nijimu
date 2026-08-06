@@ -164,6 +164,35 @@ export function handCenter(hand: Landmark[]): Landmark {
 }
 
 /**
+ * How open the hand is (0 ≈ fist, larger ≈ open palm).
+ * Average fingertip distance from the palm (wrist + finger bases).
+ * Used by the form-grow page: open palm → form, fist → sphere.
+ */
+export function handOpenness(hand: Landmark[]): number {
+  const palmIdx = [0, 5, 9, 13, 17];
+  const tipIdx = [4, 8, 12, 16, 20];
+  let px = 0;
+  let py = 0;
+  let pz = 0;
+  for (const i of palmIdx) {
+    px += hand[i].x;
+    py += hand[i].y;
+    pz += hand[i].z;
+  }
+  px /= palmIdx.length;
+  py /= palmIdx.length;
+  pz /= palmIdx.length;
+  let sum = 0;
+  for (const i of tipIdx) {
+    const dx = hand[i].x - px;
+    const dy = hand[i].y - py;
+    const dz = hand[i].z - pz;
+    sum += Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+  return sum / tipIdx.length;
+}
+
+/**
  * Debounced "the user actually moved" gate. Each page's first detected frame
  * becomes a baseline; the gesture only goes live after the pose changes by
  * `threshold` for `frames` consecutive frames — this is what stops the shape

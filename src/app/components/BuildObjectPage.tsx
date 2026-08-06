@@ -1,22 +1,17 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
-import { MODEL_PATHS } from "./SceneViewer";
 import {
   resetShapeBuildEvolveAnchor,
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
-import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { SANS, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 
 export function BuildObjectPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  // Fresh random model each time the user starts building a memory
-  const [sessionModelPath] = useState(
-    () => MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
-  );
   const [fadeIn, setFadeIn] = useState(false);
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [cameraPermission, setCameraPermission] = useState<"pending" | "granted" | "denied">("pending");
@@ -58,12 +53,11 @@ export function BuildObjectPage() {
 
   const handleContinue = () => {
     resetShapeBuildEvolveAnchor();
-    // Pass along all the state from previous pages plus camera permission
-    navigate("/record/shape/weight", {
+    // Camera only — form selection happens on /record/shape/grow
+    navigate("/record/shape/grow", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         cameraPermission,
-        modelPath: sessionModelPath,
       },
     });
   };

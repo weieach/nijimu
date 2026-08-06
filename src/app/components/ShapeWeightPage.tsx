@@ -35,8 +35,8 @@ export function ShapeWeightPage() {
   // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
 
-  // Get state from previous pages
-  const modelPath = location.state?.modelPath;
+  // Get state from previous pages (form chosen on /record/shape/grow)
+  const modelPath = location.state?.modelPath ?? MODEL_PATHS[0];
   const matPresetIndex: number = location.state?.matPresetIndex ?? 0;
   const [fluidity, setFluidity] = useState(location.state?.fluidity ?? 0);
   const bumpAmount = location.state?.bumpAmount ?? 0;

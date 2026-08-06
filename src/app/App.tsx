@@ -9,6 +9,7 @@ import { ClickToRecordPage } from "./components/ClickToRecordPage";
 import { NameMemoryPage } from "./components/NameMemoryPage";
 import { BuildObjectPage } from "./components/BuildObjectPage";
 import { ShapeEditorPage } from "./components/ShapeEditorPage";
+import { ShapeGrowPage } from "./components/ShapeGrowPage";
 import { ShapeWeightPage } from "./components/ShapeWeightPage";
 import { ShapeColorPage } from "./components/ShapeColorPage";
 import { ShapeTexturePage } from "./components/ShapeTexturePage";
@@ -51,6 +52,7 @@ const router = createBrowserRouter([
       { path: "/record/name", Component: NameMemoryPage },
       { path: "/record/build", Component: BuildObjectPage },
       { path: "/record/shape", Component: ShapeEditorPage },
+      { path: "/record/shape/grow", Component: ShapeGrowPage },
       { path: "/record/shape/weight", Component: ShapeWeightPage },
       { path: "/record/shape/color", Component: ShapeColorPage },
       { path: "/record/shape/texture", Component: ShapeTexturePage },

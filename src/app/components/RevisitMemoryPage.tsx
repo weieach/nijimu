@@ -91,6 +91,7 @@ export function RevisitMemoryPage() {
             }}
           >
             <SceneViewer
+              key={memory.id}
               modelPath={shape.modelPath}
               fluidity={shape.fluidity}
               evolve={shape.evolve}
@@ -98,6 +99,10 @@ export function RevisitMemoryPage() {
               autoRotate={true}
               ready={true}
               constrainedViewport
+              introMorph
+              introMorphDuration={5.8}
+              canvasBlurPx={0}
+              matOpacity={0.55}
               rectAreaLightColors={shape.colors}
               style={{
                 width: "100%",
