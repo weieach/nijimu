@@ -69,13 +69,14 @@ const router = createBrowserRouter([
 
 function GlobalControls() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);
     audio.loop = true;
     audio.volume = 0.35;
+    audio.muted = true;
     audioRef.current = audio;
 
     const attempt = audio.play();
