@@ -1095,25 +1095,6 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
             transition: "opacity 0.3s ease",
           }}
         >
-          {/* Top blur gradient */}
-          <div
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              top: 0,
-              height: 300,
-              borderRadius: 0,
-              background: "linear-gradient(to bottom, rgba(27,27,27,0.4), rgba(129,129,129,0))",
-              backdropFilter: "blur(40px)",
-              WebkitBackdropFilter: "blur(40px)",
-              maskImage: "linear-gradient(to top, transparent, black)",
-              WebkitMaskImage: "linear-gradient(to top, transparent, black)",
-              zIndex: 1,
-            }}
-          />
-
-          {/* Top texts */}
           <p
             style={{
               position: "absolute",
@@ -1122,12 +1103,11 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
               top: 30,
               fontFamily: SERIF,
               fontStyle: "normal",
-              color: "#e2e2e3",
+              color: "#9b9ba3",
               fontSize: 12,
               letterSpacing: "0.16px",
               lineHeight: 1.5,
               margin: 0,
-              textShadow: "0 2px 40px rgba(0,0,0,0.3)",
               display: "flex",
               alignItems: "center",
               gap: 12,
@@ -1136,28 +1116,6 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
           >
             <span>滲む</span>
             <span>Nijimu</span>
-          </p>
-          <p
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              top: 65,
-              fontFamily: SERIF,
-              color: "#D6DADB",
-              fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
-              letterSpacing: "0.24px",
-              lineHeight: 1.5,
-              margin: 0,
-              textShadow: "0px 4px 100px black",
-              textAlign: "center",
-              maxWidth: "90%",
-              zIndex: 2,
-            }}
-          >
-            The things you've loved don't disappear.
-            <br />
-            They dissolve into who you're becoming.{" "}
           </p>
 
           {/* Bottom blur gradient */}
