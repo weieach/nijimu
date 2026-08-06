@@ -3,16 +3,18 @@ import { useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import { PuddleScene } from "./PuddleScene";
 import { isPuddleSupported } from "../lib/puddle/simulation";
+import { isRipple2dSupported } from "../lib/puddle/ripple2d";
 
-export type ShaderVariant = "blobs" | "puddle";
+export type ShaderVariant = "blobs" | "puddle" | "ripple2d";
 
 const VARIANT_KEY = "nijimu.shaderVariant";
 
 /**
- * The home memory field, in one of two renderings:
- *  - 'blobs'  — the existing CSS blob field (BlobScene)
- *  - 'puddle' — the WebGL2 rain-puddle simulation (PuddleScene)
- * Same API as BlobScene so the two can be A/B'd in place.
+ * The home memory field, in one of three renderings:
+ *  - 'blobs'    — the existing CSS blob field (BlobScene)
+ *  - 'puddle'   — WebGL2 watercolor / iridescent puddle (A)
+ *  - 'ripple2d' — WebGL2 airy "rings of light" 2d texture (Z)
+ * Same API as BlobScene so the variants can be A/B'd in place.
  */
 export function MemoryField({
   shaderVariant = "blobs",
@@ -23,36 +25,69 @@ export function MemoryField({
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
 }) {
+  if (shaderVariant === "ripple2d" && isRipple2dSupported()) {
+    return (
+      <PuddleScene
+        texture="ripple2d"
+        onNewMemory={onNewMemory}
+        hideAnnotations={hideAnnotations}
+      />
+    );
+  }
   if (shaderVariant === "puddle" && isPuddleSupported()) {
-    return <PuddleScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
+    return (
+      <PuddleScene
+        texture="puddle"
+        onNewMemory={onNewMemory}
+        hideAnnotations={hideAnnotations}
+      />
+    );
   }
   return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
 }
 
+function readVariant(): ShaderVariant {
+  try {
+    const v = sessionStorage.getItem(VARIANT_KEY);
+    if (v === "puddle" || v === "ripple2d") return v;
+  } catch {
+    // private mode
+  }
+  return "blobs";
+}
+
+function writeVariant(next: ShaderVariant): void {
+  try {
+    sessionStorage.setItem(VARIANT_KEY, next);
+  } catch {
+    // private mode — the toggle just won't survive a refresh
+  }
+}
+
 export function HomePage() {
   const navigate = useNavigate();
-  const [variant, setVariant] = useState<ShaderVariant>(() => {
-    try {
-      return sessionStorage.getItem(VARIANT_KEY) === "puddle" ? "puddle" : "blobs";
-    } catch {
-      return "blobs";
-    }
-  });
+  const [variant, setVariant] = useState<ShaderVariant>(readVariant);
 
-  // "A" toggles between the two field renderings (home screen only).
+  // Home-only A/B shortcuts (see README):
+  //   A — blobs ↔ puddle
+  //   Z — blobs ↔ ripple2d (2d ripple texture)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "a" && e.key !== "A") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+
+      const key = e.key.toLowerCase();
+      if (key !== "a" && key !== "z") return;
+
       setVariant((v) => {
-        const next: ShaderVariant = v === "blobs" ? "puddle" : "blobs";
-        try {
-          sessionStorage.setItem(VARIANT_KEY, next);
-        } catch {
-          // private mode — the toggle just won't survive a refresh
+        let next: ShaderVariant;
+        if (key === "a") {
+          next = v === "puddle" ? "blobs" : "puddle";
+        } else {
+          next = v === "ripple2d" ? "blobs" : "ripple2d";
         }
+        writeVariant(next);
         return next;
       });
     };

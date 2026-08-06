@@ -5,18 +5,21 @@ import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { COLOR_PALETTE } from "../lib/colors";
 import { SERIF } from "../lib/theme";
 import { createPuddleSimulation, PUDDLE_TUNING } from "../lib/puddle/simulation";
+import { createRipple2dSimulation, RIPPLE2D_TUNING } from "../lib/puddle/ripple2d";
 import { BlobScene } from "./BlobScene";
 
 /*
- * PuddleScene — the 'puddle' homescreen shader variant.
+ * PuddleScene — WebGL2 homescreen field variants.
  *
- * A rain puddle on dark asphalt at night, top-down. Each memory falls in as a
- * droplet: it ripples out for a few seconds and settles, while its color
- * lingers, bleeds, and mixes with what's already in the water.
+ * texture:
+ *  - 'puddle'   — watercolor / iridescent surface (A key)
+ *  - 'ripple2d' — airy "rings of light" 2d texture (Z key)
  *
  * Same component API as BlobScene. Gallery morph / annotations are out of
- * scope for this variant — the pointer stirs the water instead.
+ * scope for these variants — the pointer stirs the water instead.
  */
+
+export type PuddleTexture = "puddle" | "ripple2d";
 
 /* ───────── timing ───────── */
 const INTRO_DELAY_MS = 700;
@@ -162,9 +165,12 @@ function ParticleText({
 export function PuddleScene({
   onNewMemory,
   hideAnnotations = false,
+  texture = "puddle",
 }: {
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
+  /** Which sim/render module to drive the canvas. */
+  texture?: PuddleTexture;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [failed, setFailed] = useState(false);
@@ -211,7 +217,11 @@ export function PuddleScene({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const sim = createPuddleSimulation(canvas, PUDDLE_TUNING);
+    const tuning = texture === "ripple2d" ? RIPPLE2D_TUNING : PUDDLE_TUNING;
+    const sim =
+      texture === "ripple2d"
+        ? createRipple2dSimulation(canvas, tuning)
+        : createPuddleSimulation(canvas, tuning);
     if (!sim) {
       setFailed(true);
       return;
@@ -267,7 +277,7 @@ export function PuddleScene({
         a.x,
         a.y,
         a.scale,
-        reducedMotion ? 0 : PUDDLE_TUNING.dropStrength * a.scale * strengthScale,
+        reducedMotion ? 0 : tuning.dropStrength * a.scale * strengthScale,
         dyeColorFor(a.colorIndex),
         a.scale * strengthScale,
       );
@@ -390,7 +400,7 @@ export function PuddleScene({
           wake();
         }
       } else {
-        sim.addDrop(x, y, 1, PUDDLE_TUNING.dropStrength, dye, 0.9);
+        sim.addDrop(x, y, 1, tuning.dropStrength, dye, 0.9);
         if (nearMemory) showCaption(nearestIdx);
         wake();
       }
@@ -406,7 +416,7 @@ export function PuddleScene({
         navigating = true;
         if (!reducedMotion) {
           // one deeper drop as the press commits, then into the flow
-          sim.addDrop(at[0], at[1], 1.3, PUDDLE_TUNING.dropStrength * 1.4, null, 0);
+          sim.addDrop(at[0], at[1], 1.3, tuning.dropStrength * 1.4, null, 0);
           wake();
         }
         timeouts.push(setTimeout(() => onNewMemoryRef.current?.(), 350));
@@ -453,7 +463,7 @@ export function PuddleScene({
       window.removeEventListener("resize", onResize);
       sim.dispose();
     };
-  }, [anchors]);
+  }, [anchors, texture]);
 
   // WebGL2 / float targets unavailable — quietly fall back to the blob field.
   if (failed) {
