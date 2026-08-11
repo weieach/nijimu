@@ -52,24 +52,41 @@ export interface PuddleTuning {
   holdDepth: number;
   /** Seconds per breathing cycle of the held cavity; each cycle sheds a ring outward. */
   holdPulsePeriod: number;
+  /** The (shorter) cycle the breathing opens at — a press flurries with rings
+      before settling into holdPulsePeriod. */
+  holdPulseStartPeriod: number;
+  /** Seconds over which that opening flurry eases into the steady rhythm. */
+  holdPulseSettle: number;
 }
 
 export const PUDDLE_TUNING: PuddleTuning = {
-  waveSpeed: 0.22,
-  waveDamping: 0.986,
+  // water, not milk: fast propagation, damping tuned so a ring dies just as
+  // it reaches ~half the screen in diameter — no ghost swells past that.
+  // (waveSpeed must stay < 0.5.) Radius and strength stay gentle: the calm
+  // comes from wide, low swells, the water-feel from how fast they travel.
+  waveSpeed: 0.32,
+  waveDamping: 0.985,
   heightRetention: 0.9992,
-  dropRadius: 0.03,
-  dropStrength: 0.9,
+  dropRadius: 0.032,
+  dropStrength: 0.85,
   dropDyeAmount: 1.0,
   dyeDecayHalfLife: 75,
   dyeDiffusion: 0.09,
-  dyeAdvection: 1.4,
-  iridescenceStrength: 0.9,
+  // dye rides the expanding rings well outward, so a memory's color travels
+  // with its ripple group instead of staying a static blot
+  dyeAdvection: 2.2,
+  iridescenceStrength: 1.0,
   filmScale: 7.0,
   grainAmount: 0.05,
   idleShimmer: 0.0035,
-  holdDepth: 0.15,
-  holdPulsePeriod: 1.3,
+  // the held well sits far deeper than a memory's crater, and breathes fast —
+  // a ring sheds from its rim every cycle, so holding reads as a live pulse
+  holdDepth: 0.44,
+  // a held press opens with a short flurry, then settles into a calm breath —
+  // enough rings to feel alive, not so many the surface rains
+  holdPulsePeriod: 1.05,
+  holdPulseStartPeriod: 0.6,
+  holdPulseSettle: 0.85,
 };
 
 /* ───────── support probe ───────── */
@@ -99,7 +116,12 @@ void main() {
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
 
-// Additive gaussian splat into whichever field is bound as u_src.
+// Additive splat into whichever field is bound as u_src.
+// u_ring = 0: plain gaussian (dye blots).
+// u_ring = 1: volume-conserving crater + raised rim (mexican hat). A real drop
+// doesn't remove water — it displaces it into a ring around the impact, and
+// that zero-mean profile is what makes the wave equation launch a crisp
+// expanding ring instead of slowly refilling a hole (the "milk" look).
 const SPLAT_FRAG = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -109,12 +131,14 @@ uniform vec2 u_point;
 uniform float u_radius;
 uniform vec4 u_value;
 uniform float u_aspect;
+uniform float u_ring;
 void main() {
   vec4 base = texture(u_src, v_uv);
   vec2 d = v_uv - u_point;
   d.x *= u_aspect;
-  float g = exp(-dot(d, d) / (u_radius * u_radius));
-  o = base + u_value * g;
+  float r2 = dot(d, d) / (u_radius * u_radius);
+  float g = exp(-r2);
+  o = base + u_value * mix(g, (1.0 - r2) * g, u_ring);
 }`;
 
 // Damped wave equation, semi-implicit (velocity first, then position),
@@ -147,8 +171,11 @@ void main() {
     vec2 pd = v_uv - u_press;
     pd.x *= u_aspect;
     float pg = exp(-dot(pd, pd) / (u_pressRadius * u_pressRadius));
-    // gentle spring toward the cavity profile, strongest under the press
-    vel += ((-u_pressAmp * pg) - hv.x) * (0.035 * pg);
+    // spring toward the cavity profile, strongest under the press. Stiffness
+    // sets the cavity's own response period (~0.35 s here); it has to be
+    // quicker than the fastest breath it is asked to follow, or the opening
+    // flurry is smoothed away before it can shed a ring.
+    vel += ((-u_pressAmp * pg) - hv.x) * (0.09 * pg);
   }
   float h = (hv.x + vel) * u_heightDamp;
   o = vec4(h, vel, 0.0, 0.0);
@@ -196,6 +223,10 @@ uniform float u_iri;
 uniform float u_filmScale;
 uniform float u_grain;
 uniform float u_shimmer;
+// 1 = apply screen-space finishing (grain + vignette) here, as usual.
+// 0 = the dive pass re-applies them after its zoom, so they stay glued to the
+//     screen instead of magnifying with the water like a scaled image.
+uniform float u_postFx;
 
 float hash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -218,7 +249,7 @@ void main() {
   );
 
   float slope = length(grad);
-  vec3 n = normalize(vec3(-grad * 24.0, 1.0));
+  vec3 n = normalize(vec3(-grad * 20.0, 1.0));
 
   vec4 dyeS = texture(u_dye, v_uv);
   float dyeAmt = max(dyeS.r, max(dyeS.g, dyeS.b));
@@ -231,37 +262,114 @@ void main() {
 
   // color only where the surface has been disturbed; kept translucent so the
   // water never goes dark — a wash, not a stain
-  float mask = min(smoothstep(0.01, 1.1, dyeAmt), 0.55);
+  float mask = min(smoothstep(0.01, 1.1, dyeAmt), 0.62);
 
   // the original home background, with a whisper of paper grain
   vec3 base = vec3(0.9294, 0.9294, 0.9333);
-  base += (hash(floor(gl_FragCoord.xy * 0.75)) - 0.5) * u_grain;
+  base += (hash(floor(gl_FragCoord.xy * 0.75)) - 0.5) * u_grain * u_postFx;
 
   // watercolor bleed: dye multiplies onto the light surface, tint lifted
   // toward white so even dark palette entries stay a soft gray-wash
-  tint = mix(tint, vec3(1.0), 0.3);
-  vec3 col = base * mix(vec3(1.0), tint, mask * 0.75);
+  tint = mix(tint, vec3(1.0), 0.24);
+  vec3 col = base * mix(vec3(1.0), tint, mask * 0.8);
 
   // thin-film iridescence on everything disturbed (dye or live ripples),
   // swept through a soft japanese-gradient palette — sakura pink, lavender,
-  // mizu blue, pale gold — rather than a full oil-slick rainbow
+  // mizu blue, pale gold — rather than a full oil-slick rainbow. The local
+  // dye hue rotates the palette's phase, so each memory's ripple group
+  // interferes in its own gradient rather than one shared rainbow.
   float iriMask = max(mask, smoothstep(0.004, 0.08, slope) * 0.5);
-  float phase = u_filmScale * (dyeAmt * 2.6 + h * 5.0 + slope * 10.0);
-  vec3 film = vec3(0.92, 0.88, 0.90) + vec3(0.08, 0.09, 0.08) * cos(phase + vec3(0.0, 1.35, 2.7));
+  float phase = u_filmScale * (dyeAmt * 2.6 + h * 5.0 + slope * 10.0)
+              + dot(tint, vec3(0.0, 2.4, 4.8)) * mask;
+  vec3 film = vec3(0.92, 0.88, 0.90) + vec3(0.13, 0.14, 0.13) * cos(phase + vec3(0.0, 1.35, 2.7));
   col *= mix(vec3(1.0), film, iriMask * u_iri);
 
-  // wave shading: crests catch light, troughs darken (flat water = exactly base)
+  // wave shading: crests catch light, troughs darken (flat water = exactly
+  // base). Where a memory's dye lives, the trough shadow deepens toward its
+  // hue instead of gray — each ripple group shades in its own color.
   vec3 lightDir = normalize(vec3(0.35, 0.55, 0.75));
   float diff = dot(n, lightDir) - lightDir.z;
-  col *= 1.0 + diff * 0.45;
+  col *= 1.0 + diff * 0.42;
+  // absolute-depth cue: slope shading saturates on steep rings, so past that
+  // point a harder press stopped reading. Water pressed well down darkens
+  // with its true depth; heaped crests pick up a little extra light. The
+  // floor sits just past the deepest memory, so only a press ever reaches it.
+  col *= 1.0 + clamp(h * 0.14, -0.42, 0.12);
+  col -= max(-diff, 0.0) * (vec3(1.0) - tint) * mask * 0.3;
   float spec = pow(max(dot(reflect(-lightDir, n), vec3(0.0, 0.0, 1.0)), 0.0), 48.0);
-  col += spec * min(slope * 9.0, 1.0) * 0.1;
+  col += spec * min(slope * 9.0, 1.0) * 0.09;
 
   // vignette, matching the original's soft rgba(0,0,0,0.08) edge
   vec2 vc = v_uv - 0.5;
-  col *= 1.0 - dot(vc, vc) * 0.16;
+  col *= 1.0 - dot(vc, vc) * 0.16 * u_postFx;
 
   o = vec4(col, 1.0);
+}`;
+
+// Dive pass (gallery descent): the composited scene, re-projected as the
+// camera pushes toward a point on the surface and through it.
+//  - dolly:  uv is magnified around u_focus — the camera moving in, never the
+//            image scaling away
+//  - defocus: 16-tap poisson disc, randomly rotated per pixel so the blur
+//            dithers instead of banding
+//  - wash:   contrast collapses toward the still-water color — the surface
+//            settling behind the viewer as depth mist, not darkness
+const DIVE_FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o;
+uniform sampler2D u_scene;
+uniform vec2 u_focus;
+uniform float u_zoom;      // fraction of uv pulled toward the focus (0..1)
+uniform float u_blur;      // defocus radius, in uv of the short edge
+uniform float u_wash;      // 0..1 contrast collapse toward the surface color
+uniform float u_grain;     // screen-space paper grain, applied after the zoom
+uniform vec2 u_aspectFix;  // short-edge uv radius -> per-axis uv
+
+const vec2 POISSON[16] = vec2[](
+  vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
+  vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
+  vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
+  vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
+  vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
+  vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
+  vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
+  vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
+);
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+void main() {
+  vec2 uv = u_focus + (v_uv - u_focus) * (1.0 - u_zoom);
+
+  vec3 c;
+  if (u_blur > 1e-5) {
+    float a = hash(gl_FragCoord.xy) * 6.2831853;
+    mat2 rot = mat2(cos(a), sin(a), -sin(a), cos(a));
+    c = vec3(0.0);
+    for (int i = 0; i < 16; i++) {
+      c += texture(u_scene, uv + rot * POISSON[i] * u_blur * u_aspectFix).rgb;
+    }
+    c /= 16.0;
+  } else {
+    c = texture(u_scene, uv).rgb;
+  }
+
+  vec3 base = vec3(0.9294, 0.9294, 0.9333);
+  c = base + (c - base) * (1.0 - u_wash);
+
+  // grain + vignette re-applied here, in final screen space — the paper
+  // texture must stay glued to the glass, not magnify with the water (the
+  // scene pass skips both while diving; see u_postFx there)
+  c += (hash(floor(gl_FragCoord.xy * 0.75)) - 0.5) * u_grain;
+  vec2 vc = v_uv - 0.5;
+  c *= 1.0 - dot(vc, vc) * 0.16;
+
+  o = vec4(c, 1.0);
 }`;
 
 /* ───────── GL plumbing ───────── */
@@ -288,11 +396,39 @@ interface Splat {
   dye: [number, number, number] | null;
   /** Multiplier on dropDyeAmount. */
   dyeScale: number;
+  /** Ms until this splat lands — the fallback jet's second ring arrives late. */
+  delayMs: number;
+  /** 0 = smooth gaussian dimple, 1 = crater + rim (see SPLAT_FRAG). Falling
+      drops ring; a dragged finger carves a smooth groove, so closely spaced
+      trail stirs merge into one wake instead of interfering as many rings. */
+  ring: number;
 }
 
 const STEP_MS = 1000 / 60;
 const MAX_SUBSTEPS = 3;
 const DECAY_CADENCE = 12; // apply dye decay every N substeps (fp16 rounding, see header)
+
+/* The Worthington jet: a hard drop throws a plume up out of the water, and it
+   falls back a beat later as a smaller drop — the paired concentric rings that
+   make rain on water instantly recognizable. */
+const JET_MIN_STRENGTH_FRACTION = 0.5; // of dropStrength; stirs never jet
+const JET_STRENGTH = 0.4;
+const JET_RADIUS = 0.6;
+const JET_DELAY_MS = 210;
+const JET_DELAY_JITTER_MS = 130;
+
+/** Per-frame camera state for the gallery descent. All values are final (pre-eased). */
+export interface PuddleDiveState {
+  /** uv point the camera pushes toward. */
+  x: number;
+  y: number;
+  /** Fraction of uv pulled toward the focus — dolly magnification. 0 = no dolly. */
+  zoom: number;
+  /** Defocus radius, in uv of the short edge. */
+  blur: number;
+  /** 0..1 contrast collapse toward the still-water color. */
+  wash: number;
+}
 
 export interface PuddleSimulation {
   /** Queue a drop. x/y in uv space (0..1, y up). strength 0 = dye only. */
@@ -304,8 +440,11 @@ export interface PuddleSimulation {
     dye: [number, number, number] | null,
     dyeScale?: number,
   ): void;
-  /** Queue a weak colorless pointer disturbance. */
-  addStir(x: number, y: number): void;
+  /**
+   * Queue a weak colorless pointer disturbance. `depth` scales it — 1 for the
+   * shallow trail mid-stroke, more where a finger enters or leaves the water.
+   */
+  addStir(x: number, y: number, depth?: number): void;
   /** Hold a sustained cavity at x/y (uv) — rings shed continuously from its rim. */
   setPress(x: number, y: number): void;
   /** Release the held cavity; the water rebounds on its own. */
@@ -314,6 +453,20 @@ export interface PuddleSimulation {
   step(dtMs: number): void;
   /** Composite the current state to the canvas. timeSec drives the idle shimmer. */
   render(timeSec: number): void;
+  /**
+   * Gallery descent camera. Non-null routes render() through an offscreen
+   * scene target + the dive pass (dolly toward the focus, defocus, wash).
+   * Never touches the height/dye state — the memories survive the descent.
+   */
+  setDive(state: PuddleDiveState | null): void;
+  /**
+   * Snapshot the height + dye fields, and put them back later. The dive uses
+   * this so nothing that happens underwater — the rings an arrow press sends,
+   * the dye those rings smear, the decay that runs while you browse — leaves a
+   * mark on the surface you came from. Restoring frees the snapshot.
+   */
+  captureState(): void;
+  restoreState(): void;
   /** Run dye-only steps synchronously (reduced-motion pre-settle). */
   runDyeSettle(steps: number): void;
   /** Match canvas backing store to its CSS size. Sim resolution stays fixed. */
@@ -422,14 +575,14 @@ export function createPuddleSimulation(
   let height: PingPong, dye: PingPong;
   try {
     vert = compile(gl, gl.VERTEX_SHADER, VERT);
-    splatPass = makePass(gl, vert, SPLAT_FRAG, ["u_src", "u_point", "u_radius", "u_value", "u_aspect"]);
+    splatPass = makePass(gl, vert, SPLAT_FRAG, ["u_src", "u_point", "u_radius", "u_value", "u_aspect", "u_ring"]);
     heightPass = makePass(gl, vert, HEIGHT_FRAG, [
       "u_height", "u_texel", "u_waveSpeed", "u_velDamp", "u_heightDamp",
       "u_press", "u_pressAmp", "u_pressRadius", "u_aspect",
     ]);
     dyePass = makePass(gl, vert, DYE_FRAG, ["u_dye", "u_height", "u_texel", "u_advect", "u_diffuse", "u_decay"]);
     renderPass = makePass(gl, vert, RENDER_FRAG, [
-      "u_height", "u_dye", "u_texel", "u_time", "u_iri", "u_filmScale", "u_grain", "u_shimmer",
+      "u_height", "u_dye", "u_texel", "u_time", "u_iri", "u_filmScale", "u_grain", "u_shimmer", "u_postFx",
     ]);
     height = makePingPong(gl, simW, simH, gl.RG16F, gl.RG);
     dye = makePingPong(gl, simW, simH, gl.RGBA16F, gl.RGBA);
@@ -451,9 +604,82 @@ export function createPuddleSimulation(
   const queue: Splat[] = [];
   let accumulator = 0;
   let substepCount = 0;
-  let simTime = 0; // seconds of simulated time, drives the press pulse
+  /* Seconds the current press has been held. It ticks on the same fixed
+     substep as the waves and restarts with each new press, so the cavity keeps
+     an even rhythm no matter when the press began or how the frame rate wanders. */
+  let pressTime = 0;
   let pressPoint: [number, number] | null = null;
   let disposed = false;
+
+  /* dive (gallery descent) resources — created lazily on first use so the
+     homescreen pays nothing until the user actually dives */
+  let diveState: PuddleDiveState | null = null;
+  let divePass: Pass | null = null;
+  let sceneTarget: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
+
+  function makeSceneTarget(w: number, h: number) {
+    const tex = gl!.createTexture()!;
+    gl!.bindTexture(gl!.TEXTURE_2D, tex);
+    gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.LINEAR);
+    gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.LINEAR);
+    gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE);
+    gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
+    gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA8, w, h, 0, gl!.RGBA, gl!.UNSIGNED_BYTE, null);
+    const fbo = gl!.createFramebuffer()!;
+    gl!.bindFramebuffer(gl!.FRAMEBUFFER, fbo);
+    gl!.framebufferTexture2D(gl!.FRAMEBUFFER, gl!.COLOR_ATTACHMENT0, gl!.TEXTURE_2D, tex, 0);
+    return { tex, fbo, w, h };
+  }
+
+  function dropSceneTarget(): void {
+    if (!sceneTarget) return;
+    gl!.deleteTexture(sceneTarget.tex);
+    gl!.deleteFramebuffer(sceneTarget.fbo);
+    sceneTarget = null;
+  }
+
+  /* pre-dive snapshot of the two fields — see captureState / restoreState */
+  let snapHeight: { tex: WebGLTexture; fbo: WebGLFramebuffer } | null = null;
+  let snapDye: { tex: WebGLTexture; fbo: WebGLFramebuffer } | null = null;
+
+  function dropSnapshot(): void {
+    for (const s of [snapHeight, snapDye]) {
+      if (!s) continue;
+      gl!.deleteTexture(s.tex);
+      gl!.deleteFramebuffer(s.fbo);
+    }
+    snapHeight = null;
+    snapDye = null;
+  }
+
+  /** Same size, same format — a straight color blit, no shader needed. */
+  function blitField(src: WebGLFramebuffer, dst: WebGLFramebuffer): void {
+    gl!.bindFramebuffer(gl!.READ_FRAMEBUFFER, src);
+    gl!.bindFramebuffer(gl!.DRAW_FRAMEBUFFER, dst);
+    gl!.blitFramebuffer(0, 0, simW, simH, 0, 0, simW, simH, gl!.COLOR_BUFFER_BIT, gl!.NEAREST);
+    gl!.bindFramebuffer(gl!.READ_FRAMEBUFFER, null);
+    gl!.bindFramebuffer(gl!.DRAW_FRAMEBUFFER, null);
+  }
+
+  /** Half the canvas backing store — the result is defocused anyway. */
+  function ensureDiveResources(): boolean {
+    if (!divePass) {
+      try {
+        divePass = makePass(gl!, vert, DIVE_FRAG, [
+          "u_scene", "u_focus", "u_zoom", "u_blur", "u_wash", "u_grain", "u_aspectFix",
+        ]);
+      } catch {
+        return false; // fall back to the un-dived composite
+      }
+    }
+    const w = Math.max(Math.round(gl!.drawingBufferWidth / 2), 1);
+    const h = Math.max(Math.round(gl!.drawingBufferHeight / 2), 1);
+    if (!sceneTarget || sceneTarget.w !== w || sceneTarget.h !== h) {
+      dropSceneTarget();
+      sceneTarget = makeSceneTarget(w, h);
+    }
+    return true;
+  }
 
   // dye decay applied every DECAY_CADENCE substeps — see header comment
   const decayFactor = Math.pow(0.5, (DECAY_CADENCE / 60) / Math.max(tuning.dyeDecayHalfLife, 1));
@@ -462,7 +688,7 @@ export function createPuddleSimulation(
     gl!.drawArrays(gl!.TRIANGLES, 0, 3);
   }
 
-  function runSplat(field: PingPong, s: Splat, value: [number, number, number, number]): void {
+  function runSplat(field: PingPong, s: Splat, value: [number, number, number, number], ring: number): void {
     gl!.useProgram(splatPass.program);
     gl!.viewport(0, 0, simW, simH);
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, field.writeFbo);
@@ -473,26 +699,29 @@ export function createPuddleSimulation(
     gl!.uniform1f(splatPass.uniforms.u_radius, s.radius);
     gl!.uniform4f(splatPass.uniforms.u_value, value[0], value[1], value[2], value[3]);
     gl!.uniform1f(splatPass.uniforms.u_aspect, aspect);
+    gl!.uniform1f(splatPass.uniforms.u_ring, ring);
     drawQuad();
     swap(field);
   }
 
-  function flushSplats(): void {
-    for (const s of queue) {
+  /** Land every splat whose delay has elapsed; keep the rest waiting. */
+  function flushSplats(dtMs: number): void {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const s = queue[i];
+      s.delayMs -= dtMs;
+      if (s.delayMs > 0) continue;
+      queue.splice(i, 1);
       if (s.strength !== 0) {
-        // depress the surface; the wave equation rings it outward
-        runSplat(height, s, [-s.strength, 0, 0, 0]);
+        runSplat(height, s, [-s.strength, 0, 0, 0], s.ring);
       }
       if (s.dye) {
         const a = tuning.dropDyeAmount * s.dyeScale;
-        runSplat(dye, { ...s, radius: s.radius * 1.25 }, [s.dye[0] * a, s.dye[1] * a, s.dye[2] * a, 0]);
+        runSplat(dye, { ...s, radius: s.radius * 1.25 }, [s.dye[0] * a, s.dye[1] * a, s.dye[2] * a, 0], 0);
       }
     }
-    queue.length = 0;
   }
 
   function heightStep(): void {
-    simTime += 1 / 60;
     gl!.useProgram(heightPass.program);
     gl!.viewport(0, 0, simW, simH);
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, height.writeFbo);
@@ -503,11 +732,22 @@ export function createPuddleSimulation(
     gl!.uniform1f(heightPass.uniforms.u_waveSpeed, tuning.waveSpeed);
     gl!.uniform1f(heightPass.uniforms.u_velDamp, tuning.waveDamping);
     gl!.uniform1f(heightPass.uniforms.u_heightDamp, tuning.heightRetention);
-    // held cavity breathes around its resting depth; each cycle sheds a ring
+    /* Held cavity breathes around its resting depth; each cycle sheds a ring.
+       The breath opens at its shallow end (-cos), so the well sinks in rather
+       than slamming, and it opens *fast* — the rate eases from the start period
+       to the steady one, so a press throws off several quick rings before
+       settling. Phase is the integral of that easing rate, which is what keeps
+       crests evenly spaced as it slows instead of skipping or doubling one. */
     let amp = 0;
     if (pressPoint) {
-      const pulse = Math.sin((simTime * Math.PI * 2) / Math.max(tuning.holdPulsePeriod, 0.1));
-      amp = tuning.holdDepth * (0.85 + 0.22 * pulse);
+      pressTime += 1 / 60;
+      const rateEnd = 1 / Math.max(tuning.holdPulsePeriod, 0.1);
+      const rateStart = 1 / Math.max(tuning.holdPulseStartPeriod, 0.1);
+      const settle = Math.max(tuning.holdPulseSettle, 0.05);
+      const cycles =
+        rateEnd * pressTime +
+        (rateStart - rateEnd) * settle * (1 - Math.exp(-pressTime / settle));
+      amp = tuning.holdDepth * (0.85 + 0.3 * -Math.cos(cycles * Math.PI * 2));
     }
     gl!.uniform2f(heightPass.uniforms.u_press, pressPoint?.[0] ?? 0, pressPoint?.[1] ?? 0);
     gl!.uniform1f(heightPass.uniforms.u_pressAmp, amp);
@@ -538,14 +778,44 @@ export function createPuddleSimulation(
 
   return {
     addDrop(x, y, radiusScale, strength, dyeColor, dyeScale = 1) {
-      queue.push({ x, y, radius: tuning.dropRadius * radiusScale, strength, dye: dyeColor, dyeScale });
+      const radius = tuning.dropRadius * radiusScale;
+      queue.push({ x, y, radius, strength, dye: dyeColor, dyeScale, delayMs: 0, ring: 1 });
+      // hard drops jet: a smaller colorless second drop lands a beat later
+      if (strength >= tuning.dropStrength * JET_MIN_STRENGTH_FRACTION) {
+        queue.push({
+          x,
+          y,
+          radius: radius * JET_RADIUS,
+          strength: strength * JET_STRENGTH,
+          dye: null,
+          dyeScale: 0,
+          delayMs: JET_DELAY_MS + Math.random() * JET_DELAY_JITTER_MS,
+          ring: 1,
+        });
+      }
     },
 
-    addStir(x, y) {
-      queue.push({ x, y, radius: tuning.dropRadius * 0.55, strength: tuning.dropStrength * 0.09, dye: null, dyeScale: 0 });
+    addStir(x, y, depth = 1) {
+      // shallow next to any memory drop — the pointer grazes the water, it
+      // doesn't fall into it. The trail is a smooth dimple (no rim) so a drag
+      // reads as one coherent wake; only the deep entry/exit presses shed a
+      // soft partial ring.
+      queue.push({
+        x,
+        y,
+        radius: tuning.dropRadius * 0.55 * (1 + (depth - 1) * 0.35),
+        strength: tuning.dropStrength * 0.08 * depth,
+        dye: null,
+        dyeScale: 0,
+        delayMs: 0,
+        ring: depth > 1 ? 0.5 : 0,
+      });
     },
 
     setPress(x, y) {
+      // only a fresh press restarts the breath — moving the pointer drags the
+      // cavity along, it doesn't begin a new one
+      if (!pressPoint) pressTime = 0;
       pressPoint = [x, y];
     },
 
@@ -555,7 +825,7 @@ export function createPuddleSimulation(
 
     step(dtMs) {
       if (disposed) return;
-      flushSplats();
+      flushSplats(dtMs);
       accumulator += Math.min(dtMs, 60);
       let n = Math.floor(accumulator / STEP_MS);
       if (n > MAX_SUBSTEPS) {
@@ -572,9 +842,17 @@ export function createPuddleSimulation(
 
     render(timeSec) {
       if (disposed) return;
+      const dived = diveState !== null && ensureDiveResources();
+
+      // composite pass — to the canvas, or to the scene target when diving
       gl.useProgram(renderPass.program);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      if (dived && sceneTarget) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.fbo);
+        gl.viewport(0, 0, sceneTarget.w, sceneTarget.h);
+      } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      }
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, height.read);
       gl.uniform1i(renderPass.uniforms.u_height, 0);
@@ -587,12 +865,58 @@ export function createPuddleSimulation(
       gl.uniform1f(renderPass.uniforms.u_filmScale, tuning.filmScale);
       gl.uniform1f(renderPass.uniforms.u_grain, tuning.grainAmount);
       gl.uniform1f(renderPass.uniforms.u_shimmer, tuning.idleShimmer);
+      // while diving, grain + vignette move to the dive pass (screen space)
+      gl.uniform1f(renderPass.uniforms.u_postFx, dived ? 0 : 1);
       drawQuad();
+
+      // dive pass — dolly toward the focus, defocus, contrast wash
+      if (dived && sceneTarget && divePass && diveState) {
+        const shortEdge = Math.min(sceneTarget.w, sceneTarget.h);
+        gl.useProgram(divePass.program);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, sceneTarget.tex);
+        gl.uniform1i(divePass.uniforms.u_scene, 0);
+        gl.uniform2f(divePass.uniforms.u_focus, diveState.x, diveState.y);
+        gl.uniform1f(divePass.uniforms.u_zoom, diveState.zoom);
+        gl.uniform1f(divePass.uniforms.u_blur, diveState.blur);
+        gl.uniform1f(divePass.uniforms.u_wash, diveState.wash);
+        gl.uniform1f(divePass.uniforms.u_grain, tuning.grainAmount);
+        gl.uniform2f(
+          divePass.uniforms.u_aspectFix,
+          shortEdge / sceneTarget.w,
+          shortEdge / sceneTarget.h,
+        );
+        drawQuad();
+      }
+    },
+
+    setDive(state) {
+      diveState = state ? { ...state } : null;
+      if (!state) dropSceneTarget(); // free the offscreen target once surfaced
+    },
+
+    captureState() {
+      if (disposed) return;
+      dropSnapshot();
+      snapHeight = makeTarget(gl, simW, simH, gl.RG16F, gl.RG);
+      snapDye = makeTarget(gl, simW, simH, gl.RGBA16F, gl.RGBA);
+      blitField(height.readFbo, snapHeight.fbo);
+      blitField(dye.readFbo, snapDye.fbo);
+    },
+
+    restoreState() {
+      if (disposed || !snapHeight || !snapDye) return;
+      // into the read buffers — the write halves are overwritten next step
+      blitField(snapHeight.fbo, height.readFbo);
+      blitField(snapDye.fbo, dye.readFbo);
+      dropSnapshot();
     },
 
     runDyeSettle(steps) {
       if (disposed) return;
-      flushSplats();
+      flushSplats(Infinity); // land everything now — this path renders a still
       for (let i = 0; i < steps; i++) dyeStep();
     },
 
@@ -610,6 +934,9 @@ export function createPuddleSimulation(
     dispose() {
       if (disposed) return;
       disposed = true;
+      dropSceneTarget();
+      dropSnapshot();
+      if (divePass) gl.deleteProgram(divePass.program);
       for (const p of [height, dye]) {
         gl.deleteTexture(p.read);
         gl.deleteTexture(p.write);

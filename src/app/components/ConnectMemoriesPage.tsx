@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
+import { PageHeader } from "./PageHeader";
 import { LIFE_EVENTS, COLORS } from "../data/memoryData";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
@@ -127,6 +128,7 @@ export function ConnectMemoriesPage() {
       className="relative w-full h-screen flex overflow-hidden"
       style={{ background: "#e0e0e0" }}
     >
+      <PageHeader layout="absolute" />
       {/* Content wrapper with fade in */}
       <div
         className="flex-1 flex h-full transition-opacity duration-1000"

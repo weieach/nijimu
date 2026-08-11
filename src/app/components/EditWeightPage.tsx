@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
+import { PageHeader } from "./PageHeader";
 import { SceneViewer } from "./SceneViewer";
 import { landmarkDistance, useHandTracking } from "../hooks/useHandTracking";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
@@ -80,6 +81,7 @@ export function EditWeightPage() {
         className="flex flex-col h-full transition-opacity duration-1000"
         style={{ opacity: fadeIn ? 1 : 0 }}
       >
+        <PageHeader layout="block" style={{ marginBottom: "clamp(24px, 4vh, 40px)" }} />
         {/* Header */}
         <p
           style={{
@@ -91,7 +93,7 @@ export function EditWeightPage() {
             color: "#7b7b87",
             textTransform: "lowercase",
             textAlign: "center",
-            marginTop: "clamp(60px, 10vh, 100px)",
+            marginTop: 0,
             marginBottom: "clamp(40px, 8vh, 80px)",
           }}
         >

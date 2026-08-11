@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import svgPaths from "../../imports/svg-ck7nn3w4ht";
+import { PageHeader } from "./PageHeader";
 
 // ⚠️ SECURITY: This key is exposed in the browser. Use a backend proxy in production.
 const ELEVEN_LABS_API_KEY = "sk_85f506ae01bae9ab1a8d844c8952aa9f150813c0e433a586";
@@ -191,24 +192,7 @@ export function RecordingProcessPage() {
       className="relative w-full h-screen overflow-hidden select-none"
       style={{ background: "#ededee" }}
     >
-      {/* Title */}
-      <p
-        style={{
-          position: "absolute",
-          left: 21,
-          top: 20,
-          fontFamily: "Georgia, serif",
-          fontStyle: "italic",
-          color: "#090606",
-          fontSize: 30,
-          letterSpacing: "0.6px",
-          lineHeight: 1.5,
-          margin: 0,
-          zIndex: 10,
-        }}
-      >
-        memento
-      </p>
+      <PageHeader layout="absolute" />
 
       {/* Single centered blob */}
       <div

@@ -1,17 +1,25 @@
 import { CSSProperties } from "react";
 import { useNavigate } from "react-router";
+import { CHROME_GRAY } from "../lib/colors";
 import { SERIF } from "../lib/theme";
 
 interface PageHeaderProps {
-  /** absolute = pinned top-center (dark full-bleed pages); block = in-flow with bottom margin (light pages) */
+  /** absolute = pinned top-center (full-bleed pages); block = in-flow with bottom margin (light pages) */
   layout?: "absolute" | "block";
-  /** light pages use #9b9ba3, dark pages use #d7d6d6 */
+  /** light pages use chrome gray; dark pages use a lighter gray on dark grounds */
   tone?: "light" | "dark";
+  /** When false, render a non-link mark (homescreen chrome). Default true. */
+  link?: boolean;
   style?: CSSProperties;
 }
 
-/** The lowercase "nijimu" wordmark link back home, previously copy-pasted on 11 pages. */
-export function PageHeader({ layout = "block", tone = "light", style }: PageHeaderProps) {
+/** Site-wide wordmark: 滲む + nijimu, matching the puddle homescreen chrome. */
+export function PageHeader({
+  layout = "block",
+  tone = "light",
+  link = true,
+  style,
+}: PageHeaderProps) {
   const navigate = useNavigate();
 
   const layoutStyle: CSSProperties =
@@ -25,13 +33,39 @@ export function PageHeader({ layout = "block", tone = "light", style }: PageHead
           zIndex: 100,
         }
       : {
-          display: "block",
           marginTop: 30,
-          marginRight: 0,
-          marginLeft: 0,
+          marginRight: "auto",
+          marginLeft: "auto",
           marginBottom: "clamp(60px, 15vh, 100px)",
-          textAlign: "center",
+          width: "fit-content",
         };
+
+  const markStyle: CSSProperties = {
+    fontFamily: SERIF,
+    fontStyle: "normal",
+    fontSize: 12,
+    letterSpacing: "0.16px",
+    lineHeight: 1.5,
+    color: tone === "dark" ? "#d7d6d6" : CHROME_GRAY,
+    whiteSpace: "nowrap",
+    textDecoration: "none",
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    ...layoutStyle,
+    ...style,
+  };
+
+  const children = (
+    <>
+      <span>滲む</span>
+      <span>nijimu</span>
+    </>
+  );
+
+  if (!link) {
+    return <p style={markStyle}>{children}</p>;
+  }
 
   return (
     <a
@@ -40,21 +74,9 @@ export function PageHeader({ layout = "block", tone = "light", style }: PageHead
         e.preventDefault();
         navigate("/");
       }}
-      style={{
-        fontFamily: SERIF,
-        fontStyle: "normal",
-        fontSize: 12,
-        lineHeight: 1.5,
-        color: tone === "dark" ? "#d7d6d6" : "#9b9ba3",
-        textTransform: "lowercase",
-        whiteSpace: "nowrap",
-        textDecoration: "none",
-        cursor: "pointer",
-        ...layoutStyle,
-        ...style,
-      }}
+      style={{ ...markStyle, cursor: "pointer" }}
     >
-      nijimu
+      {children}
     </a>
   );
 }

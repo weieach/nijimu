@@ -2,17 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // import NewMomoryIdle from "../../imports/NewMomoryIdle"; // button hidden — cursor hint replaces it
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
-import { COLOR_PALETTE } from "../lib/colors";
+import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { SERIF } from "../lib/theme";
-import { createPuddleSimulation, PUDDLE_TUNING } from "../lib/puddle/simulation";
+import { createPuddleSimulation, PUDDLE_TUNING, PuddleSimulation } from "../lib/puddle/simulation";
 import { createRipple2dSimulation, RIPPLE2D_TUNING } from "../lib/puddle/ripple2d";
+import { DIVE_TUNING, RECORD_DIVE } from "../lib/puddle/dive";
+import { offerWater } from "../lib/puddle/handoff";
+import { RIPPLE_CADENCE, introSchedule, dripGapMs } from "../lib/puddle/cadence";
 import { BlobScene } from "./BlobScene";
+import { PageHeader } from "./PageHeader";
+import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
+import { MODEL_PATHS } from "./SceneViewer";
+import { PuddleDiveGallery, DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
 
 /*
  * PuddleScene — WebGL2 homescreen field variants.
  *
  * texture:
- *  - 'puddle'   — watercolor / iridescent surface (A key)
+ *  - 'puddle'   — watercolor / iridescent surface (B key)
  *  - 'ripple2d' — airy "rings of light" 2d texture (Z key)
  *
  * Same component API as BlobScene. Gallery morph / annotations are out of
@@ -21,18 +28,84 @@ import { BlobScene } from "./BlobScene";
 
 export type PuddleTexture = "puddle" | "ripple2d";
 
-/* ───────── timing ───────── */
-const INTRO_DELAY_MS = 700;
-const INTRO_STAGGER_MS = 420;
-const DRIP_MIN_MS = 8000;
-const DRIP_MAX_MS = 15000;
-/** Ripples visually settle in ~3–5 s with the default damping; pause a bit after. */
-const SETTLE_MS = 6500;
+/* ───────── timing ─────────
+   How often memories surface — the intro reveal and the idle drip — lives in
+   lib/puddle/cadence.ts, driven by a single density dial so the surface stays
+   equally sparse however many memories the user has saved. */
+const CAPTION_LIFE_MS = RIPPLE_CADENCE.captionLifeMs;
+/** The water moves first: a memory's words surface a beat after its drop lands,
+    so they rise out of the spreading ripple rather than arriving with it. */
+const CAPTION_REVEAL_DELAY_MS = 550;
+/** Per-drop weight wobble, so no two memories land with quite the same force. */
+const INTRO_WEIGHT_JITTER = 0.15;
+/** Ripples visually settle in ~3–4 s with the default damping; pause a bit after. */
+const SETTLE_MS = 6000;
 const SETTLE_MS_REDUCED = 2000;
-/** A caption lives as long as its ripple: focus in, hold, dissolve away. */
-const CAPTION_LIFE_MS = 5200;
 /** Long-press duration that commits to creating a new memory. */
 const HOLD_TO_CREATE_MS = 2000;
+/* Progress ring drawn around the cursor while pressing — ~135px at a laptop
+   width. Sized in JS rather than a CSS clamp() because the sweep has to start
+   where the label crosses the ring, and that angle depends on the diameter. */
+const HOLD_RING_MIN = 150;
+const HOLD_RING_MAX = 200;
+const HOLD_RING_VW = 0.117;
+const holdRingSize = () =>
+  Math.min(HOLD_RING_MAX, Math.max(HOLD_RING_MIN, window.innerWidth * HOLD_RING_VW));
+const HOLD_RING_R = 15; // in the ring's 32-unit viewBox, so the stroke scales with the size
+/** A sub-pixel hairline at the rendered size — barely there, like the type. */
+const HOLD_RING_STROKE = 0.1;
+const HOLD_RING_CIRCUMFERENCE = 2 * Math.PI * HOLD_RING_R;
+/** Once closed, the ring swells and dissolves — and only then does the flow open. */
+const HOLD_RING_BLOOM_MS = 480;
+/** The hand-off to the recording screen — softening only, no camera move. */
+const CREATE_DIVE_MS = RECORD_DIVE.diveMs;
+/** The page ground the puddle is painted on. */
+const PAGE_BG = "#ededee";
+/** The hint label's offset from the cursor, and the vertical center of its line box. */
+const HINT_OFFSET_X = 14;
+const HINT_OFFSET_Y = 16;
+const HINT_FONT_SIZE = 12;
+const HINT_LINE_HEIGHT = 1.5;
+const HINT_LABEL_CENTER_Y = HINT_OFFSET_Y + (HINT_FONT_SIZE * HINT_LINE_HEIGHT) / 2;
+/** Clearance around the label where the ring is masked away, and how soft that edge is. */
+const HINT_KNOCKOUT_PAD = 5;
+const HINT_KNOCKOUT_FEATHER = 0.7; // viewBox units
+/* ───────── how deep each thing presses ─────────
+   Every depth below is a multiple of the tuning's base drop strength, and the
+   ordering is the point: a hand pressed into the water outweighs a memory
+   falling into it, which in turn outweighs a cursor merely dragging across it.
+   A click is a single drop; only a held press opens the cavity that sheds
+   many rings.
+
+     cursor trail  0.08  ·  stroke ends  0.14     (addStir, inside the sims)
+     click / tap   TAP_DEPTH
+     memory drop   MEMORY_DEPTH × the memory's own scale
+     press start   PRESS_DEPTH  (+ breathing cavity)
+     press commit  COMMIT_DEPTH */
+/** Extra depth on every memory drop, over the tuned base strength. */
+const MEMORY_DEPTH = 1.5;
+/** A click — one quiet ring, near a memory's weight. Never the press flurry. */
+const TAP_DEPTH = MEMORY_DEPTH * 0.85;
+const TAP_RADIUS_SCALE = 1.0;
+/** The hold's opening drop — deeper than a memory, shy of the old rain-maker. */
+const PRESS_DEPTH = MEMORY_DEPTH * 1.45;
+const PRESS_RADIUS_SCALE = 1.05;
+/** The single deepest event in the app: the press committing to a new memory. */
+const COMMIT_DEPTH = MEMORY_DEPTH * 3.6;
+const COMMIT_RADIUS_SCALE = 1.5;
+/** Grace period before a press opens the sustained cavity — a tap never does. */
+const PRESS_CAVITY_DELAY_MS = 220;
+
+/* A pointer stroke reads like a finger dragged through water: a shallow
+   trail, pressed a little deeper where it enters and where it lifts out. */
+/** Pixels of travel between trail stirs — near the original continuous feel. */
+export const STIR_SPACING_PX = 14;
+/** A pause this long makes the next movement a fresh stroke (finger re-enters). */
+export const STROKE_IDLE_MS = 260;
+/** No movement for this long = the finger lifted; press the end of the stroke. */
+export const STROKE_END_MS = 160;
+/** Depth of the entry/exit stirs, relative to the trail's 1 — a hint, not a drop. */
+export const STROKE_END_DEPTH = 1.8;
 
 /* ───────── memory → drop anchors ───────── */
 
@@ -69,13 +142,82 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function computeAnchors(events: MemoryEvent[], savedCount: number): DropAnchor[] {
+/* ───────── caption crowding ─────────
+   A caption is a wide, short block of text centered on its anchor, so two
+   memories can sit far enough apart to ripple independently and still collide
+   as words. After the deterministic scatter, the layout is relaxed until every
+   pair of caption boxes clears the other. */
+
+/** The uv box anchors live in — the scatter's range, and the relaxation's walls. */
+const FIELD_X: [number, number] = [0.1, 0.9];
+const FIELD_Y: [number, number] = [0.14, 0.82];
+/** Average serif advance as a fraction of the font size — a cheap width estimate. */
+const CAPTION_ADVANCE = 0.5;
+/** Clearance kept between two caption boxes, in px. */
+const CAPTION_GAP_X = 30;
+const CAPTION_GAP_Y = 26;
+const CAPTION_RELAX_PASSES = 80;
+/** Sub-pixel overlap counts as clear, so the solver settles instead of jittering. */
+const CAPTION_RELAX_EPS = 0.5;
+
+const clampTo = (v: number, [lo, hi]: [number, number]) => Math.min(Math.max(v, lo), hi);
+
+/** Half-extents of a caption's text block, in px. */
+function captionHalfSize(event: string, vw: number): { w: number; h: number } {
+  // both lines track the responsive clamps the caption markup below uses
+  const eventPx = Math.min(13, Math.max(9, vw * 0.012));
+  const yearPx = Math.min(10, Math.max(8, vw * 0.009));
+  const lines = event.split("\n");
+  const chars = lines.reduce((m, l) => Math.max(m, l.length), 0);
+  return {
+    w: (chars * eventPx * CAPTION_ADVANCE) / 2,
+    h: (lines.length * eventPx * 1.5 + yearPx * 1.5 + 3) / 2,
+  };
+}
+
+/** Push overlapping captions apart, along whichever axis needs the least travel. */
+function relaxAnchors(anchors: DropAnchor[], vw: number, vh: number): void {
+  const half = anchors.map((a) => captionHalfSize(a.event, vw));
+  for (let pass = 0; pass < CAPTION_RELAX_PASSES; pass++) {
+    let settled = true;
+    for (let i = 0; i < anchors.length; i++) {
+      for (let j = i + 1; j < anchors.length; j++) {
+        const a = anchors[i];
+        const b = anchors[j];
+        const overX = half[i].w + half[j].w + CAPTION_GAP_X - Math.abs((a.x - b.x) * vw);
+        const overY = half[i].h + half[j].h + CAPTION_GAP_Y - Math.abs((a.y - b.y) * vh);
+        if (overX <= CAPTION_RELAX_EPS || overY <= CAPTION_RELAX_EPS) continue; // already clear
+        settled = false;
+        // wide blocks almost always part vertically — the cheaper axis by far
+        if (overY <= overX) {
+          const push = overY / 2 / vh;
+          const dir = a.y >= b.y ? 1 : -1;
+          a.y = clampTo(a.y + dir * push, FIELD_Y);
+          b.y = clampTo(b.y - dir * push, FIELD_Y);
+        } else {
+          const push = overX / 2 / vw;
+          const dir = a.x >= b.x ? 1 : -1;
+          a.x = clampTo(a.x + dir * push, FIELD_X);
+          b.x = clampTo(b.x - dir * push, FIELD_X);
+        }
+      }
+    }
+    if (settled) break;
+  }
+}
+
+function computeAnchors(
+  events: MemoryEvent[],
+  savedCount: number,
+  vw: number,
+  vh: number,
+): DropAnchor[] {
   const anchors = events.map((e, i) => {
     const rand = mulberry32(hashString(`${e.id}|${e.year}|${e.event}`));
     const isNewestSaved = savedCount > 0 && i === events.length - 1;
     return {
-      x: 0.1 + rand() * 0.8,
-      y: 0.14 + rand() * 0.68,
+      x: FIELD_X[0] + rand() * (FIELD_X[1] - FIELD_X[0]),
+      y: FIELD_Y[0] + rand() * (FIELD_Y[1] - FIELD_Y[0]),
       colorIndex: e.color,
       scale: isNewestSaved ? 1.6 : 0.8 + rand() * 0.45,
       year: e.year,
@@ -83,6 +225,7 @@ function computeAnchors(events: MemoryEvent[], savedCount: number): DropAnchor[]
       introIndex: 0,
     };
   });
+  relaxAnchors(anchors, vw, vh);
   // oldest memory falls first; ties keep list order, so saved memories land last
   [...anchors]
     .map((a, i) => i)
@@ -112,52 +255,6 @@ function dyeColorFor(colorIndex: number): [number, number, number] {
   return [sr * gain, sg * gain, sb * gain];
 }
 
-/* ───────── particle text: letters drift in from scatter and focus ───────── */
-
-function ParticleText({
-  text,
-  seed,
-  animate,
-  inline = false,
-}: {
-  text: string;
-  seed: number;
-  animate: boolean;
-  /** Keep the run on the surrounding text line instead of starting its own. */
-  inline?: boolean;
-}) {
-  const rand = mulberry32(seed);
-  const Line = inline ? "span" : "div";
-  return (
-    <>
-      {text.split("\n").map((line, li) => (
-        <Line key={li} style={{ whiteSpace: "nowrap" }}>
-          {line.split("").map((ch, i) => {
-            const dx = (rand() - 0.5) * 30;
-            const dy = (rand() - 0.5) * 24;
-            const delay = rand() * 0.4;
-            return (
-              <span
-                key={i}
-                style={{
-                  display: "inline-block",
-                  animation: animate
-                    ? `puddleLetterIn 1.1s cubic-bezier(0.22, 1, 0.36, 1) ${delay}s backwards`
-                    : "none",
-                  ["--dx" as string]: `${dx}px`,
-                  ["--dy" as string]: `${dy}px`,
-                }}
-              >
-                {ch === " " ? "\u00A0" : ch}
-              </span>
-            );
-          })}
-        </Line>
-      ))}
-    </>
-  );
-}
-
 /* ═══════════════════════════════════════════════
    COMPONENT
    ═══════════════════════════════════════════════ */
@@ -166,11 +263,21 @@ export function PuddleScene({
   onNewMemory,
   hideAnnotations = false,
   texture = "puddle",
+  diveGalleryEnabled = false,
+  galleryOpen = false,
+  onGalleryExit,
 }: {
-  onNewMemory?: () => void;
+  /** Receives the uv point the descent ended on, so the next screen can surface there. */
+  onNewMemory?: (focus?: [number, number]) => void;
   hideAnnotations?: boolean;
   /** Which sim/render module to drive the canvas. */
   texture?: PuddleTexture;
+  /** Flagged 'dive' gallery variant: G on the puddle homescreen dives through the surface. */
+  diveGalleryEnabled?: boolean;
+  /** Externally-driven open/close (the homescreen G shortcut). */
+  galleryOpen?: boolean;
+  /** Fired when the gallery starts surfacing, so the G toggle stays in sync. */
+  onGalleryExit?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [failed, setFailed] = useState(false);
@@ -181,10 +288,15 @@ export function PuddleScene({
   const [captions, setCaptions] = useState<{ anchorIdx: number; key: number }[]>([]);
   const captionKey = useRef(0);
 
-  /** Cursor hint: a small dot trailing the pointer, "hold to create memory". */
+  /** Cursor hint: "hold to create memory", trailing the pointer. */
   const [hintReady, setHintReady] = useState(false);
-  /** True while a create-press is held — the hint dot becomes a progress ring. */
+  /** True while a create-press is held — a progress ring draws around the cursor. */
   const [pressing, setPressing] = useState(false);
+  /** The closed ring, swelling away after the press committed. */
+  const [ringBloom, setRingBloom] = useState(false);
+  /** The press committed: the camera is sinking into the water toward recording. */
+  const [descending, setDescending] = useState(false);
+  const [ringSize, setRingSize] = useState(holdRingSize);
   const hintRef = useRef<HTMLDivElement>(null);
   const lastPointer = useRef<[number, number] | null>(null);
   const onNewMemoryRef = useRef(onNewMemory);
@@ -194,6 +306,35 @@ export function PuddleScene({
     const t = setTimeout(() => setHintReady(true), 2000);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    const onResize = () => setRingSize(holdRingSize());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  /* Where the label's line crosses the ring, as a clockwise angle from 3
+     o'clock — an SVG circle's path starts there, so rotating by it puts the
+     start of the sweep under the first words the label tucks behind. */
+  const ringStartDeg = useMemo(() => {
+    const r = ringSize / 2;
+    const dx = Math.sqrt(Math.max(r * r - HINT_LABEL_CENTER_Y * HINT_LABEL_CENTER_Y, 1));
+    return (Math.atan2(HINT_LABEL_CENTER_Y, dx) * 180) / Math.PI;
+  }, [ringSize]);
+
+  /* The label's band, in the ring's viewBox units, so the stroke can be masked
+     out where the words sit — a knockout rather than a patch of page color,
+     which would sit as a flat chip on top of the moving water. */
+  const ringKnockout = useMemo(() => {
+    const units = 32 / ringSize;
+    const x = 16 + (HINT_OFFSET_X - HINT_KNOCKOUT_PAD) * units;
+    return {
+      x,
+      y: 16 + (HINT_OFFSET_Y - HINT_KNOCKOUT_PAD) * units,
+      width: Math.max(32 - x, 0),
+      height: (HINT_FONT_SIZE * HINT_LINE_HEIGHT + HINT_KNOCKOUT_PAD * 2) * units,
+    };
+  }, [ringSize]);
 
   // If the pointer moved before the hint faded in, start it where the cursor is.
   useEffect(() => {
@@ -208,10 +349,63 @@ export function PuddleScene({
     () => [...LIFE_EVENTS, ...savedMemories.map(toMemoryEvent)],
     [savedMemories],
   );
+  /* Viewport is read once, at mount: caption spacing depends on it, but a
+     resize must not teleport memories that have already surfaced. */
   const anchors = useMemo(
-    () => computeAnchors(events, savedMemories.length),
+    () => computeAnchors(events, savedMemories.length, window.innerWidth, window.innerHeight),
     [events, savedMemories.length],
   );
+
+  /* ─── dive gallery (flagged variant) ─── */
+  /** idle → diving → gallery → surfacing → idle. Anything non-idle mounts the overlay. */
+  const [divePhase, setDivePhase] = useState<"idle" | DivePhase>("idle");
+  const [galleryIdx, setGalleryIdx] = useState(0);
+  /** Sim-side controls, assigned inside the main effect (the sim must outlive the gallery). */
+  const diveControlsRef = useRef<{
+    open(itemIdx: number): void;
+    close(): void;
+    ripple(itemIdx: number): void;
+  } | null>(null);
+
+  /* One artifact per memory, newest (left) → oldest (right) — same content
+     and order as the morph gallery so the A/B compares presentation only.
+     Saved memories replay the shape the user sculpted; curated LIFE_EVENTS
+     get a deterministic seeded one so an artifact is stable across visits. */
+  const galleryItems = useMemo<DiveGalleryItem[]>(() => {
+    const items = events.map((e, i) => {
+      const saved = i >= LIFE_EVENTS.length ? savedMemories[i - LIFE_EVENTS.length] : undefined;
+      const rand = mulberry32(hashString(`shape|${e.id}|${e.year}|${e.event}`));
+      return {
+        eventIdx: i,
+        year: e.year,
+        event: e.event,
+        anchor: { x: anchors[i].x, y: anchors[i].y },
+        colorIndex: e.color % COLOR_PALETTE.length,
+        shape: saved
+          ? {
+              modelPath: saved.shape.modelPath,
+              fluidity: saved.shape.fluidity,
+              evolve: saved.shape.evolve,
+              bumpAmount: saved.shape.bumpAmount,
+            }
+          : {
+              modelPath: MODEL_PATHS[Math.floor(rand() * MODEL_PATHS.length)],
+              fluidity: rand() * 0.5 + 0.5,
+              evolve: rand() * 0.5 + 0.5,
+              bumpAmount: i % 2 === 0 ? rand() * 0.03 : 0.03 + rand() * 0.12,
+            },
+      };
+    });
+    return items.sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
+  }, [events, anchors, savedMemories]);
+
+  // Refs so the main sim effect (keyed by anchors/texture only) sees fresh
+  // values without re-running — re-running would rebuild the sim and erase
+  // the accumulated dye/height state.
+  const galleryItemsRef = useRef(galleryItems);
+  galleryItemsRef.current = galleryItems;
+  const onGalleryExitRef = useRef(onGalleryExit);
+  onGalleryExitRef.current = onGalleryExit;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -231,6 +425,80 @@ export function PuddleScene({
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const settleMs = reducedMotion ? SETTLE_MS_REDUCED : SETTLE_MS;
 
+    /* ─── dive gallery camera (flagged variant; puddle texture only) ───
+       The descent is a per-frame camera state fed to the sim's dive pass.
+       The height/dye FBOs are never touched — the memories survive. */
+    // only the puddle sim implements the dive pass (texture decides which factory ran)
+    const diveSim: PuddleSimulation | null =
+      texture === "ripple2d" ? null : (sim as PuddleSimulation);
+    const dive = {
+      target: 0,
+      progress: 0,
+      durMs: DIVE_TUNING.diveMs,
+      /** 0 under prefers-reduced-motion — cross-fade, no dolly. */
+      zoomScale: 1,
+      focus: [0.5, 0.5] as [number, number],
+      focusTarget: [0.5, 0.5] as [number, number],
+      /** 'gallery' surfaces again; 'create' hands the descent to the recording screen. */
+      mode: "gallery" as "gallery" | "create",
+    };
+    /** Set when the create descent lands: the water is passed on, not disposed. */
+    let handOffWater = false;
+
+    /** Diving, in the gallery, or surfacing — anything but the plain surface. */
+    const underwater = () => dive.target === 1 || dive.progress > 0;
+
+    /** Advance the descent by dtMs. Returns true while anything is in motion. */
+    const stepDive = (dtMs: number): boolean => {
+      if (!diveSim) return false;
+      let busy = false;
+      if (dive.progress !== dive.target) {
+        busy = true;
+        const delta = dtMs / Math.max(dive.durMs, 1);
+        dive.progress =
+          dive.target === 1
+            ? Math.min(1, dive.progress + delta)
+            : Math.max(0, dive.progress - delta);
+        if (dive.mode === "create") {
+          // the water has closed over the viewer — the recording screen picks
+          // both the camera and the living water up from here (see PuddleBackdrop)
+          if (dive.progress === 1) {
+            handOffWater = true;
+            onNewMemoryRef.current?.([dive.focus[0], dive.focus[1]]);
+          }
+        } else {
+          if (dive.progress === 1) setDivePhase("gallery");
+          if (dive.progress === 0) setDivePhase("idle");
+        }
+      }
+      // the focus glides toward the active memory's point (arrows move it)
+      if (dive.progress > 0) {
+        const k = 1 - Math.exp(-2.2 * (dtMs / 1000));
+        const dx = dive.focusTarget[0] - dive.focus[0];
+        const dy = dive.focusTarget[1] - dive.focus[1];
+        if (Math.abs(dx) + Math.abs(dy) > 0.0004) {
+          dive.focus[0] += dx * k;
+          dive.focus[1] += dy * k;
+          busy = true;
+        }
+        const e = DIVE_TUNING.ease(dive.progress);
+        // the recording hand-off keeps the water still and only hazes it
+        const cam = dive.mode === "create" ? RECORD_DIVE : DIVE_TUNING;
+        diveSim.setDive({
+          x: dive.focus[0],
+          y: dive.focus[1],
+          zoom: cam.zoom * e * dive.zoomScale,
+          // defocus arrives a touch after the dolly commits, so it reads as
+          // depth of field, not the image dissolving
+          blur: cam.blur * Math.pow(e, 1.5),
+          wash: cam.wash * e,
+        });
+      } else {
+        diveSim.setDive(null);
+      }
+      return busy;
+    };
+
     /* ─── loop: run while disturbed, park on a static frame once settled ─── */
     let raf = 0;
     let running = false;
@@ -240,7 +508,10 @@ export function PuddleScene({
     const tick = (now: number) => {
       const dt = now - lastTime;
       lastTime = now;
-      sim.step(dt);
+      if (stepDive(dt)) lastActivity = now;
+      // behind the blur the water keeps living, slowed — never frozen, never wiped
+      const timeScale = 1 + (DIVE_TUNING.gallerySimTimeScale - 1) * dive.progress;
+      sim.step(dt * timeScale);
       sim.render(now / 1000);
       if (now - lastActivity > settleMs) {
         running = false; // surface settled — stop stepping entirely
@@ -261,14 +532,18 @@ export function PuddleScene({
     /* ─── drops (each landed drop also raises its caption for one ripple-life) ─── */
     const timeouts: ReturnType<typeof setTimeout>[] = [];
 
-    const showCaption = (anchorIdx: number) => {
-      const key = ++captionKey.current;
-      setCaptions((cs) => [...cs.filter((c) => c.anchorIdx !== anchorIdx), { anchorIdx, key }]);
-      timeouts.push(
-        setTimeout(() => {
-          setCaptions((cs) => cs.filter((c) => c.key !== key));
-        }, CAPTION_LIFE_MS),
-      );
+    const showCaption = (anchorIdx: number, delayMs = 0) => {
+      const raise = () => {
+        const key = ++captionKey.current;
+        setCaptions((cs) => [...cs.filter((c) => c.anchorIdx !== anchorIdx), { anchorIdx, key }]);
+        timeouts.push(
+          setTimeout(() => {
+            setCaptions((cs) => cs.filter((c) => c.key !== key));
+          }, CAPTION_LIFE_MS),
+        );
+      };
+      if (delayMs > 0) timeouts.push(setTimeout(raise, delayMs));
+      else raise();
     };
 
     const dropAnchor = (idx: number, strengthScale = 1) => {
@@ -277,18 +552,22 @@ export function PuddleScene({
         a.x,
         a.y,
         a.scale,
-        reducedMotion ? 0 : tuning.dropStrength * a.scale * strengthScale,
+        reducedMotion ? 0 : tuning.dropStrength * a.scale * strengthScale * MEMORY_DEPTH,
         dyeColorFor(a.colorIndex),
         a.scale * strengthScale,
       );
-      showCaption(idx);
+      // reduced motion has no ripple to follow, so the words come straight away
+      showCaption(idx, reducedMotion ? 0 : CAPTION_REVEAL_DELAY_MS);
       wake();
     };
 
-    /* intro: every memory falls in, oldest first; newest saved lands last */
+    /* intro: every memory falls in, oldest first; newest saved lands last.
+       The schedule comes from the cadence module — it holds the surface to a
+       fixed density, so more memories mean a longer reveal, not a busier one. */
     const introOrder = anchors
       .map((_, i) => i)
       .sort((p, q) => anchors[p].introIndex - anchors[q].introIndex);
+    const intro = introSchedule(introOrder.length);
 
     if (reducedMotion) {
       // No wave animation: pre-splat all dye, bleed it, show a settled still.
@@ -298,30 +577,32 @@ export function PuddleScene({
       sim.runDyeSettle(120);
       sim.render(0);
     } else {
-      introOrder.forEach((anchorIdx, i) => {
-        timeouts.push(
-          setTimeout(
-            () => dropAnchor(anchorIdx),
-            INTRO_DELAY_MS + i * INTRO_STAGGER_MS + Math.random() * 160,
-          ),
-        );
+      introOrder.forEach((anchorIdx, order) => {
+        const weight = 1 + (Math.random() * 2 - 1) * INTRO_WEIGHT_JITTER;
+        timeouts.push(setTimeout(() => dropAnchor(anchorIdx, weight), intro.times[order]));
       });
     }
 
-    /* idle drip: re-seed a random memory so the surface never fully dies */
+    /* idle drip: re-seed a random memory so the surface never fully dies.
+       Suspended while underwater — the gallery's water is a backdrop the user
+       came from, and it is restored on the way up, so a drip there would
+       either be undone or, worse, seen arriving. */
     let dripTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastDripIdx = -1;
     const scheduleDrip = () => {
       dripTimer = setTimeout(() => {
-        if (!document.hidden && !reducedMotion && anchors.length > 0) {
-          dropAnchor(Math.floor(Math.random() * anchors.length), 0.55);
+        if (!document.hidden && !reducedMotion && anchors.length > 0 && !underwater()) {
+          // never the same memory twice running — the field should feel wandered
+          let idx = Math.floor(Math.random() * anchors.length);
+          if (idx === lastDripIdx && anchors.length > 1) idx = (idx + 1) % anchors.length;
+          lastDripIdx = idx;
+          dropAnchor(idx, 0.45 + Math.random() * 0.3);
         }
         scheduleDrip();
-      }, DRIP_MIN_MS + Math.random() * (DRIP_MAX_MS - DRIP_MIN_MS));
+      }, dripGapMs());
     };
     if (!reducedMotion) {
-      timeouts.push(
-        setTimeout(scheduleDrip, INTRO_DELAY_MS + introOrder.length * INTRO_STAGGER_MS),
-      );
+      timeouts.push(setTimeout(scheduleDrip, intro.endMs));
     }
 
     /* ─── pointer: stir (colorless) on move, drop on tap ─── */
@@ -331,6 +612,8 @@ export function PuddleScene({
     };
 
     let lastStir: [number, number] | null = null;
+    let lastStirAt = 0;
+    let strokeEndTimer: ReturnType<typeof setTimeout> | undefined;
     const onPointerMove = (e: PointerEvent) => {
       // the hint dot trails the cursor (cheap: style mutation, no re-render)
       const rect0 = canvas.getBoundingClientRect();
@@ -340,20 +623,35 @@ export function PuddleScene({
       if (hintRef.current) {
         hintRef.current.style.transform = `translate(${hx}px, ${hy}px)`;
       }
+      if (underwater()) return; // the gallery owns the pointer
       if (reducedMotion) return;
       const [x, y] = toUv(e);
       if (pressUv) {
         pressUv = [x, y]; // the held cavity follows the pointer
-        sim.setPress(x, y);
+        if (pressEngaged) sim.setPress(x, y);
       }
       if (lastStir) {
         const rect = canvas.getBoundingClientRect();
         const dx = (x - lastStir[0]) * rect.width;
         const dy = (y - lastStir[1]) * rect.height;
-        if (dx * dx + dy * dy < 100) return; // inject roughly every 10px of travel
+        if (dx * dx + dy * dy < STIR_SPACING_PX * STIR_SPACING_PX) return;
       }
+      // a finger dragged through water: pressed in where the stroke begins,
+      // a shallow trail while it travels…
+      const now = performance.now();
+      const strokeStart = now - lastStirAt > STROKE_IDLE_MS;
       lastStir = [x, y];
-      sim.addStir(x, y); // stirs the water and smears dye — never paints
+      lastStirAt = now;
+      sim.addStir(x, y, strokeStart ? STROKE_END_DEPTH : 1); // stirs, never paints
+      // …and pressed in again where it lifts out
+      if (strokeEndTimer !== undefined) clearTimeout(strokeEndTimer);
+      strokeEndTimer = setTimeout(() => {
+        strokeEndTimer = undefined;
+        if (lastStir && !underwater()) {
+          sim.addStir(lastStir[0], lastStir[1], STROKE_END_DEPTH);
+          wake();
+        }
+      }, STROKE_END_MS);
       wake();
     };
 
@@ -364,19 +662,62 @@ export function PuddleScene({
        rebound. */
     let navigating = false;
     let pressTimer: ReturnType<typeof setTimeout> | undefined;
+    let cavityTimer: ReturnType<typeof setTimeout> | undefined;
     let pressUv: [number, number] | null = null;
+    let pressEngaged = false;
+    /** The tap waiting on the pointer to lift; dropped if the press outlives a click. */
+    let pendingTap: {
+      x: number;
+      y: number;
+      dye: [number, number, number] | null;
+      anchorIdx: number;
+      downAt: number;
+    } | null = null;
 
     const endPress = () => {
       if (pressTimer !== undefined) {
         clearTimeout(pressTimer);
         pressTimer = undefined;
       }
+      if (cavityTimer !== undefined) {
+        clearTimeout(cavityTimer);
+        cavityTimer = undefined;
+      }
       pressUv = null;
+      pressEngaged = false;
       sim.clearPress();
       setPressing(false);
     };
 
+    /* A tap: the splash, and — near an anchor — that memory's dye and caption.
+       Held back until the pointer lifts, so a press that is on its way to
+       creating a memory never also wakes the memory it started on. */
+    const fireTap = (tap: {
+      x: number;
+      y: number;
+      dye: [number, number, number] | null;
+      anchorIdx: number;
+    }) => {
+      const { x, y, dye, anchorIdx } = tap;
+      if (reducedMotion) {
+        if (dye) {
+          sim.addDrop(x, y, 1, 0, dye, 0.8); // dye crossfades in, no ripple
+          showCaption(anchorIdx);
+          wake();
+        }
+        return;
+      }
+      // one quiet ring for the wave, normal footprint for the dye, so the
+      // color blot stays the size of a memory drop — the press flurry is
+      // reserved for a hold that opens the cavity
+      sim.addDrop(x, y, TAP_RADIUS_SCALE, tuning.dropStrength * TAP_DEPTH, null, 0);
+      if (dye) sim.addDrop(x, y, 1, 0, dye, 0.9);
+      if (anchorIdx >= 0) showCaption(anchorIdx);
+      wake();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
+      if (underwater()) return;
       const [x, y] = toUv(e);
       // near a memory's anchor → that memory's color; open water → clear ring
       const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
@@ -392,44 +733,142 @@ export function PuddleScene({
         }
       });
       const nearMemory = nearestIdx >= 0 && nearestD < 0.12 * 0.12;
-      const dye = nearMemory ? dyeColorFor(anchors[nearestIdx].colorIndex) : null;
-      if (reducedMotion) {
-        if (dye) {
-          sim.addDrop(x, y, 1, 0, dye, 0.8); // dye crossfades in, no ripple
-          showCaption(nearestIdx);
-          wake();
-        }
-      } else {
-        sim.addDrop(x, y, 1, tuning.dropStrength, dye, 0.9);
-        if (nearMemory) showCaption(nearestIdx);
-        wake();
-      }
+      const tap = {
+        x,
+        y,
+        dye: nearMemory ? dyeColorFor(anchors[nearestIdx].colorIndex) : null,
+        anchorIdx: nearMemory ? nearestIdx : -1,
+        downAt: performance.now(),
+      };
 
-      if (!onNewMemoryRef.current || navigating) return;
+      // no long press to wait on — the tap lands right away
+      if (!onNewMemoryRef.current || navigating) {
+        fireTap(tap);
+        return;
+      }
       endPress();
+      pendingTap = tap;
       pressUv = [x, y];
-      if (!reducedMotion) sim.setPress(x, y);
+      if (!reducedMotion) {
+        cavityTimer = setTimeout(() => {
+          cavityTimer = undefined;
+          pressEngaged = true;
+          const at = pressUv ?? [x, y];
+          // the hold begins: one firm drop, then the cavity breathes a few more
+          sim.addDrop(at[0], at[1], PRESS_RADIUS_SCALE, tuning.dropStrength * PRESS_DEPTH, null, 0);
+          sim.setPress(at[0], at[1]);
+          wake();
+        }, PRESS_CAVITY_DELAY_MS);
+      }
       setPressing(true);
       pressTimer = setTimeout(() => {
         const at = pressUv ?? [x, y];
         endPress();
+        pendingTap = null; // this press became a new memory, not a visit to an old one
         navigating = true;
+        setRingBloom(true); // the closed ring swells away before the flow opens
         if (!reducedMotion) {
           // one deeper drop as the press commits, then into the flow
-          sim.addDrop(at[0], at[1], 1.3, tuning.dropStrength * 1.4, null, 0);
+          sim.addDrop(at[0], at[1], COMMIT_RADIUS_SCALE, tuning.dropStrength * COMMIT_DEPTH, null, 0);
           wake();
         }
-        timeouts.push(setTimeout(() => onNewMemoryRef.current?.(), 350));
+        if (diveSim && !reducedMotion) {
+          /* …and the camera follows that drop down. The ring blooms as the
+             water pulls in, and the recording screen surfaces from the depth
+             this descent ends on, so the two screens read as one move. */
+          setDescending(true);
+          dive.mode = "create";
+          dive.target = 1;
+          dive.zoomScale = 1;
+          dive.durMs = CREATE_DIVE_MS;
+          dive.focus = [at[0], at[1]];
+          dive.focusTarget = [at[0], at[1]];
+          wake();
+        } else {
+          timeouts.push(
+            setTimeout(() => onNewMemoryRef.current?.([at[0], at[1]]), HOLD_RING_BLOOM_MS),
+          );
+        }
       }, HOLD_TO_CREATE_MS);
     };
 
-    const onPointerUp = () => endPress();
+    /* ─── dive gallery controls (assigned to the ref so React-side effects
+       and the overlay can drive the sim without re-running this effect) ─── */
+    const openDive = (itemIdx: number) => {
+      if (!diveSim || dive.target === 1) return;
+      const item = galleryItemsRef.current[itemIdx];
+      if (!item) return;
+      endPress();
+      // a fresh descent remembers the surface exactly as it stands, so closing
+      // the gallery can hand it back untouched
+      if (dive.progress === 0) diveSim.captureState();
+      setGalleryIdx(itemIdx);
+      setDivePhase("diving");
+      dive.target = 1;
+      dive.zoomScale = reducedMotion ? 0 : 1; // reduced motion: cross-fade, no dolly
+      dive.durMs = reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.diveMs;
+      dive.focusTarget = [item.anchor.x, item.anchor.y];
+      // fresh descent: push toward the tapped point from the start
+      if (dive.progress === 0) dive.focus = [item.anchor.x, item.anchor.y];
+      wake();
+    };
+
+    const closeDive = () => {
+      if (dive.target === 0) return;
+      setDivePhase("surfacing");
+      dive.target = 0;
+      dive.durMs = reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.surfaceMs;
+      // hand the water back its pre-dive state now, while the wash and defocus
+      // are still at full depth — the swap itself is never seen
+      diveSim?.restoreState();
+      wake();
+      onGalleryExitRef.current?.(); // keep the homescreen G toggle in sync
+    };
+
+    const rippleTo = (itemIdx: number) => {
+      const item = galleryItemsRef.current[itemIdx];
+      if (!item) return;
+      // the water reacts behind the blur, but colorlessly: browsing must not
+      // paint the puddle. The memory's color goes to the artifact's own
+      // background wash instead (see PuddleDiveGallery), and whatever the ring
+      // stirs is handed back when the gallery closes.
+      if (!reducedMotion) {
+        sim.addDrop(
+          item.anchor.x,
+          item.anchor.y,
+          1.4,
+          tuning.dropStrength * DIVE_TUNING.arrowRippleStrength,
+          null,
+          0,
+        );
+      }
+      dive.focusTarget = [item.anchor.x, item.anchor.y]; // the camera drifts with it
+      wake();
+    };
+
+    diveControlsRef.current = { open: openDive, close: closeDive, ripple: rippleTo };
+
+    /* Only a click wakes a memory: past the cavity's grace period the gesture
+       has become a press toward a new memory, and abandoning it half-drawn
+       should leave the water as it was. */
+    const onPointerUp = () => {
+      const tap = pendingTap;
+      pendingTap = null;
+      endPress();
+      if (tap && performance.now() - tap.downAt <= PRESS_CAVITY_DELAY_MS) fireTap(tap);
+    };
+
+    /** Left the canvas or the gesture was taken away — the tap is abandoned. */
+    const onPointerAbort = () => {
+      pendingTap = null;
+      endPress();
+    };
 
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointerup", onPointerUp);
-    canvas.addEventListener("pointercancel", onPointerUp);
-    canvas.addEventListener("pointerleave", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerAbort);
+    canvas.addEventListener("pointerleave", onPointerAbort);
 
     /* ─── visibility + resize ─── */
     const onVisibility = () => {
@@ -452,28 +891,44 @@ export function PuddleScene({
       cancelAnimationFrame(raf);
       running = false;
       endPress();
+      diveControlsRef.current = null;
       for (const t of timeouts) clearTimeout(t);
       if (dripTimer !== undefined) clearTimeout(dripTimer);
+      if (strokeEndTimer !== undefined) clearTimeout(strokeEndTimer);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerUp);
-      canvas.removeEventListener("pointerleave", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerAbort);
+      canvas.removeEventListener("pointerleave", onPointerAbort);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("resize", onResize);
-      sim.dispose();
+      // the ripples in flight ride the canvas across the route change
+      if (handOffWater && diveSim) offerWater({ canvas, sim: diveSim });
+      else sim.dispose();
     };
   }, [anchors, texture]);
+
+  /* homescreen G shortcut / flag changes: open on the newest memory, close on toggle-off */
+  useEffect(() => {
+    if (galleryOpen && diveGalleryEnabled) diveControlsRef.current?.open(0);
+    else diveControlsRef.current?.close(); // no-op when already surfaced
+  }, [galleryOpen, diveGalleryEnabled]);
 
   // WebGL2 / float targets unavailable — quietly fall back to the blob field.
   if (failed) {
     return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
   }
 
+  /** Underwater (a descent of either kind): the homescreen chrome dissolves away. */
+  const chromeHidden = divePhase !== "idle" || descending;
+  /** Wordmark stays once the dive gallery settles; it only leaves during transit. */
+  const wordmarkHidden =
+    descending || divePhase === "diving" || divePhase === "surfacing";
+
   return (
     <div
       className="relative w-full h-screen overflow-hidden select-none"
-      style={{ background: "#ededee" }}
+      style={{ background: PAGE_BG }}
     >
       <canvas
         ref={canvasRef}
@@ -484,7 +939,10 @@ export function PuddleScene({
       {/* ═══ MEMORY CAPTIONS — live with their ripple: focus in from particles,
              hold, dissolve as the water stills ═══ */}
       {!hideAnnotations && (
-        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 19 }}>
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ zIndex: 19, opacity: chromeHidden ? 0 : 1, transition: "opacity 0.5s ease" }}
+        >
           {captions.map((c) => {
             const a = anchors[c.anchorIdx];
             if (!a) return null;
@@ -531,9 +989,9 @@ export function PuddleScene({
         </div>
       )}
 
-      {/* ═══ CURSOR HINT — a small dot trailing the pointer, inviting a new
+      {/* ═══ CURSOR HINT — a line trailing the pointer, inviting a new
              memory; fades in like the captions, 2s after load ═══ */}
-      {onNewMemory && hintReady && (
+      {onNewMemory && hintReady && (!chromeHidden || ringBloom) && (
         <div
           ref={hintRef}
           className="absolute pointer-events-none"
@@ -545,54 +1003,89 @@ export function PuddleScene({
             animation: reducedMotionPref ? "none" : "puddleHintIn 1.1s ease backwards",
           }}
         >
+          {/* the press fills a ring around the cursor; closed = committed. It
+              sits under the label, and starts drawing where the label crosses it. */}
+          {(pressing || ringBloom) && (
+            <svg
+              width={ringSize}
+              height={ringSize}
+              viewBox="0 0 32 32"
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                display: "block",
+                transform: "translate(-50%, -50%)",
+                animation: ringBloom
+                  ? `${
+                      reducedMotionPref ? "puddleHoldRingFade" : "puddleHoldRingBloom"
+                    } ${HOLD_RING_BLOOM_MS}ms ease-out forwards`
+                  : "none",
+              }}
+            >
+              <defs>
+                <filter id="puddleHoldRingFeather">
+                  <feGaussianBlur stdDeviation={HINT_KNOCKOUT_FEATHER} />
+                </filter>
+                <mask id="puddleHoldRingMask" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
+                  <rect x="0" y="0" width="32" height="32" fill="#fff" />
+                  <rect
+                    x={ringKnockout.x}
+                    y={ringKnockout.y}
+                    width={ringKnockout.width}
+                    height={ringKnockout.height}
+                    fill="#000"
+                    filter="url(#puddleHoldRingFeather)"
+                  />
+                </mask>
+              </defs>
+              {/* the mask lives on the group: a transform on the masked element
+                  itself would rotate the knockout away from the label too */}
+              <g mask="url(#puddleHoldRingMask)">
+                <circle
+                  cx="16"
+                  cy="16"
+                  r={HOLD_RING_R}
+                  fill="none"
+                  stroke={CHROME_GRAY}
+                  strokeOpacity={0.6}
+                  strokeWidth={HOLD_RING_STROKE}
+                  strokeDasharray={HOLD_RING_CIRCUMFERENCE}
+                  strokeDashoffset={ringBloom ? 0 : HOLD_RING_CIRCUMFERENCE}
+                  transform={`rotate(${ringStartDeg} 16 16)`}
+                  style={{
+                    animation: ringBloom
+                      ? "none"
+                      : `puddleHoldRing ${HOLD_TO_CREATE_MS}ms linear forwards`,
+                  }}
+                />
+              </g>
+            </svg>
+          )}
           <div
             style={{
+              position: "relative", // above the ring, which the label tucks over
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              transform: "translate(14px, 16px)", // sit just below-right of the cursor
+              transform: `translate(${HINT_OFFSET_X}px, ${HINT_OFFSET_Y}px)`,
+              // the label is chrome: it leaves as the descent starts, the ring stays
+              opacity: chromeHidden ? 0 : 1,
+              transition: "opacity 0.35s ease",
             }}
           >
-            <div
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                backgroundColor: "#4a4a4a",
-                flexShrink: 0,
-              }}
-            />
             <span
               style={{
                 fontFamily: SERIF,
-                fontSize: "clamp(9px, 1.2vw, 13px)",
-                color: "#4a4a4a",
-                textShadow: "0 0 10px rgba(237,237,238,0.65)",
+                fontSize: HINT_FONT_SIZE,
+                lineHeight: HINT_LINE_HEIGHT,
+                letterSpacing: "0.16px",
+                color: CHROME_GRAY,
                 whiteSpace: "nowrap",
               }}
             >
-              {/* the underline sweeps across "hold" alone as the press fills */}
-              <span style={{ position: "relative", display: "inline-block" }}>
-                <ParticleText text="hold" seed={97} animate={!reducedMotionPref} inline />
-                <span
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    bottom: -2,
-                    height: 1,
-                    backgroundColor: "#4a4a4a",
-                    transformOrigin: "left center",
-                    transform: "scaleX(0)",
-                    animation: pressing
-                      ? `puddleHoldUnderline ${HOLD_TO_CREATE_MS}ms linear forwards`
-                      : "none",
-                  }}
-                />
-              </span>
               <ParticleText
-                text=" to create memory"
-                seed={181}
+                text="hold to create memory"
+                seed={97}
                 animate={!reducedMotionPref}
                 inline
               />
@@ -604,59 +1097,52 @@ export function PuddleScene({
       {/* shared keyframes for captions + cursor hint */}
       <style>{`
         @keyframes puddleCaptionLife {
-          0% { opacity: 0; }
+          /* the letters focus in out of blur on their own (ParticleText), then
+             the whole caption goes soft again as it leaves */
+          0% { opacity: 0; filter: blur(0); }
           14% { opacity: 1; }
-          68% { opacity: 1; }
-          100% { opacity: 0; }
+          68% { opacity: 1; filter: blur(0); }
+          100% { opacity: 0; filter: blur(6px); }
         }
         @keyframes puddleHintIn {
           from { opacity: 0; }
           to { opacity: 1; }
         }
-        @keyframes puddleHoldUnderline {
-          from { transform: scaleX(0); }
-          to { transform: scaleX(1); }
+        @keyframes puddleHoldRing {
+          from { stroke-dashoffset: ${HOLD_RING_CIRCUMFERENCE}; }
+          to { stroke-dashoffset: 0; }
         }
-        @keyframes puddleLetterIn {
-          from {
-            opacity: 0;
-            filter: blur(6px);
-            transform: translate(var(--dx), var(--dy)) scale(1.2);
-          }
-          55% { opacity: 1; }
-          to {
-            opacity: 1;
-            filter: blur(0);
-            transform: translate(0, 0) scale(1);
-          }
+        @keyframes puddleHoldRingBloom {
+          from { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          to { transform: translate(-50%, -50%) scale(1.8); opacity: 0; }
         }
+        @keyframes puddleHoldRingFade {
+          from { opacity: 1; }
+          to { opacity: 0; }
+        }
+        ${PARTICLE_TEXT_KEYFRAMES}
       `}</style>
+
+      {/* Wordmark stays through the settled dive gallery. */}
+      {onNewMemory && (
+        <div
+          className="pointer-events-none"
+          style={{
+            opacity: wordmarkHidden ? 0 : 1,
+            transition: "opacity 0.6s ease",
+            zIndex: 31,
+          }}
+        >
+          <PageHeader layout="absolute" link={false} />
+        </div>
+      )}
 
       {/* ═══ HOMESCREEN OVERLAY — same chrome as the blob variant ═══ */}
       {onNewMemory && (
-        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 25 }}>
-          <p
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              top: 30,
-              fontFamily: SERIF,
-              color: "#9b9ba3",
-              fontSize: 12,
-              letterSpacing: "0.16px",
-              lineHeight: 1.5,
-              margin: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              zIndex: 2,
-            }}
-          >
-            <span>滲む</span>
-            <span>Nijimu</span>
-          </p>
-
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ zIndex: 25, opacity: chromeHidden ? 0 : 1, transition: "opacity 0.6s ease" }}
+        >
           {/* Bottom blur gradient */}
           <div
             style={{
@@ -696,6 +1182,24 @@ export function PuddleScene({
           </div>
           */}
         </div>
+      )}
+
+      {/* ═══ DIVE GALLERY — flagged variant. One artifact resolving out of the
+             defocused puddle; the sim keeps living underneath, slowed. ═══ */}
+      {diveGalleryEnabled && divePhase !== "idle" && !descending && (
+        <PuddleDiveGallery
+          items={galleryItems}
+          activeIdx={galleryIdx}
+          phase={divePhase}
+          reducedMotion={reducedMotionPref}
+          onNavigate={(dir) => {
+            const next = galleryIdx + dir;
+            if (next < 0 || next >= galleryItems.length) return;
+            setGalleryIdx(next);
+            diveControlsRef.current?.ripple(next);
+          }}
+          onExit={() => diveControlsRef.current?.close()}
+        />
       )}
     </div>
   );

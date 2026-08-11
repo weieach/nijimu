@@ -1,145 +1,64 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
-import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { SANS_UI, SERIF } from "../lib/theme";
+import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
+import { SERIF, SERIF_EXPOSURE } from "../lib/theme";
+import { beginTranscription } from "../lib/transcribe";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 
-// Fallback transcript for browsers without the Web Speech API
-const MOCK_TRANSCRIPT = "I remember the day we sat by the river, watching the sun set behind the mountains. The air was crisp and I could feel the warmth of your hand in mine. It was one of those perfect moments that I wish I could hold onto forever.";
-
-const MAX_RECORDING_SECONDS = 60;
-const MOCK_RECORDING_SECONDS = 10;
+/** The record button waits for the prompt to settle before offering itself. */
+const BUTTON_IN_DELAY_MS = 1800;
 
 export function RecordingStartPage() {
   const navigate = useNavigate();
-  const [recordingDuration, setRecordingDuration] = useState(0);
   const [showBlobs, setShowBlobs] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [displayedTranscript, setDisplayedTranscript] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
-  const recordingTimerRef = useRef<number | null>(null);
-  const typingIntervalRef = useRef<number | null>(null);
+  const [buttonIn, setButtonIn] = useState(false);
+  const [captureFailed, setCaptureFailed] = useState(false);
 
-  const speech = useSpeechRecognition();
-  const useMock = !speech.isSupported;
-
-  // Latest live transcript, readable from timers/timeouts without stale closures
-  const liveTranscriptRef = useRef("");
-  useEffect(() => {
-    liveTranscriptRef.current = [speech.finalText, speech.interimText]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-  }, [speech.finalText, speech.interimText]);
-
-  const maxDuration = useMock ? MOCK_RECORDING_SECONDS : MAX_RECORDING_SECONDS;
-
-  // Auto-fade in blobs on mount
-  useEffect(() => {
-    setTimeout(() => {
-      setShowBlobs(true);
-    }, 100);
-  }, []);
-
-  // Start recording when user clicks "click to record"
-  const handleStartRecording = () => {
-    setIsRecording(true);
-    setRecordingDuration(0);
-    setDisplayedTranscript("");
-    speech.reset();
-
-    if (!useMock) {
-      speech.start();
-    }
-
-    // Start timer
-    recordingTimerRef.current = window.setInterval(() => {
-      setRecordingDuration((prev) => {
-        const newDuration = prev + 1;
-
-        if (newDuration >= maxDuration) {
-          handleStopRecording();
-        }
-
-        return newDuration;
-      });
-    }, 1000);
-
-    // Mock mode: simulate a transcript typing in, as before
-    if (useMock) {
+  const recorder = useVoiceRecorder({
+    onStop: (audio) => {
+      if (!audio) {
+        setCaptureFailed(true);
+        return;
+      }
+      // The recording keeps being transcribed while the blobs fade — the
+      // transcript screen picks it up by id when the words land.
+      const transcriptionId = beginTranscription(audio);
+      setShowBlobs(false);
       setTimeout(() => {
-        setIsTyping(true);
+        navigate("/record/transcript", { state: { transcriptionId } });
+      }, 500);
+    },
+  });
+  const isRecording = recorder.isRecording;
+  const recordingDuration = recorder.duration;
 
-        let currentIndex = 0;
-        typingIntervalRef.current = window.setInterval(() => {
-          if (currentIndex < MOCK_TRANSCRIPT.length) {
-            setDisplayedTranscript(MOCK_TRANSCRIPT.slice(0, currentIndex + 1));
-            currentIndex++;
-          } else {
-            if (typingIntervalRef.current) {
-              clearInterval(typingIntervalRef.current);
-              typingIntervalRef.current = null;
-            }
-            setIsTyping(false);
-          }
-        }, 50);
-      }, 1000);
-    }
+  const troubleMessage = captureFailed
+    ? "the recording didn't come through — try again"
+    : recorder.error === "not-allowed"
+      ? "microphone access was denied — your words can't be heard"
+      : recorder.error === "unsupported"
+        ? "this browser can't record — try chrome"
+        : recorder.error === "failed"
+          ? "the microphone couldn't be opened — try again"
+          : null;
+
+  const startRecording = () => {
+    setCaptureFailed(false);
+    void recorder.start();
   };
 
-  // Handle clicking on transcript to skip animation (mock mode only)
-  const handleTranscriptClick = () => {
-    if (useMock && isTyping) {
-      if (typingIntervalRef.current) {
-        clearInterval(typingIntervalRef.current);
-        typingIntervalRef.current = null;
-      }
-      setDisplayedTranscript(MOCK_TRANSCRIPT);
-      setIsTyping(false);
-    }
-  };
-
-  // Cleanup timer on unmount
+  // Auto-fade in blobs on mount; the record button follows a beat later
   useEffect(() => {
+    const blobs = setTimeout(() => setShowBlobs(true), 100);
+    const button = setTimeout(() => setButtonIn(true), BUTTON_IN_DELAY_MS);
     return () => {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-      }
-      if (typingIntervalRef.current) {
-        clearInterval(typingIntervalRef.current);
-      }
+      clearTimeout(blobs);
+      clearTimeout(button);
     };
   }, []);
-
-  // Stop recording
-  const handleStopRecording = () => {
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-
-    if (typingIntervalRef.current) {
-      clearInterval(typingIntervalRef.current);
-      typingIntervalRef.current = null;
-    }
-
-    if (!useMock) {
-      speech.stop();
-    }
-
-    // Fade out blobs before navigating
-    setShowBlobs(false);
-    setTimeout(() => {
-      // Read the freshest transcript — final words can still land after stop()
-      const transcript = useMock ? MOCK_TRANSCRIPT : liveTranscriptRef.current;
-      navigate("/record/transcript", {
-        state: transcript ? { transcript } : undefined,
-      });
-    }, 500);
-  };
 
   return (
     <div className="relative w-full h-screen overflow-hidden" style={{ background: "#434343" }}>
@@ -174,8 +93,10 @@ export function RecordingStartPage() {
           left: "50%",
           transform: "translateX(-50%)",
           top: 171,
-          fontFamily: SERIF,
+          fontFamily: SERIF_EXPOSURE,
           fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
+          fontWeight: 400,
+          fontSynthesis: "none",
           letterSpacing: "0px",
           color: "white",
           textTransform: "lowercase",
@@ -187,7 +108,7 @@ export function RecordingStartPage() {
       </p>
 
       {/* Instructional text (pre-recording state) or Recording indicator */}
-      {!isRecording ? (
+      {!isRecording && !troubleMessage ? (
         <div
           style={{
             position: "absolute",
@@ -227,24 +148,9 @@ export function RecordingStartPage() {
           >
             how it happened, how it leave a shape in your heart, how do you feel...
           </p>
-          {useMock && (
-            <p
-              style={{
-                fontFamily: SERIF,
-                fontSize: 11,
-                letterSpacing: "0px",
-                color: "#ebebeb",
-                opacity: 0.45,
-                lineHeight: 1.6,
-                margin: 0,
-                marginTop: 12,
-              }}
-            >
-              (live transcription needs chrome — a sample memory will be used here)
-            </p>
-          )}
         </div>
       ) : (
+        /* while recording, the line breathes with the voice being heard */
         <p
           style={{
             position: "absolute",
@@ -255,78 +161,45 @@ export function RecordingStartPage() {
             fontSize: 12,
             letterSpacing: "0px",
             color: "#ebebeb",
-            opacity: 0.7,
+            opacity: troubleMessage ? 0.7 : 0.5 + recorder.level * 0.5,
+            transition: "opacity 0.4s ease",
             whiteSpace: "nowrap",
             margin: 0,
           }}
         >
-          {speech.error === "not-allowed"
-            ? "microphone access was denied — your words can't be heard"
-            : `recording...(${recordingDuration}s)`}
+          {troubleMessage ?? `recording...(${recordingDuration}s)`}
         </p>
       )}
 
       {/* Click to record button (pre-recording) or Stop button (during recording) */}
       {!isRecording ? (
-        <PillButton
-          label="click to record"
-          onClick={handleStartRecording}
-          variant="dark"
-          style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 80 }}
-        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 80,
+            opacity: buttonIn ? 1 : 0,
+            transition: "opacity 0.9s ease",
+            pointerEvents: buttonIn ? "auto" : "none",
+          }}
+        >
+          <PillButton
+            label={captureFailed ? "record again" : "click to record"}
+            onClick={startRecording}
+            variant="dark"
+          />
+        </div>
       ) : (
         <PillButton
           label="stop"
-          onClick={handleStopRecording}
+          onClick={recorder.stop}
           variant="dark"
           icon={<svg width="14" height="14" viewBox="0 0 20 20" fill="none"> <path d={svgPathsStop.p220b0800} fill="white" /> </svg>}
           style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 80 }}
         />
       )}
 
-      {/* Transcript display: live speech (final solid, interim faded) or mock typing */}
-      <div
-        onClick={handleTranscriptClick}
-        style={{
-          position: "absolute",
-          left: "50%",
-          transform: "translateX(-50%)",
-          bottom: 150,
-          maxWidth: "80%",
-          maxHeight: "30vh",
-          overflowY: "auto",
-          textAlign: "center",
-          opacity: showBlobs ? 1 : 0,
-          transition: "opacity 1.5s ease-in-out, transform 1.5s ease-in-out",
-          cursor: isTyping ? "pointer" : "default",
-        }}
-      >
-        <p
-          style={{
-            fontFamily: SERIF,
-            fontSize: 12,
-            letterSpacing: "0px",
-            color: "#ebebeb",
-            opacity: 0.7,
-            lineHeight: 1.6,
-            margin: 0,
-          }}
-        >
-          {useMock ? (
-            displayedTranscript
-          ) : (
-            <>
-              {speech.finalText}
-              {speech.interimText && (
-                <span style={{ opacity: 0.5 }}>
-                  {speech.finalText ? " " : ""}
-                  {speech.interimText}
-                </span>
-              )}
-            </>
-          )}
-        </p>
-      </div>
     </div>
   );
 }

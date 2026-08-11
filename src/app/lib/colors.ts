@@ -2,6 +2,9 @@
 // Previously duplicated verbatim in BlobScene, MemoryScrollPage,
 // ConnectMemoriesPage, and EditColorPage.
 
+/** Muted chrome gray — homescreen wordmark, top-right icons, hold-to-create hint. */
+export const CHROME_GRAY = "#7e7e86";
+
 export interface PaletteEntry {
   id: string;
   color: string;

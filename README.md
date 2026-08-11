@@ -1,6 +1,6 @@
 # nijimu
 
-This is a code bundle for nijimu. The original project is available at https://www.figma.com/design/0I6NLCTPYAyPmB5L6D0cS2/nijimu.
+This is a code bundle for nijimu. 
 
 ## Running the code
 
@@ -12,7 +12,10 @@ Run `npm run dev` to start the development server.
 
 | Key | Action |
 |---|---|
-| **A** | Toggle blobs ↔ puddle |
-| **Z** | Toggle blobs ↔ ripple2d |
-| **← / →** | Browse gallery (blobs) |
-| **Esc** | Exit gallery (blobs) |
+| **A** | Original homescreen (blobs) |
+| **B** | Puddle homescreen |
+| **Z** | Ripple2d homescreen |
+| **G** | Open memory artifact gallery (on the puddle homescreen: the dive-through-the-water gallery) |
+| **V** | Toggle gallery variant: dive ↔ morph (A/B; dive is the default and only runs on the puddle homescreen) |
+| **← / →** | Browse gallery |
+| **Esc** | Exit gallery |

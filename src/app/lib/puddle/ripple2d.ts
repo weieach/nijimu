@@ -42,6 +42,11 @@ export interface Ripple2dTuning {
   holdDepth: number;
   /** Seconds per breathing cycle of the held cavity. */
   holdPulsePeriod: number;
+  /** The (shorter) cycle the breathing opens at — a press flurries with rings
+      before settling into holdPulsePeriod. */
+  holdPulseStartPeriod: number;
+  /** Seconds over which that opening flurry eases into the steady rhythm. */
+  holdPulseSettle: number;
 }
 
 export const RIPPLE2D_TUNING: Ripple2dTuning = {
@@ -59,8 +64,14 @@ export const RIPPLE2D_TUNING: Ripple2dTuning = {
   filmScale: 7.0,
   grainAmount: 0.05,
   idleShimmer: 0.0035,
-  holdDepth: 0.15,
-  holdPulsePeriod: 1.3,
+  // the held well sits far deeper than a memory's crater, and breathes fast —
+  // a ring sheds from its rim every cycle, so holding reads as a live pulse
+  holdDepth: 0.44,
+  // a held press opens with a short flurry, then settles into a calm breath —
+  // enough rings to feel alive, not so many the surface rains
+  holdPulsePeriod: 1.05,
+  holdPulseStartPeriod: 0.6,
+  holdPulseSettle: 0.85,
 };
 
 /* ───────── support probe ───────── */
@@ -138,8 +149,11 @@ void main() {
     vec2 pd = v_uv - u_press;
     pd.x *= u_aspect;
     float pg = exp(-dot(pd, pd) / (u_pressRadius * u_pressRadius));
-    // gentle spring toward the cavity profile, strongest under the press
-    vel += ((-u_pressAmp * pg) - hv.x) * (0.035 * pg);
+    // spring toward the cavity profile, strongest under the press. Stiffness
+    // sets the cavity's own response period (~0.35 s here); it has to be
+    // quicker than the fastest breath it is asked to follow, or the opening
+    // flurry is smoothed away before it can shed a ring.
+    vel += ((-u_pressAmp * pg) - hv.x) * (0.09 * pg);
   }
   float h = (hv.x + vel) * u_heightDamp;
   o = vec4(h, vel, 0.0, 0.0);
@@ -288,8 +302,11 @@ export interface Ripple2dSimulation {
     dye: [number, number, number] | null,
     dyeScale?: number,
   ): void;
-  /** Queue a weak colorless pointer disturbance. */
-  addStir(x: number, y: number): void;
+  /**
+   * Queue a weak colorless pointer disturbance. `depth` scales it — 1 for the
+   * shallow trail mid-stroke, more where a finger enters or leaves the water.
+   */
+  addStir(x: number, y: number, depth?: number): void;
   /** Hold a sustained cavity at x/y (uv) — rings shed continuously from its rim. */
   setPress(x: number, y: number): void;
   /** Release the held cavity; the water rebounds on its own. */
@@ -435,7 +452,10 @@ export function createRipple2dSimulation(
   const queue: Splat[] = [];
   let accumulator = 0;
   let substepCount = 0;
-  let simTime = 0; // seconds of simulated time, drives the press pulse
+  /* Seconds the current press has been held. It ticks on the same fixed
+     substep as the waves and restarts with each new press, so the cavity keeps
+     an even rhythm no matter when the press began or how the frame rate wanders. */
+  let pressTime = 0;
   let pressPoint: [number, number] | null = null;
   let disposed = false;
 
@@ -476,7 +496,6 @@ export function createRipple2dSimulation(
   }
 
   function heightStep(): void {
-    simTime += 1 / 60;
     gl!.useProgram(heightPass.program);
     gl!.viewport(0, 0, simW, simH);
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, height.writeFbo);
@@ -487,11 +506,22 @@ export function createRipple2dSimulation(
     gl!.uniform1f(heightPass.uniforms.u_waveSpeed, tuning.waveSpeed);
     gl!.uniform1f(heightPass.uniforms.u_velDamp, tuning.waveDamping);
     gl!.uniform1f(heightPass.uniforms.u_heightDamp, tuning.heightRetention);
-    // held cavity breathes around its resting depth; each cycle sheds a ring
+    /* Held cavity breathes around its resting depth; each cycle sheds a ring.
+       The breath opens at its shallow end (-cos), so the well sinks in rather
+       than slamming, and it opens *fast* — the rate eases from the start period
+       to the steady one, so a press throws off several quick rings before
+       settling. Phase is the integral of that easing rate, which is what keeps
+       crests evenly spaced as it slows instead of skipping or doubling one. */
     let amp = 0;
     if (pressPoint) {
-      const pulse = Math.sin((simTime * Math.PI * 2) / Math.max(tuning.holdPulsePeriod, 0.1));
-      amp = tuning.holdDepth * (0.85 + 0.22 * pulse);
+      pressTime += 1 / 60;
+      const rateEnd = 1 / Math.max(tuning.holdPulsePeriod, 0.1);
+      const rateStart = 1 / Math.max(tuning.holdPulseStartPeriod, 0.1);
+      const settle = Math.max(tuning.holdPulseSettle, 0.05);
+      const cycles =
+        rateEnd * pressTime +
+        (rateStart - rateEnd) * settle * (1 - Math.exp(-pressTime / settle));
+      amp = tuning.holdDepth * (0.85 + 0.3 * -Math.cos(cycles * Math.PI * 2));
     }
     gl!.uniform2f(heightPass.uniforms.u_press, pressPoint?.[0] ?? 0, pressPoint?.[1] ?? 0);
     gl!.uniform1f(heightPass.uniforms.u_pressAmp, amp);
@@ -525,11 +555,21 @@ export function createRipple2dSimulation(
       queue.push({ x, y, radius: tuning.dropRadius * radiusScale, strength, dye: dyeColor, dyeScale });
     },
 
-    addStir(x, y) {
-      queue.push({ x, y, radius: tuning.dropRadius * 0.55, strength: tuning.dropStrength * 0.09, dye: null, dyeScale: 0 });
+    addStir(x, y, depth = 1) {
+      queue.push({
+        x,
+        y,
+        radius: tuning.dropRadius * 0.55 * (1 + (depth - 1) * 0.35),
+        strength: tuning.dropStrength * 0.08 * depth,
+        dye: null,
+        dyeScale: 0,
+      });
     },
 
     setPress(x, y) {
+      // only a fresh press restarts the breath — moving the pointer drags the
+      // cavity along, it doesn't begin a new one
+      if (!pressPoint) pressTime = 0;
       pressPoint = [x, y];
     },
 

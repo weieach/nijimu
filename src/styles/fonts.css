@@ -1,3 +1,22 @@
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;1,400&display=swap');
 @import url('https://fonts.cdnfonts.com/css/genryumin2-tw');
 @import url('https://fonts.cdnfonts.com/css/neue-haas-grotesk-display-pro');
+
+/* Exposure optical grades — static Regular cuts (not a weight axis).
+   -20 → "Exposure Trial" (SERIF_EXPOSURE); +10 → "Exposure Trial Plus" (SERIF_DISPLAY).
+   Loaded globally so Profile and other pages don't fall back to Playfair. */
+@font-face {
+  font-family: "Exposure Trial";
+  src: url("../assets/fonts/ExposureTrial-20.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Exposure Trial Plus";
+  src: url("../assets/fonts/ExposureTrial+10.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

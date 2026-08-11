@@ -536,6 +536,12 @@ interface SceneViewerProps {
   ready?: boolean;
   /** Tighter framing for small fixed viewports (cards, connect flow, thumbnails). */
   constrainedViewport?: boolean;
+  /** Camera distance as a multiple of the model's bounding sphere — lower
+      fills more of the frame. Overrides the constrainedViewport default. */
+  frameMargin?: number;
+  /** "demand" renders only when something changes; for artifacts that are
+      parked on screen (gallery neighbours) it costs almost nothing. */
+  frameloop?: "always" | "demand";
   /** Legacy: colour passed as raw hex for the glass tint + rect area lights */
   rectAreaLightColors?: {
     color1?: string;
@@ -575,6 +581,8 @@ export function SceneViewer({
   density = 200,
   ready: readyProp,
   constrainedViewport = false,
+  frameMargin,
+  frameloop = "always",
   rectAreaLightColors,
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
@@ -636,7 +644,7 @@ export function SceneViewer({
     const r = Math.max(0.001, sphere.radius);
     // Fit to vertical FOV with a little breathing room.
     const fovRad = (cameraFov * Math.PI) / 180;
-    const margin = constrainedViewport ? 1.35 : 1.25;
+    const margin = frameMargin ?? (constrainedViewport ? 1.35 : 1.25);
     const z = (r / Math.sin(fovRad / 2)) * margin;
     const near = Math.max(0.01, z - r * 2.5);
     const far = z + r * 6;
@@ -674,6 +682,7 @@ export function SceneViewer({
   return (
     <div className={className} style={containerStyle}>
       <Canvas
+        frameloop={frameloop}
         camera={{
           position: [0, 0, fitCam?.z ?? cameraZ],
           fov: cameraFov,

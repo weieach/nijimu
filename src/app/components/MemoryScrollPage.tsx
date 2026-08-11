@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { PageHeader } from "./PageHeader";
 import { LIFE_EVENTS } from "../data/memoryData";
 import { SERIF, SANS } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
@@ -383,75 +384,20 @@ export function MemoryScrollPage() {
         boxSizing: "border-box",
       }}
     >
-      {/* Header */}
       <header
         style={{
           position: "sticky",
           top: 0,
           zIndex: 20,
-          height: 61,
+          height: 72,
           background: "#f1f1f0",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: "0 24px",
           boxSizing: "border-box",
         }}
       >
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            maxWidth: 1680,
-            height: 40,
-            border: "0.6px solid #7e7e7e",
-            boxSizing: "border-box",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <a
-            href={import.meta.env.BASE_URL}
-            onClick={(e) => {
-              e.preventDefault();
-              navigate("/");
-            }}
-            style={{
-              fontFamily: SERIF,
-              fontStyle: "italic",
-              fontSize: 17,
-              color: "#000",
-              opacity: 0.5,
-              textDecoration: "none",
-              cursor: "pointer",
-            }}
-          >
-            nijimu{" "}
-            <span style={{ fontStyle: "normal" }}>滲む</span>
-          </a>
-          <button
-            type="button"
-            onClick={() => navigate("/profile")}
-            style={{
-              position: "absolute",
-              right: 16,
-              top: "50%",
-              transform: "translateY(-50%)",
-              margin: 0,
-              padding: 0,
-              border: "none",
-              background: "transparent",
-              fontFamily: SERIF,
-              fontSize: 17,
-              color: "#000",
-              opacity: 0.5,
-              cursor: "pointer",
-            }}
-          >
-            profile
-          </button>
-        </div>
+        <PageHeader layout="block" style={{ marginTop: 0, marginBottom: 0 }} />
       </header>
 
       {/* Artifact grid */}

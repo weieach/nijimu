@@ -1,9 +1,11 @@
-import { createBrowserRouter, Outlet, RouterProvider, useNavigate } from "react-router";
+import { createBrowserRouter, Outlet, RouterProvider, useLocation, useNavigate } from "react-router";
 import { useEffect, useRef, useState } from "react";
-import { HomePage } from "./components/HomePage";
-import { RecordingStartPage } from "./components/RecordingStartPage";
+import { CHROME_GRAY } from "./lib/colors";
+import { isPuddleSupported } from "./lib/puddle/simulation";
+import { HomePage, readVariant } from "./components/HomePage";
+import { RecordingStartRoute } from "./components/PuddleRecordingPage";
 import { RecordingProcessPage } from "./components/RecordingProcessPage";
-import { TranscriptPage } from "./components/TranscriptPage";
+import { TranscriptRoute } from "./components/PuddleTranscriptPage";
 import { OrbPage } from "./components/OrbPage";
 import { ClickToRecordPage } from "./components/ClickToRecordPage";
 import { NameMemoryPage } from "./components/NameMemoryPage";
@@ -46,9 +48,9 @@ const router = createBrowserRouter([
     children: [
       { path: "/", Component: HomePage },
       { path: "/record/click", Component: ClickToRecordPage },
-      { path: "/record/start", Component: RecordingStartPage },
+      { path: "/record/start", Component: RecordingStartRoute },
       { path: "/record/process", Component: RecordingProcessPage },
-      { path: "/record/transcript", Component: TranscriptPage },
+      { path: "/record/transcript", Component: TranscriptRoute },
       { path: "/record/name", Component: NameMemoryPage },
       { path: "/record/build", Component: BuildObjectPage },
       { path: "/record/shape", Component: ShapeEditorPage },
@@ -73,6 +75,12 @@ function GlobalControls() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(true);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  /** Light chrome (muted gray, no pill) on the light-ground pages. Only the
+      legacy dark blob recording screen keeps the frosted dark pills. */
+  const lightChrome =
+    pathname !== "/record/start" ||
+    (readVariant() === "puddle" && isPuddleSupported());
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);
@@ -104,38 +112,55 @@ function GlobalControls() {
     if (audioRef.current) audioRef.current.muted = muted;
   }, [muted]);
 
+  const iconButtonStyle = lightChrome
+    ? {
+        position: "fixed" as const,
+        zIndex: 99999,
+        width: 36,
+        height: 36,
+        borderRadius: "50%",
+        border: "none",
+        background: "transparent",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 0,
+      }
+    : {
+        position: "fixed" as const,
+        zIndex: 99999,
+        width: 36,
+        height: 36,
+        borderRadius: "50%",
+        border: "1px solid rgba(255,255,255,0.28)",
+        background: "rgba(0,0,0,0.18)",
+        backdropFilter: "blur(8px)",
+        WebkitBackdropFilter: "blur(8px)",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "background 0.2s ease, border-color 0.2s ease",
+        padding: 0,
+      };
+
+  const iconStroke = lightChrome ? CHROME_GRAY : "rgba(255,255,255,0.75)";
+
   return (
     <>
       {/* Profile button */}
       <button
         onClick={() => navigate("/profile")}
         title="Profile"
-        style={{
-          position: "fixed",
-          top: 22,
-          right: 68,
-          zIndex: 99999,
-          width: 36,
-          height: 36,
-          borderRadius: "50%",
-          border: "1px solid rgba(255,255,255,0.28)",
-          background: "rgba(0,0,0,0.18)",
-          backdropFilter: "blur(8px)",
-          WebkitBackdropFilter: "blur(8px)",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          transition: "background 0.2s ease, border-color 0.2s ease",
-          padding: 0,
-        }}
+        style={{ ...iconButtonStyle, top: 22, right: 68 }}
       >
         <svg
           width="16"
           height="16"
           viewBox="0 0 24 24"
           fill="none"
-          stroke="rgba(255,255,255,0.75)"
+          stroke={iconStroke}
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -149,36 +174,18 @@ function GlobalControls() {
       <button
         onClick={() => setMuted((m) => !m)}
         title={muted ? "Unmute" : "Mute"}
-        style={{
-          position: "fixed",
-          top: 22,
-          right: 22,
-          zIndex: 99999,
-          width: 36,
-          height: 36,
-          borderRadius: "50%",
-          border: "1px solid rgba(255,255,255,0.28)",
-          background: "rgba(0,0,0,0.18)",
-          backdropFilter: "blur(8px)",
-          WebkitBackdropFilter: "blur(8px)",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          transition: "background 0.2s ease, border-color 0.2s ease",
-          padding: 0,
-        }}
+        style={{ ...iconButtonStyle, top: 22, right: 22 }}
       >
         {muted ? (
           /* Muted — speaker with X */
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
             <line x1="23" y1="9" x2="17" y2="15" />
             <line x1="17" y1="9" x2="23" y2="15" />
           </svg>
         ) : (
           /* Unmuted — speaker with waves */
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
             <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
             <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />

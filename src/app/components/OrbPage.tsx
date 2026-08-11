@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import { PageHeader } from "./PageHeader";
 
 // Thumb tip = 4, Index finger tip = 8
 const THUMB_TIP = 4;
@@ -262,24 +263,7 @@ export function OrbPage() {
       className="relative w-full h-screen overflow-hidden select-none"
       style={{ background: "#ededee" }}
     >
-      {/* Title */}
-      <p
-        style={{
-          position: "absolute",
-          left: 21,
-          top: 20,
-          fontFamily: "Georgia, serif",
-          fontStyle: "italic",
-          color: "#090606",
-          fontSize: 30,
-          letterSpacing: "0.6px",
-          lineHeight: 1.5,
-          margin: 0,
-          zIndex: 10,
-        }}
-      >
-        memento
-      </p>
+      <PageHeader layout="absolute" />
 
       {/* Hidden webcam video */}
       <video ref={videoRef} style={{ display: "none" }} muted playsInline />

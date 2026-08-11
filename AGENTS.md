@@ -32,7 +32,7 @@ refactored into a real codebase.
 | Routing | **react-router 7** | `createBrowserRouter`, one layout route |
 | 3D | **three** + **@react-three/fiber** + **@react-three/drei** | The memory "objects" |
 | Hand gestures | **@mediapipe/tasks-vision** | Pinch/hand-distance controls in shape editors |
-| Voice→text | **Web Speech API** (browser-native) | No dependency; Chrome-only, graceful fallback |
+| Voice→text | **OpenAI speech-to-text** via `/api/transcribe` | Audio recorded with `MediaRecorder`, transcribed server-side; key never reaches the browser |
 | AI polish | **@anthropic-ai/sdk** (Claude) | Server-side only; key never reaches the browser |
 | Styling | Mostly **inline `style={}`** objects; Tailwind 4 is present but lightly used | |
 | Package manager | **pnpm** (pinned in `packageManager`) | `npm install` fails on React 19 peer deps — always use pnpm |
@@ -75,9 +75,12 @@ nijimu/
 │   └── imports/                    # Figma-export raw SVG/asset files (9 kept, still referenced)
 ├── server/
 │   ├── polish.mjs                  # THE AI polish handler (pure JS function; single source of truth)
-│   └── vite-plugin-polish.mjs      # mounts POST /api/polish on the Vite DEV server
+│   ├── transcribe.mjs              # THE speech-to-text handler (same shape as polish.mjs)
+│   ├── vite-plugin-polish.mjs      # mounts POST /api/polish on the Vite DEV server
+│   └── vite-plugin-transcribe.mjs  # mounts POST /api/transcribe on the Vite DEV server
 ├── api/
-│   └── polish.mjs                  # Vercel serverless function — wraps server/polish.mjs for PROD
+│   ├── polish.mjs                  # Vercel serverless function — wraps server/polish.mjs for PROD
+│   └── transcribe.mjs              # Vercel serverless function — wraps server/transcribe.mjs
 ├── docs/superpowers/               # design specs + deploy/refactor plans (context, not code)
 ├── scripts/copy-404.mjs            # GH-Pages SPA fallback (leftover, harmless on Vercel)
 ├── vercel.json                     # SPA rewrites (everything except /api → index.html)
@@ -97,7 +100,7 @@ that renders `GlobalControls` (background music + profile button) once, so
 **A. Create a memory** (the main flow):
 ```
 /  (home blob field)
- └ /record/start      RecordingStartPage — live voice→text (or mock fallback)
+ └ /record/start      RecordingStartPage — records the voice, sends it to /api/transcribe
    └ /record/transcript  TranscriptPage — shows transcript; optional AI "polish" → side-by-side choice; highlight words
      └ /record/name    NameMemoryPage — title + year
        └ /record/build BuildObjectPage — camera permission prompt; picks a random 3D model
@@ -132,6 +135,7 @@ A `location.state` → context/store refactor is noted as future work but not do
 | `colors.ts` | `COLOR_PALETTE` (the 9 blob tints w/ light variants) + `MEMORY_COLORS`. Single source — was duplicated in 4 files. |
 | `memoryStore.ts` | **localStorage persistence.** `loadMemories()`, `saveMemory()`, `toMemoryEvent()`. Key: `nijimu.memories.v1`. |
 | `polish.ts` | Browser-side `requestPolish(transcript)` — POSTs to `/api/polish`, never throws (returns `{polished, error}`). |
+| `transcribe.ts` | Browser-side `requestTranscription(audio)` — POSTs the recording to `/api/transcribe`, never throws. Also holds the **recording→transcript hand-off**: `beginTranscription(audio)` starts the request and returns an id, `getTranscription(id)` picks it up on the next screen. |
 
 Shared components (in `components/`): **`PillButton`** (the rounded button used
 everywhere — variants `light`/`dark`/`outline`) and **`PageHeader`** (the
@@ -143,13 +147,41 @@ lowercase "nijimu" wordmark link). Prefer these over hand-rolling.
 
 | Hook | Purpose |
 |---|---|
-| `useSpeechRecognition.ts` | Wraps the Web Speech API. Returns `{ isSupported, finalText, interimText, isListening, error, start, stop, reset }`. Auto-restarts on silence. Chrome-only; callers fall back to a mock transcript when `!isSupported`. |
+| `useVoiceRecorder.ts` | The recording session: `MediaRecorder` capture (60s cap), microphone errors, and a loudness meter. Hands the finished `Blob` to `onStop`; exposes `level` + `voicePulse` so the puddle can ripple with the voice. |
 | `useHandTracking.ts` | Owns the MediaPipe camera + HandLandmarker **lifecycle** (init, stream, detect loop, teardown, GPU→CPU fallback). Hands raw landmarks back via `onLandmarks`; **each page does its own gesture math** using the exported helpers `landmarkDistance`, `handCenter`, `createGestureGate`. |
 | `useOscillatingEvolve.ts` | Shared 10s "breathing" animation cycle for the 3D shapes during the build steps. |
 
 ---
 
-## 8. The AI polish feature (how the pieces connect)
+## 8. The AI features (how the pieces connect)
+
+### 8a. Transcription — the spoken memory becomes words
+
+```
+Browser: RecordingStartPage / PuddleRecordingPage
+   └ hooks/useVoiceRecorder  MediaRecorder ──► audio Blob
+   └ lib/transcribe.ts  beginTranscription() ──POST /api/transcribe (raw audio body)──┐
+                                                                                      │
+   DEV:  server/vite-plugin-transcribe.mjs  ──────────────────────────────────────────┤─→ server/transcribe.mjs
+   PROD: api/transcribe.mjs (Vercel function) ────────────────────────────────────────┘     transcribeAudio()
+                                                                                                  └─→ OpenAI speech-to-text
+```
+
+- The request **outlives the recording screen**: `beginTranscription()` fires it,
+  returns an id, and the screen navigates on with that id in `location.state`.
+  `TranscriptPage` looks the request up and shows "transcribing…" until the words
+  land, then types them in. The audio itself never enters `location.state`.
+- The body is the **raw recording**, with its mime type in `Content-Type` — no
+  multipart parsing in the endpoint. Format follows the browser (webm/opus in
+  Chrome, mp4 in Safari); `server/transcribe.mjs` maps it to a filename OpenAI
+  will accept.
+- Key: `OPENAI_API_KEY` (server-side only). Model default `gpt-4o-transcribe`,
+  overridable via `TRANSCRIBE_MODEL`.
+- Guardrails: recordings cap at 60s, bodies at 4 MB (Vercel's limit is 4.5 MB).
+- Unlike polish, transcription **is** a gate — there is no memory without words,
+  so a failure shows the reason and a "record again" way back.
+
+### 8b. Polish — the words become prose
 
 ```
 Browser: TranscriptPage
@@ -169,14 +201,16 @@ Browser: TranscriptPage
 - Guardrails: transcript must be ≥3 words and ≤5000 chars.
 - Polish is **never a gate** — if it fails, the original transcript flows on.
 
-Local setup: copy `.env.local.example` → `.env.local` and set `ANTHROPIC_API_KEY`.
+Local setup: copy `.env.local.example` → `.env.local` and set `OPENAI_API_KEY`
+(recording) and `ANTHROPIC_API_KEY` (polish). Both also have to exist as Vercel
+environment variables for production.
 
 ---
 
 ## 9. Non-obvious rules & gotchas (read before editing)
 
-1. **The AI-polish function path is plain JavaScript (`.mjs`), not TypeScript —
-   on purpose.** `api/polish.mjs` + `server/polish.mjs` are JS so Vercel's
+1. **The `api/` + `server/` function path is plain JavaScript (`.mjs`), not
+   TypeScript — on purpose.** `api/*.mjs` + `server/*.mjs` are JS so Vercel's
    `@vercel/node` bundles them with esbuild and never runs a TypeScript compile
    step (that step repeatedly crashed the Vercel build with "Cannot read
    properties of undefined (reading 'readFile')" on this toolchain). **Keep this

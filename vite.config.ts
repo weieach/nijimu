@@ -3,6 +3,7 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { polishApiPlugin } from './server/vite-plugin-polish.mjs'
+import { transcribeApiPlugin } from './server/vite-plugin-transcribe.mjs'
 
 // GitHub Project Page: https://<user>.github.io/<repo>/
 // Put VITE_BASE_PATH=/repo-name/ in .env.production (leading and trailing slash)
@@ -17,8 +18,9 @@ export default defineConfig(({ mode }) => {
       // Tailwind is not being actively used – do not remove them
       react(),
       tailwindcss(),
-      // Dev-only /api/polish endpoint; the key never reaches the client bundle
+      // Dev-only /api endpoints; the keys never reach the client bundle
       polishApiPlugin({ apiKey: env.ANTHROPIC_API_KEY, model: env.POLISH_MODEL }),
+      transcribeApiPlugin({ apiKey: env.OPENAI_API_KEY, model: env.TRANSCRIBE_MODEL }),
     ],
     resolve: {
       alias: {
@@ -29,5 +31,16 @@ export default defineConfig(({ mode }) => {
 
     // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
     assetsInclude: ['**/*.svg', '**/*.csv'],
+
+    server: {
+      // The workspace path contains parentheses — "nijimu (3.28)" — which
+      // breaks chokidar/fsevents glob matching, so the default watcher never
+      // sees file changes and the dev server serves stale modules (no HMR,
+      // no reload). Polling sidesteps the path issue entirely.
+      watch: {
+        usePolling: true,
+        interval: 300,
+      },
+    },
   }
 })

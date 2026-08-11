@@ -4,6 +4,7 @@ import NewMomoryIdle from "../../imports/NewMomoryIdle";
 import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { PageHeader } from "./PageHeader";
 import { SANS, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 
@@ -217,7 +218,19 @@ function textScale(idx: number): number {
 /* ═══════════════════════════════════════════════
    COMPONENT
    ═══════════════════════════════════════════════ */
-export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemory?: () => void; hideAnnotations?: boolean }) {
+export function BlobScene({
+  onNewMemory,
+  hideAnnotations = false,
+  openGallery = false,
+  onGalleryExit,
+}: {
+  onNewMemory?: () => void;
+  hideAnnotations?: boolean;
+  /** Open the artifact gallery on mount (used by the homescreen G shortcut). */
+  openGallery?: boolean;
+  /** Fired when leaving gallery → blend (so HomePage can restore a test variant). */
+  onGalleryExit?: () => void;
+}) {
   // Curated life events plus whatever the user has saved, so their memories
   // blend into the same field.
   const [savedMemories] = useState<SavedMemory[]>(() => loadMemories());
@@ -604,7 +617,8 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
     if (morphTarget.current === 0) return;
     capture();
     morphTarget.current = 0;
-  }, [capture]);
+    onGalleryExit?.();
+  }, [capture, onGalleryExit]);
 
   /* ─── navigate to gallery with specific blob selected ─── */
   const morphToGalleryAt = useCallback((blobIdx: number) => {
@@ -614,7 +628,23 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
     setActiveIdx(blobIdx);
     setHoveredIdx(null);
     morphToGallery();
-  }, [morphToGallery]);
+  }, [morphToGallery, gallerySlot]);
+
+  /* ─── open gallery on mount (homescreen G shortcut) ─── */
+  useEffect(() => {
+    if (!openGallery || blobs.length === 0) return;
+    const defaultSlot = 0;
+    const id = requestAnimationFrame(() => {
+      // Second frame so blob layout is measurable for capture()
+      requestAnimationFrame(() => {
+        carouselTgt.current = defaultSlot;
+        carouselIdx.current = defaultSlot;
+        setActiveIdx(gallerySortOrder[defaultSlot] ?? 0);
+        morphToGallery();
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [openGallery, blobs.length, gallerySortOrder, morphToGallery]);
 
   /* ─── keyboard ─── */
   useEffect(() => {
@@ -1024,9 +1054,9 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
         className="absolute inset-0 pointer-events-none flex items-end justify-center"
         style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.12}px` }}
       >
-        <div className="text-center" style={{ fontFamily: SERIF, fontStyle: "italic" }}>
-          <p style={{ color: "#2a2a2a", marginBottom: 6 }}>{blobs[activeIdx]?.event}</p>
-          <p style={{ color: "#999" }}>{blobs[activeIdx]?.year}</p>
+        <div className="text-center" style={{ fontFamily: SERIF }}>
+          <p style={{ color: "#2a2a2a", marginBottom: 6, fontStyle: "italic" }}>{blobs[activeIdx]?.event}</p>
+          <p style={{ color: "#999", fontStyle: "normal" }}>{blobs[activeIdx]?.year}</p>
         </div>
       </div>
 
@@ -1085,6 +1115,11 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
         Scroll to browse &middot; Click to return
       </div>
 
+      {/* Wordmark stays through gallery; the rest of the homescreen chrome dissolves. */}
+      {onNewMemory && (
+        <PageHeader layout="absolute" link={false} style={{ zIndex: 26 }} />
+      )}
+
       {/* ═══ HOMESCREEN OVERLAY (blend mode only) ═══ */}
       {onNewMemory && (
         <div
@@ -1095,29 +1130,6 @@ export function BlobScene({ onNewMemory, hideAnnotations = false }: { onNewMemor
             transition: "opacity 0.3s ease",
           }}
         >
-          <p
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              top: 30,
-              fontFamily: SERIF,
-              fontStyle: "normal",
-              color: "#9b9ba3",
-              fontSize: 12,
-              letterSpacing: "0.16px",
-              lineHeight: 1.5,
-              margin: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              zIndex: 2,
-            }}
-          >
-            <span>滲む</span>
-            <span>Nijimu</span>
-          </p>
-
           {/* Bottom blur gradient */}
           <div
             style={{

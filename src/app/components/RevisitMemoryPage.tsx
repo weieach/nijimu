@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect } from "react";
 import { BackButton } from "./BackButton";
+import { PageHeader } from "./PageHeader";
 import { SceneViewer } from "./SceneViewer";
 import svgPaths from "../../imports/svg-f02d7wi360";
 import { SANS, SERIF } from "../lib/theme";
@@ -56,6 +57,7 @@ export function RevisitMemoryPage() {
         className="flex flex-col h-full transition-opacity duration-1000"
         style={{ opacity: fadeIn ? 1 : 0 }}
       >
+        <PageHeader layout="absolute" />
         {/* Header text */}
         <p
           style={{

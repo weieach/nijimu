@@ -2,8 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { requestPolish } from "../lib/polish";
-import exposureTrialFontUrl from "../../assets/fonts/ExposureTrial-20.otf?url";
-import exposureTrial10Url from "../../assets/fonts/ExposureTrial+10.otf?url";
+import { getTranscription } from "../lib/transcribe";
 import { SANS, SANS_UI, SERIF, SERIF_DISPLAY } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
@@ -14,8 +13,21 @@ const SAMPLE_TRANSCRIPT =
 export function TranscriptPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const transcript =
-    (location.state as { transcript?: string } | null)?.transcript || SAMPLE_TRANSCRIPT;
+  const state = location.state as { transcript?: string; transcriptionId?: string } | null;
+
+  /* The recording is still being transcribed when this screen opens — the
+     recording screen left the request behind under an id. Without one (a deep
+     link, or the sample button) the sample memory stands in as before. */
+  const pending = getTranscription(state?.transcriptionId);
+  const [transcript, setTranscript] = useState(() =>
+    pending ? (pending.result?.transcript ?? "") : state?.transcript || SAMPLE_TRANSCRIPT,
+  );
+  const [transcribeError, setTranscribeError] = useState<string | null>(
+    () => pending?.result?.error ?? null,
+  );
+  const [awaitingTranscript, setAwaitingTranscript] = useState(
+    () => !!pending && pending.result === null,
+  );
 
   // AI polish: original vs polished version choice
   const [activeText, setActiveText] = useState(transcript);
@@ -41,9 +53,29 @@ export function TranscriptPage() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const [showBottomFade, setShowBottomFade] = useState(false);
 
+  // The words arriving from the transcription service
+  useEffect(() => {
+    if (!pending || !awaitingTranscript) return;
+    let alive = true;
+    pending.promise.then((result) => {
+      if (!alive) return;
+      if (result.transcript) {
+        setTranscript(result.transcript);
+        setActiveText(result.transcript);
+      } else {
+        setTranscribeError(result.error);
+      }
+      setAwaitingTranscript(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [pending, awaitingTranscript]);
+
   // Word-by-word typing effect (runs once, on the original transcript)
   const typingDoneRef = useRef(false);
   useEffect(() => {
+    if (awaitingTranscript || transcribeError) return;
     if (typingDoneRef.current) {
       // Text was swapped after typing finished (polish choice) — show it all
       setVisibleWordCount(words.length);
@@ -76,7 +108,7 @@ export function TranscriptPage() {
         clearInterval(typingIntervalRef.current);
       }
     };
-  }, [words.length]);
+  }, [words.length, awaitingTranscript, transcribeError]);
 
   const handleContinue = () => {
     if (compareMode) {
@@ -217,12 +249,6 @@ export function TranscriptPage() {
       className="relative w-full h-screen flex flex-col overflow-hidden"
       style={{ background: "#e0e0e0", userSelect: highlightMode ? "none" : "auto" }}
     >
-      {/* Vite-resolved URL so @font-face always matches the bundled .otf */}
-      <style
-        dangerouslySetInnerHTML={{
-          __html: `@font-face{font-family:"Exposure Trial";src:url(${JSON.stringify(exposureTrialFontUrl)}) format("opentype");font-weight:100 900;font-style:normal;font-display:swap;}@font-face{font-family:"Exposure Trial Plus";src:url(${JSON.stringify(exposureTrial10Url)}) format("opentype");font-weight:100 900;font-style:normal;font-display:swap;}`,
-        }}
-      />
       {/* Content wrapper with fade out */}
       <div
         className="flex flex-col h-full transition-opacity duration-1000"
@@ -260,8 +286,12 @@ export function TranscriptPage() {
                   : "What's been lingering on your mind?"}
               </p>
 
-              {/* Status line: transcribing / polishing / polish error */}
-              {(isTyping || polishState === "loading" || polishState === "error") && (
+              {/* Status line: transcribing / polishing / whichever failed */}
+              {(awaitingTranscript ||
+                transcribeError ||
+                isTyping ||
+                polishState === "loading" ||
+                polishState === "error") && (
                 <p
                   style={{
                     fontFamily: SERIF,
@@ -276,11 +306,15 @@ export function TranscriptPage() {
                     marginLeft: 0,
                   }}
                 >
-                  {isTyping
+                  {awaitingTranscript
                     ? "transcribing..."
-                    : polishState === "loading"
-                      ? "polishing..."
-                      : `couldn't polish — your words are safe${polishError ? ` (${polishError.toLowerCase()})` : ""}`}
+                    : transcribeError
+                      ? `couldn't hear that — ${transcribeError.toLowerCase()}`
+                      : isTyping
+                        ? "transcribing..."
+                        : polishState === "loading"
+                          ? "polishing..."
+                          : `couldn't polish — your words are safe${polishError ? ` (${polishError.toLowerCase()})` : ""}`}
                 </p>
               )}
             </div>
@@ -500,8 +534,23 @@ export function TranscriptPage() {
           </div>
         </div>
 
+        {/* Nothing was heard — the only way on is to speak again */}
+        {transcribeError && (
+          <div
+            style={{
+              position: "fixed",
+              left: "50%",
+              transform: "translateX(-50%)",
+              bottom: "clamp(40px, 8vh, 80px)",
+              zIndex: 20,
+            }}
+          >
+            <PillButton label="record again" onClick={() => navigate("/record/start")} />
+          </div>
+        )}
+
         {/* Action buttons - fixed at bottom */}
-        {showContinue && (() => {
+        {showContinue && !transcribeError && (() => {
           const continueDisabled =
             (highlightMode && !hasHighlights) ||
             (compareMode && !chosenVersion) ||
