@@ -13,20 +13,26 @@ import { PAGE_BG, PuddleBackdrop } from "./PuddleBackdrop";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 import { RecordingStartPage } from "./RecordingStartPage";
+import { ContourArtifact, pickArtifactModelPath } from "./ContourArtifact";
 
-/* The arrival is staggered — the question gathers first, the guidance follows
-   line by line, the way back arrives mid-way, and the record button surfaces
-   last, once the words have settled. Each line reads itself in. */
-const QUESTION_DELAY_S = 0.25;
+/* The arrival is staggered — the water's arrival rings settle first, then the
+   question gathers, the guidance follows line by line, the way back arrives
+   mid-way, and the record button surfaces last, once the words have settled.
+   Each line reads itself in. */
+const QUESTION_DELAY_S = 2.0;
 const QUESTION_SWEEP_S = 0.5;
-const NOTE_1_DELAY_S = 0.85;
-const NOTE_2_DELAY_S = 1.35;
+const NOTE_1_DELAY_S = 2.6;
+const NOTE_2_DELAY_S = 3.1;
 /** The guidance lines are long — they sweep a little slower than the question. */
 const NOTE_SWEEP_S = 0.7;
 /** The way back surfaces once the question has gathered. */
-const BACK_IN_DELAY_MS = 1500;
+const BACK_IN_DELAY_MS = 3250;
+/** The form only surfaces once the guidance has finished reading itself in. */
+const ARTIFACT_IN_DELAY_MS = 3800;
+/** It gathers out of the haze slowly — slower than the chrome fades. */
+const ARTIFACT_IN_MS = 1800;
 /** The record button waits until the guidance has finished reading itself in. */
-const BUTTON_IN_DELAY_MS = 2400;
+const BUTTON_IN_DELAY_MS = 4150;
 /** …and everything dissolves before the transcript screen takes over. */
 const CHROME_OUT_MS = 500;
 
@@ -55,12 +61,15 @@ export function PuddleRecordingPage() {
   const focus = (location.state as PuddleRecordingState | null)?.focus;
 
   const [backIn, setBackIn] = useState(false);
+  const [artifactIn, setArtifactIn] = useState(false);
   const [buttonIn, setButtonIn] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [captureFailed, setCaptureFailed] = useState(false);
   const [reducedMotion] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
+  /** One form for this visit — plucked once so it doesn't reshuffle on re-render. */
+  const [modelPath] = useState(pickArtifactModelPath);
 
   const recorder = useVoiceRecorder({
     onStop: (audio) => {
@@ -92,9 +101,11 @@ export function PuddleRecordingPage() {
 
   useEffect(() => {
     const back = setTimeout(() => setBackIn(true), BACK_IN_DELAY_MS);
+    const artifact = setTimeout(() => setArtifactIn(true), ARTIFACT_IN_DELAY_MS);
     const button = setTimeout(() => setButtonIn(true), BUTTON_IN_DELAY_MS);
     return () => {
       clearTimeout(back);
+      clearTimeout(artifact);
       clearTimeout(button);
     };
   }, []);
@@ -140,6 +151,23 @@ export function PuddleRecordingPage() {
         }
       `}</style>
       <PuddleBackdrop focus={focus} voicePulse={recorder.voicePulse} />
+
+      {/* Placeholder memory form — contour only, centered, slow spin, no bob.
+          It gathers after the words have read themselves in, and lives under
+          the chrome so the words and buttons stay readable. */}
+      <div
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+        style={{
+          zIndex: 5,
+          width: "min(52vmin, 360px)",
+          height: "min(52vmin, 360px)",
+          opacity: artifactIn && !leaving ? 1 : 0,
+          transition: `opacity ${leaving ? CHROME_OUT_MS : ARTIFACT_IN_MS}ms ease`,
+          pointerEvents: "none",
+        }}
+      >
+        <ContourArtifact modelPath={modelPath} spin={!reducedMotion} />
+      </div>
 
       <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
         <PageHeader
@@ -242,18 +270,23 @@ export function PuddleRecordingPage() {
                 position: "absolute",
                 left: "50%",
                 transform: "translateX(-50%)",
-                bottom: 48,
+                bottom: 110,
                 display: "flex",
                 flexDirection: "column",
-                alignItems: "center",
+                alignItems: "stretch",
                 gap: 12,
               }}
             >
-              <PillButton label={captureFailed ? "record again" : "record"} onClick={startRecording} />
+              <PillButton
+                label={captureFailed ? "record again" : "record"}
+                onClick={startRecording}
+                style={{ width: "100%" }}
+              />
               <PillButton
                 label="show sample transcript"
                 variant="outline"
                 onClick={goToSampleTranscript}
+                style={{ width: "100%" }}
               />
             </div>
           ) : (
@@ -269,7 +302,7 @@ export function PuddleRecordingPage() {
                 position: "absolute",
                 left: "50%",
                 transform: "translateX(-50%)",
-                bottom: 80,
+                bottom: 110,
               }}
             />
           )}

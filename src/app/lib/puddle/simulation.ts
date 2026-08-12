@@ -48,6 +48,10 @@ export interface PuddleTuning {
   grainAmount: number;
   /** Amplitude of the idle normal shimmer (render-pass only, no sim cost). */
   idleShimmer: number;
+  /** Speed the whole shimmer pattern slides toward the top-left corner, in uv
+      of the short edge per second — the puddle as a body of water with a
+      current, rather than a standing pattern. */
+  idleDrift: number;
   /** Depth of the sustained cavity while a press is held — a heavy object resting in the water. */
   holdDepth: number;
   /** Seconds per breathing cycle of the held cavity; each cycle sheds a ring outward. */
@@ -79,6 +83,10 @@ export const PUDDLE_TUNING: PuddleTuning = {
   filmScale: 7.0,
   grainAmount: 0.05,
   idleShimmer: 0.0035,
+  // the shimmer's wavelets are ~0.12 uv across, so this carries the pattern
+  // about two thirds of a wavelength per second — a current you can follow
+  // without the surface ever looking like it is scrolling
+  idleDrift: 0.08,
   // the held well sits far deeper than a memory's crater, and breathes fast —
   // a ring sheds from its rim every cycle, so holding reads as a live pulse
   holdDepth: 0.44,
@@ -223,6 +231,9 @@ uniform float u_iri;
 uniform float u_filmScale;
 uniform float u_grain;
 uniform float u_shimmer;
+// uv the shimmer field is sampled at, per second; the pattern itself travels
+// the opposite way, so this points down-right to make the shadows flow up-left
+uniform vec2 u_drift;
 // 1 = apply screen-space finishing (grain + vignette) here, as usual.
 // 0 = the dive pass re-applies them after its zoom, so they stay glued to the
 //     screen instead of magnifying with the water like a scaled image.
@@ -242,10 +253,14 @@ void main() {
   float h = texture(u_height, v_uv).r;
   vec2 grad = vec2(hR - hL, hT - hB);
 
-  // idle shimmer: a slow, smooth perturbation of the surface normal
+  // idle shimmer: a slow, smooth perturbation of the surface normal. The field
+  // is sampled at a sliding point, so the whole pattern travels as one body of
+  // water; each wavelet keeps a small oscillation of its own, well under the
+  // drift, so the surface morphs as it goes instead of sliding like wallpaper.
+  vec2 suv = v_uv + u_time * u_drift;
   grad += u_shimmer * vec2(
-    sin(dot(v_uv, vec2(41.0, 29.0)) + u_time * 0.7) + sin(dot(v_uv, vec2(13.0, 53.0)) - u_time * 0.43),
-    cos(dot(v_uv, vec2(23.0, 47.0)) - u_time * 0.6) + cos(dot(v_uv, vec2(59.0, 17.0)) + u_time * 0.37)
+    sin(dot(suv, vec2(41.0, 29.0)) + u_time * 0.22) + sin(dot(suv, vec2(13.0, 53.0)) - u_time * 0.14),
+    cos(dot(suv, vec2(23.0, 47.0)) - u_time * 0.19) + cos(dot(suv, vec2(59.0, 17.0)) + u_time * 0.12)
   );
 
   float slope = length(grad);
@@ -569,6 +584,12 @@ export function createPuddleSimulation(
   const simH = Math.max(Math.round(ch * Math.min(simScale, 1)), 32);
   const texel: [number, number] = [1 / simW, 1 / simH];
   const aspect = simW / simH;
+  /* Shimmer drift, aspect-corrected so the current runs on the screen diagonal
+     rather than being stretched flat on a wide viewport. */
+  const driftUv: [number, number] = [
+    (tuning.idleDrift * Math.SQRT1_2) / aspect,
+    -tuning.idleDrift * Math.SQRT1_2,
+  ];
 
   let vert: WebGLShader;
   let splatPass: Pass, heightPass: Pass, dyePass: Pass, renderPass: Pass;
@@ -582,7 +603,8 @@ export function createPuddleSimulation(
     ]);
     dyePass = makePass(gl, vert, DYE_FRAG, ["u_dye", "u_height", "u_texel", "u_advect", "u_diffuse", "u_decay"]);
     renderPass = makePass(gl, vert, RENDER_FRAG, [
-      "u_height", "u_dye", "u_texel", "u_time", "u_iri", "u_filmScale", "u_grain", "u_shimmer", "u_postFx",
+      "u_height", "u_dye", "u_texel", "u_time", "u_iri", "u_filmScale", "u_grain", "u_shimmer",
+      "u_drift", "u_postFx",
     ]);
     height = makePingPong(gl, simW, simH, gl.RG16F, gl.RG);
     dye = makePingPong(gl, simW, simH, gl.RGBA16F, gl.RGBA);
@@ -865,6 +887,7 @@ export function createPuddleSimulation(
       gl.uniform1f(renderPass.uniforms.u_filmScale, tuning.filmScale);
       gl.uniform1f(renderPass.uniforms.u_grain, tuning.grainAmount);
       gl.uniform1f(renderPass.uniforms.u_shimmer, tuning.idleShimmer);
+      gl.uniform2f(renderPass.uniforms.u_drift, driftUv[0], driftUv[1]);
       // while diving, grain + vignette move to the dive pass (screen space)
       gl.uniform1f(renderPass.uniforms.u_postFx, dived ? 0 : 1);
       drawQuad();

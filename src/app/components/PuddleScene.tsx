@@ -52,8 +52,8 @@ const HOLD_RING_VW = 0.117;
 const holdRingSize = () =>
   Math.min(HOLD_RING_MAX, Math.max(HOLD_RING_MIN, window.innerWidth * HOLD_RING_VW));
 const HOLD_RING_R = 15; // in the ring's 32-unit viewBox, so the stroke scales with the size
-/** A sub-pixel hairline at the rendered size — barely there, like the type. */
-const HOLD_RING_STROKE = 0.1;
+/** ~1px at the rendered size — light enough to stay quiet, heavy enough to read. */
+const HOLD_RING_STROKE = 0.05;
 const HOLD_RING_CIRCUMFERENCE = 2 * Math.PI * HOLD_RING_R;
 /** Once closed, the ring swells and dissolves — and only then does the flow open. */
 const HOLD_RING_BLOOM_MS = 480;
@@ -153,6 +153,8 @@ const FIELD_X: [number, number] = [0.1, 0.9];
 const FIELD_Y: [number, number] = [0.14, 0.82];
 /** Average serif advance as a fraction of the font size — a cheap width estimate. */
 const CAPTION_ADVANCE = 0.5;
+/** Cap on the event title's line length (matches maxWidth: Nch on the caption). */
+const CAPTION_MAX_CH = 14;
 /** Clearance kept between two caption boxes, in px. */
 const CAPTION_GAP_X = 30;
 const CAPTION_GAP_Y = 26;
@@ -168,10 +170,17 @@ function captionHalfSize(event: string, vw: number): { w: number; h: number } {
   const eventPx = Math.min(13, Math.max(9, vw * 0.012));
   const yearPx = Math.min(10, Math.max(8, vw * 0.009));
   const lines = event.split("\n");
-  const chars = lines.reduce((m, l) => Math.max(m, l.length), 0);
+  const chars = Math.min(
+    CAPTION_MAX_CH,
+    lines.reduce((m, l) => Math.max(m, l.length), 0),
+  );
+  const wrappedLines = lines.reduce(
+    (sum, l) => sum + Math.max(1, Math.ceil(l.length / CAPTION_MAX_CH)),
+    0,
+  );
   return {
     w: (chars * eventPx * CAPTION_ADVANCE) / 2,
-    h: (lines.length * eventPx * 1.5 + yearPx * 1.5 + 3) / 2,
+    h: (wrappedLines * eventPx * 1.5 + yearPx * 1.5 + 3) / 2,
   };
 }
 
@@ -414,8 +423,8 @@ export function PuddleScene({
     const tuning = texture === "ripple2d" ? RIPPLE2D_TUNING : PUDDLE_TUNING;
     const sim =
       texture === "ripple2d"
-        ? createRipple2dSimulation(canvas, tuning)
-        : createPuddleSimulation(canvas, tuning);
+        ? createRipple2dSimulation(canvas, RIPPLE2D_TUNING)
+        : createPuddleSimulation(canvas, PUDDLE_TUNING);
     if (!sim) {
       setFailed(true);
       return;
@@ -718,6 +727,15 @@ export function PuddleScene({
 
     const onPointerDown = (e: PointerEvent) => {
       if (underwater()) return;
+      // park the hint on the press point so the ring lands under the cursor even
+      // when the pointer never moved after the label faded in
+      const rect0 = canvas.getBoundingClientRect();
+      const hx = e.clientX - rect0.left;
+      const hy = e.clientY - rect0.top;
+      lastPointer.current = [hx, hy];
+      if (hintRef.current) {
+        hintRef.current.style.transform = `translate(${hx}px, ${hy}px)`;
+      }
       const [x, y] = toUv(e);
       // near a memory's anchor → that memory's color; open water → clear ring
       const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
@@ -957,6 +975,7 @@ export function PuddleScene({
                   textAlign: "center",
                   color: "#4a4a4a",
                   textShadow: "0 0 10px rgba(237,237,238,0.65)",
+                  maxWidth: `${CAPTION_MAX_CH}ch`,
                   animation: reducedMotionPref
                     ? "none"
                     : `puddleCaptionLife ${CAPTION_LIFE_MS}ms ease forwards`,
@@ -981,7 +1000,12 @@ export function PuddleScene({
                     lineHeight: 1.5,
                   }}
                 >
-                  <ParticleText text={a.event} seed={c.key * 131 + 17} animate={!reducedMotionPref} />
+                  <ParticleText
+                    text={a.event}
+                    seed={c.key * 131 + 17}
+                    animate={!reducedMotionPref}
+                    wrap
+                  />
                 </div>
               </div>
             );
@@ -1048,12 +1072,13 @@ export function PuddleScene({
                   r={HOLD_RING_R}
                   fill="none"
                   stroke={CHROME_GRAY}
-                  strokeOpacity={0.6}
+                  strokeOpacity={0.85}
                   strokeWidth={HOLD_RING_STROKE}
                   strokeDasharray={HOLD_RING_CIRCUMFERENCE}
                   strokeDashoffset={ringBloom ? 0 : HOLD_RING_CIRCUMFERENCE}
                   transform={`rotate(${ringStartDeg} 16 16)`}
                   style={{
+                    /* fade the element (not stroke-opacity — SVG attrs fight that) */
                     animation: ringBloom
                       ? "none"
                       : `puddleHoldRing ${HOLD_TO_CREATE_MS}ms linear forwards`,
@@ -1109,8 +1134,14 @@ export function PuddleScene({
           to { opacity: 1; }
         }
         @keyframes puddleHoldRing {
-          from { stroke-dashoffset: ${HOLD_RING_CIRCUMFERENCE}; }
-          to { stroke-dashoffset: 0; }
+          from {
+            stroke-dashoffset: ${HOLD_RING_CIRCUMFERENCE};
+            opacity: 0.15;
+          }
+          to {
+            stroke-dashoffset: 0;
+            opacity: 1;
+          }
         }
         @keyframes puddleHoldRingBloom {
           from { transform: translate(-50%, -50%) scale(1); opacity: 1; }

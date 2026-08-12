@@ -2,6 +2,7 @@ import React, {
   useRef,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
   Suspense,
 } from "react";
@@ -90,6 +91,10 @@ interface ModelProps {
   fitTargetSize?: number;
   /** When true, evolve breathing/env motion is driven inside useFrame (shape-build oscillation). */
   oscillatingEvolve?: boolean;
+  /** Hold a fixed pose: the internal clock stops advancing, so every frame
+      renders the same image. For artifacts parked on screen — without it a
+      canvas that only renders now and then animates in visible jerks. */
+  still?: boolean;
   /**
    * Manual morph weight: 0 = sphere rest pose, 1 = form rest pose.
    * Ignored while `introMorph` is animating internally.
@@ -193,12 +198,41 @@ function Model({
   matOpacity = 0.1,
   fitTargetSize = 2.5,
   oscillatingEvolve = false,
+  still = false,
   morphProgress = 1,
   introMorph = false,
   introMorphDuration = 5.5,
   onBounds,
 }: ModelProps) {
-  const { scene } = useGLTF(modelPath);
+  const { scene: cached } = useGLTF(modelPath);
+  /**
+   * useGLTF hands every caller the same scene graph, and a three.js object can
+   * only have one parent — so two artifacts built from the same .glb would
+   * reparent the mesh away from each other and one canvas would come up empty.
+   * Geometry is cloned too, not just the graph: the render loop below writes
+   * vertex positions every frame, and instances with different fluidity/bump
+   * would otherwise be overwriting each other's shape.
+   */
+  const scene = useMemo(() => {
+    const copy = cached.clone(true);
+    copy.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh) mesh.geometry = mesh.geometry.clone();
+    });
+    return copy;
+  }, [cached]);
+  useEffect(
+    () => () => {
+      scene.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry.dispose();
+        const material = mesh.material as THREE.Material | null;
+        if (material && typeof material.dispose === "function") material.dispose();
+      });
+    },
+    [scene],
+  );
   const { scene: threeScene } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
   const clock = useRef(0);
@@ -214,6 +248,10 @@ function Model({
   useLayoutEffect(() => {
     oscillatingEvolveRef.current = oscillatingEvolve;
   }, [oscillatingEvolve]);
+  const stillRef = useRef(still);
+  useLayoutEffect(() => {
+    stillRef.current = still;
+  }, [still]);
   useLayoutEffect(() => {
     introMorphRef.current = introMorph;
     introDurationRef.current = introMorphDuration;
@@ -331,9 +369,12 @@ function Model({
     });
   }, [scene, matColor, matAttenuationColor, matSheenColor, matOpacity]);
 
-  useFrame((_, delta) => {
+  useFrame((_, rawDelta) => {
     if (!groupRef.current) return;
-    clock.current += delta;
+    // A canvas that draws on demand hands back the whole gap since its last
+    // frame, which would jump the motion rather than continue it.
+    const delta = Math.min(rawDelta, 1 / 30);
+    if (!stillRef.current) clock.current += delta;
     const t = clock.current;
 
     // Evolve: read oscillation from ref so useFrame never keeps a stale prop closure.
@@ -362,7 +403,8 @@ function Model({
 
     // Float, auto-rotate, subtle tilt (tilt follows float — still when amplitude is 0)
     groupRef.current.position.y = Math.sin(t * 1) * floatAmplitude;
-    if (autoRotate) groupRef.current.rotation.y += delta * 0.16;
+    if (autoRotate && !stillRef.current)
+      groupRef.current.rotation.y += delta * 0.16;
     groupRef.current.rotation.z =
       floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
 
@@ -507,6 +549,31 @@ function Model({
   );
 }
 
+// ─── Parked canvases ─────────────────────────────────────────────────────────
+
+/**
+ * frameloop="demand" draws only when something asks it to, and a parked
+ * artifact has to be asked more than once: the environment map, the camera fit
+ * and the first vertex pass in `Model` each land later than the glTF itself.
+ * So we ask a few times, thinly spread — a dense burst of frames across six
+ * parked canvases stalls the swing that put them there.
+ * Mounted inside the Suspense boundary, so the schedule starts once the model
+ * is actually there; after it, the canvas holds its last frame for free.
+ */
+const DEMAND_DRAW_DELAYS_MS = [60, 160, 340, 700, 1200, 1900];
+
+function DemandFrames() {
+  const invalidate = useThree((s) => s.invalidate);
+  useEffect(() => {
+    invalidate();
+    const timers = DEMAND_DRAW_DELAYS_MS.map((ms) =>
+      window.setTimeout(invalidate, ms),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [invalidate]);
+  return null;
+}
+
 // ─── Fallback while loading ───────────────────────────────────────────────────
 
 function Loader() {
@@ -542,6 +609,10 @@ interface SceneViewerProps {
   /** "demand" renders only when something changes; for artifacts that are
       parked on screen (gallery neighbours) it costs almost nothing. */
   frameloop?: "always" | "demand";
+  /** Hold one fixed pose instead of animating. Pair it with frameloop="demand":
+      a canvas that draws intermittently would otherwise show its motion in
+      lurches. */
+  still?: boolean;
   /** Legacy: colour passed as raw hex for the glass tint + rect area lights */
   rectAreaLightColors?: {
     color1?: string;
@@ -583,6 +654,7 @@ export function SceneViewer({
   constrainedViewport = false,
   frameMargin,
   frameloop = "always",
+  still = false,
   rectAreaLightColors,
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
@@ -744,6 +816,7 @@ export function SceneViewer({
             fluidity={safeFluidity}
             evolve={safeEvolve}
             oscillatingEvolve={shapeBuildOscillatingEvolve}
+            still={still}
             bumpAmount={safeBumpAmount}
             bumpSpike={safeBumpSpike}
             density={safeDensity}
@@ -754,6 +827,7 @@ export function SceneViewer({
             introMorphDuration={introMorphDuration}
             onBounds={handleBounds}
           />
+          {frameloop === "demand" && <DemandFrames />}
         </Suspense>
         <OrbitControls
           ref={controlsRef}
