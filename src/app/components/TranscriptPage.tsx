@@ -13,20 +13,28 @@ const SAMPLE_TRANSCRIPT =
 export function TranscriptPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const state = location.state as { transcript?: string; transcriptionId?: string } | null;
+  const state = location.state as { transcript?: string; transcriptionId?: string; focus?: [number, number] } | null;
+  const transcriptionId = state?.transcriptionId;
+  /** A real recording left an id — never fall back to the sample memory. */
+  const fromRecording = !!transcriptionId;
 
   /* The recording is still being transcribed when this screen opens — the
      recording screen left the request behind under an id. Without one (a deep
      link, or the sample button) the sample memory stands in as before. */
-  const pending = getTranscription(state?.transcriptionId);
-  const [transcript, setTranscript] = useState(() =>
-    pending ? (pending.result?.transcript ?? "") : state?.transcript || SAMPLE_TRANSCRIPT,
-  );
-  const [transcribeError, setTranscribeError] = useState<string | null>(
-    () => pending?.result?.error ?? null,
-  );
+  const pending = getTranscription(transcriptionId);
+  const [transcript, setTranscript] = useState(() => {
+    if (pending?.result?.transcript) return pending.result.transcript;
+    if (state?.transcript) return state.transcript;
+    if (fromRecording) return ""; // waiting (or lost) — not the sample
+    return SAMPLE_TRANSCRIPT;
+  });
+  const [transcribeError, setTranscribeError] = useState<string | null>(() => {
+    if (pending?.result?.error) return pending.result.error;
+    if (fromRecording && !pending) return "The transcription was lost — try recording again.";
+    return null;
+  });
   const [awaitingTranscript, setAwaitingTranscript] = useState(
-    () => !!pending && pending.result === null,
+    () => fromRecording && !!pending && pending.result === null,
   );
 
   // AI polish: original vs polished version choice
@@ -51,17 +59,39 @@ export function TranscriptPage() {
   const [fadeOutContent, setFadeOutContent] = useState(false);
   const typingIntervalRef = useRef<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const typingDoneRef = useRef(false);
   const [showBottomFade, setShowBottomFade] = useState(false);
 
-  // The words arriving from the transcription service
+  // Keep a settled transcript in location.state so remounts don't need the Map.
+  const rememberTranscript = (text: string) => {
+    if (!transcriptionId || state?.transcript === text) return;
+    navigate(".", {
+      replace: true,
+      state: { ...state, transcriptionId, transcript: text },
+    });
+  };
+
+  // Already settled when this screen opened (fast API / remount).
+  useEffect(() => {
+    if (pending?.result?.transcript) rememberTranscript(pending.result.transcript);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The words arriving from the transcription service — they replace any
+  // empty placeholder. The sample is never shown on this path.
   useEffect(() => {
     if (!pending || !awaitingTranscript) return;
     let alive = true;
     pending.promise.then((result) => {
       if (!alive) return;
       if (result.transcript) {
+        typingDoneRef.current = false;
+        setVisibleWordCount(0);
+        setIsTyping(true);
+        setShowContinue(false);
         setTranscript(result.transcript);
         setActiveText(result.transcript);
+        rememberTranscript(result.transcript);
       } else {
         setTranscribeError(result.error);
       }
@@ -70,12 +100,12 @@ export function TranscriptPage() {
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, awaitingTranscript]);
 
   // Word-by-word typing effect (runs once, on the original transcript)
-  const typingDoneRef = useRef(false);
   useEffect(() => {
-    if (awaitingTranscript || transcribeError) return;
+    if (awaitingTranscript || transcribeError || !activeText.trim()) return;
     if (typingDoneRef.current) {
       // Text was swapped after typing finished (polish choice) — show it all
       setVisibleWordCount(words.length);
@@ -108,7 +138,7 @@ export function TranscriptPage() {
         clearInterval(typingIntervalRef.current);
       }
     };
-  }, [words.length, awaitingTranscript, transcribeError]);
+  }, [words.length, awaitingTranscript, transcribeError, activeText]);
 
   const handleContinue = () => {
     if (compareMode) {

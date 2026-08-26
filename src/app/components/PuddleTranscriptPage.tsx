@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
 import { isPuddleSupported } from "../lib/puddle/simulation";
 import { SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
+import { getTranscription } from "../lib/transcribe";
 import { BackButton } from "./BackButton";
 import { readVariant } from "./HomePage";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
@@ -18,6 +19,7 @@ const HIGHLIGHT = "rgba(123, 123, 135, 0.22)";
 
 interface PuddleTranscriptState {
   transcript?: string;
+  transcriptionId?: string;
   focus?: [number, number];
 }
 
@@ -29,8 +31,28 @@ export function PuddleTranscriptPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = (location.state as PuddleTranscriptState | null) ?? null;
-  const transcript = state?.transcript || SAMPLE_TRANSCRIPT;
   const focus = state?.focus;
+  const transcriptionId = state?.transcriptionId;
+
+  /* A real recording arrives as an id — the words are still being heard while
+     the water settles here. Only a deep link (or the sample button) falls back
+     to the sample memory. */
+  const pending = getTranscription(transcriptionId);
+  const [transcript, setTranscript] = useState(() => {
+    if (pending?.result?.transcript) return pending.result.transcript;
+    if (state?.transcript) return state.transcript;
+    return transcriptionId ? "" : SAMPLE_TRANSCRIPT;
+  });
+  const [transcribeError, setTranscribeError] = useState<string | null>(() => {
+    if (pending?.result?.error) return pending.result.error;
+    if (transcriptionId && !pending && !state?.transcript) {
+      return "The transcription was lost — try recording again.";
+    }
+    return null;
+  });
+  const [awaitingTranscript, setAwaitingTranscript] = useState(
+    () => !!pending && pending.result === null,
+  );
 
   const words = transcript.split(/\s+/);
 
@@ -51,7 +73,36 @@ export function PuddleTranscriptPage() {
   );
 
   const typingDoneRef = useRef(false);
+
+  /** Keep settled words in location.state so a remount doesn't lose them. */
+  const rememberTranscript = (text: string) => {
+    if (!transcriptionId || state?.transcript === text) return;
+    navigate(".", { replace: true, state: { ...state, transcriptionId, transcript: text } });
+  };
+
+  // The words arriving from the transcription service
   useEffect(() => {
+    if (pending?.result?.transcript) rememberTranscript(pending.result.transcript);
+    if (!pending || !awaitingTranscript) return;
+    let alive = true;
+    pending.promise.then((result) => {
+      if (!alive) return;
+      if (result.transcript) {
+        setTranscript(result.transcript);
+        rememberTranscript(result.transcript);
+      } else {
+        setTranscribeError(result.error);
+      }
+      setAwaitingTranscript(false);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, awaitingTranscript]);
+
+  useEffect(() => {
+    if (awaitingTranscript || transcribeError || !transcript.trim()) return;
     if (typingDoneRef.current) {
       setVisibleWordCount(words.length);
       return;
@@ -78,7 +129,7 @@ export function PuddleTranscriptPage() {
         clearInterval(typingIntervalRef.current);
       }
     };
-  }, [words.length]);
+  }, [words.length, awaitingTranscript, transcribeError, transcript]);
 
   const handleContinue = () => {
     if (!highlightMode) {
@@ -222,7 +273,7 @@ export function PuddleTranscriptPage() {
                 sweep={0.5}
               />
             </p>
-            {isTyping && (
+            {(awaitingTranscript || transcribeError || isTyping) && (
               <p
                 style={{
                   margin: "8px 0 0",
@@ -232,7 +283,9 @@ export function PuddleTranscriptPage() {
                   color: CHROME_GRAY,
                 }}
               >
-                transcribing...
+                {transcribeError
+                  ? `couldn't hear that — ${transcribeError.toLowerCase()}`
+                  : "transcribing..."}
               </p>
             )}
           </div>
@@ -369,7 +422,27 @@ export function PuddleTranscriptPage() {
           </div>
         </div>
 
-        {showContinue && (
+        {/* nothing was heard — the only way on is to speak again */}
+        {transcribeError && (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              transform: "translateX(-50%)",
+              bottom: 80,
+              zIndex: 20,
+            }}
+          >
+            <PillButton
+              label="record again"
+              onClick={() =>
+                navigate("/record/start", { state: focus ? { focus } : undefined })
+              }
+            />
+          </div>
+        )}
+
+        {showContinue && !transcribeError && (
           <div
             style={{
               position: "absolute",
