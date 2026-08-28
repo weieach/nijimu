@@ -10,6 +10,16 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF, OrbitControls, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { getShapeBuildEvolvePhase } from "../hooks/useOscillatingEvolve";
+import {
+  MemoryPhotoTexture,
+  attachMemoryPhotoOverlay,
+  buildPhotoUv,
+  createMemoryPhotoMaterial,
+  detachMemoryPhotoOverlays,
+  MEMORY_PHOTO_OVERLAY_NAME,
+  setMemoryPhotoFade,
+  setPhotoUvAttribute,
+} from "./MemoryPhotoLayer";
 
 // Available 3D model paths
 export const MODEL_PATHS = [
@@ -106,6 +116,8 @@ interface ModelProps {
   introMorphDuration?: number;
   /** Called after center/scale is applied, so camera can fit. */
   onBounds?: (box: THREE.Box3, sphere: THREE.Sphere) => void;
+  /** Memory photo overlay; fades as the form grows. */
+  photoTexture?: THREE.Texture | null;
 }
 
 /** Slow rise, soft settle — reads more like growth than a snap morph. */
@@ -183,6 +195,49 @@ export function buildSphereRestPose(formPos: Float32Array): Float32Array {
   return sphere;
 }
 
+/**
+ * One sphere for the whole model: lift each part into model space, project
+ * onto a shared sphere, then write the result back in mesh-local space.
+ */
+export function assignUnifiedSpherePose(
+  parts: { form: Float32Array; sphere: Float32Array }[],
+  matrices: THREE.Matrix4[],
+): void {
+  const total = parts.reduce((n, p) => n + p.form.length, 0);
+  const modelSpace = new Float32Array(total);
+  const v = new THREE.Vector3();
+
+  let offset = 0;
+  parts.forEach((part, pi) => {
+    const m = matrices[pi];
+    for (let i = 0; i < part.form.length; i += 3) {
+      v.set(part.form[i], part.form[i + 1], part.form[i + 2]).applyMatrix4(m);
+      modelSpace[offset + i] = v.x;
+      modelSpace[offset + i + 1] = v.y;
+      modelSpace[offset + i + 2] = v.z;
+    }
+    offset += part.form.length;
+  });
+
+  const sphereModelSpace = buildSphereRestPose(modelSpace);
+
+  offset = 0;
+  parts.forEach((part, pi) => {
+    const inv = new THREE.Matrix4().copy(matrices[pi]).invert();
+    for (let i = 0; i < part.form.length; i += 3) {
+      v.set(
+        sphereModelSpace[offset + i],
+        sphereModelSpace[offset + i + 1],
+        sphereModelSpace[offset + i + 2],
+      ).applyMatrix4(inv);
+      part.sphere[i] = v.x;
+      part.sphere[i + 1] = v.y;
+      part.sphere[i + 2] = v.z;
+    }
+    offset += part.form.length;
+  });
+}
+
 function Model({
   modelPath,
   matColor,
@@ -203,6 +258,7 @@ function Model({
   introMorph = false,
   introMorphDuration = 5.5,
   onBounds,
+  photoTexture = null,
 }: ModelProps) {
   const { scene: cached } = useGLTF(modelPath);
   /**
@@ -223,9 +279,11 @@ function Model({
   }, [cached]);
   useEffect(
     () => () => {
+      detachMemoryPhotoOverlays(scene);
       scene.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (!mesh.isMesh) return;
+        if (mesh.name === MEMORY_PHOTO_OVERLAY_NAME) return;
         mesh.geometry.dispose();
         const material = mesh.material as THREE.Material | null;
         if (material && typeof material.dispose === "function") material.dispose();
@@ -240,6 +298,16 @@ function Model({
   const spherePositions = useRef<Float32Array | null>(null);
   const originalNormals = useRef<Float32Array | null>(null);
   const meshRef = useRef<THREE.Mesh | null>(null);
+  const morphPartsRef = useRef<
+    {
+      mesh: THREE.Mesh;
+      geometry: THREE.BufferGeometry;
+      form: Float32Array;
+      sphere: Float32Array;
+      normals: Float32Array | null;
+    }[]
+  >([]);
+  const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const maxDimRef = useRef<number>(1);
   const morphRef = useRef(introMorph ? 0 : morphProgress);
   const introMorphRef = useRef(introMorph);
@@ -301,9 +369,26 @@ function Model({
       onBounds(finalBox, finalSphere);
     }
 
+    detachMemoryPhotoOverlays(scene);
+    photoMaterialRef.current?.dispose();
+    photoMaterialRef.current = null;
+    morphPartsRef.current = [];
+
+    scene.updateMatrixWorld(true);
+    const sceneInverse = new THREE.Matrix4().copy(scene.matrixWorld).invert();
+    const parts: {
+      mesh: THREE.Mesh;
+      geometry: THREE.BufferGeometry;
+      form: Float32Array;
+      sphere: Float32Array;
+      normals: Float32Array | null;
+    }[] = [];
+    const matrices: THREE.Matrix4[] = [];
+
     scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return;
       const mesh = child as THREE.Mesh;
+      if (mesh.name === MEMORY_PHOTO_OVERLAY_NAME) return;
       const prev = mesh.material as THREE.Material | null;
       if (prev && typeof prev.dispose === "function") prev.dispose();
       mesh.material = new THREE.MeshPhysicalMaterial({
@@ -342,6 +427,17 @@ function Model({
         geom.attributes.normal.array as Float32Array,
       );
 
+      parts.push({
+        mesh,
+        geometry: geom,
+        form: formPos,
+        sphere: new Float32Array(formPos.length),
+        normals: originalNormals.current,
+      });
+      matrices.push(
+        new THREE.Matrix4().multiplyMatrices(sceneInverse, mesh.matrixWorld),
+      );
+
       // Start visually as a sphere when playing the archive intro morph.
       if (introMorphRef.current && spherePositions.current) {
         const sph = spherePositions.current;
@@ -353,12 +449,50 @@ function Model({
         morphRef.current = 0;
       }
     });
-  }, [modelPath, scene, fitTargetSize]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (photoTexture && parts.length) {
+      assignUnifiedSpherePose(parts, matrices);
+      const photoMaterial = createMemoryPhotoMaterial(
+        photoTexture,
+        1 - easeSoftMorph(morphRef.current),
+      );
+      photoMaterialRef.current = photoMaterial;
+      parts.forEach((part, i) => {
+        part.mesh.geometry = part.geometry;
+        setPhotoUvAttribute(part.geometry, buildPhotoUv(part.sphere, matrices[i]));
+        attachMemoryPhotoOverlay(part.mesh, photoMaterial);
+        const attr = part.geometry.attributes.position;
+        if (introMorphRef.current) {
+          const sph = part.sphere;
+          for (let j = 0; j < attr.count; j++) {
+            attr.setXYZ(j, sph[j * 3], sph[j * 3 + 1], sph[j * 3 + 2]);
+          }
+          attr.needsUpdate = true;
+          part.geometry.computeVertexNormals();
+        }
+      });
+      // Last mesh still drives the no-photo fallback refs; photo path morphs all.
+      const last = parts[parts.length - 1];
+      originalPositions.current = last.form;
+      spherePositions.current = last.sphere;
+      originalNormals.current = last.normals;
+      meshRef.current = last.mesh;
+      morphPartsRef.current = parts;
+    }
+
+    return () => {
+      detachMemoryPhotoOverlays(scene);
+      photoMaterialRef.current?.dispose();
+      photoMaterialRef.current = null;
+      morphPartsRef.current = [];
+    };
+  }, [modelPath, scene, fitTargetSize, photoTexture]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tint update — separate effect so we never re-apply center/scale on preset switch
   useEffect(() => {
     scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return;
+      if (child.name === MEMORY_PHOTO_OVERLAY_NAME) return;
       const m = (child as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
       if (!m?.isMeshPhysicalMaterial) return;
       m.color.set(matColor);
@@ -409,11 +543,25 @@ function Model({
       floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
 
     // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in
-    if (
-      originalPositions.current &&
-      spherePositions.current &&
-      meshRef.current?.geometry?.attributes?.position
-    ) {
+    const photoParts = morphPartsRef.current;
+    const morphMeshes =
+      photoParts.length > 0
+        ? photoParts
+        : originalPositions.current &&
+            spherePositions.current &&
+            meshRef.current?.geometry
+          ? [
+              {
+                mesh: meshRef.current,
+                geometry: meshRef.current.geometry,
+                form: originalPositions.current,
+                sphere: spherePositions.current,
+                normals: originalNormals.current,
+              },
+            ]
+          : [];
+
+    if (morphMeshes.length > 0) {
       // Advance intro morph inside the render loop (no React setState per frame).
       if (introMorphRef.current && morphRef.current < 1) {
         const dur = Math.max(0.05, introDurationRef.current);
@@ -425,61 +573,66 @@ function Model({
       const formBlend = introMorphRef.current
         ? easeOrganicGrowth(mt)
         : easeSoftMorph(mt);
+      setMemoryPhotoFade(photoMaterialRef.current, 1 - formBlend);
       // Keep surface detail quiet until the body has mostly emerged.
       const detailGain =
         mt < 0.62 ? 0 : Math.pow((mt - 0.62) / 0.38, 2);
 
-      const pos = meshRef.current.geometry.attributes.position;
-      const form = originalPositions.current;
-      const sph = spherePositions.current;
-      const norms = originalNormals.current;
       const f = fluidity * 0.6 * detailGain;
-      const useBump = !!norms && bumpAmount > 1e-9 && detailGain > 1e-4;
 
-      for (let i = 0; i < pos.count; i++) {
-        const i3 = i * 3;
-        const sx = sph[i3];
-        const sy = sph[i3 + 1];
-        const sz = sph[i3 + 2];
-        const ox = form[i3];
-        const oy = form[i3 + 1];
-        const oz = form[i3 + 2];
+      for (const part of morphMeshes) {
+        const pos = part.geometry.attributes.position;
+        if (!pos) continue;
+        const form = part.form;
+        const sph = part.sphere;
+        const norms = part.normals;
+        const useBump = !!norms && bumpAmount > 1e-9 && detailGain > 1e-4;
 
-        let px = sx + (ox - sx) * formBlend;
-        let py = sy + (oy - sy) * formBlend;
-        let pz = sz + (oz - sz) * formBlend;
+        for (let i = 0; i < pos.count; i++) {
+          const i3 = i * 3;
+          const sx = sph[i3];
+          const sy = sph[i3 + 1];
+          const sz = sph[i3 + 2];
+          const ox = form[i3];
+          const oy = form[i3 + 1];
+          const oz = form[i3 + 2];
 
-        const wave =
-          f > 0
-            ? Math.sin(ox * 2.5 + t * f * 3) *
-              Math.cos(oz * 2.5 + t * f * 2) *
-              0.08 *
-              f
-            : 0;
-        py += wave;
+          let px = sx + (ox - sx) * formBlend;
+          let py = sy + (oy - sy) * formBlend;
+          let pz = sz + (oz - sz) * formBlend;
 
-        if (useBump && norms) {
-          const nx = norms[i3];
-          const ny = norms[i3 + 1];
-          const nz = norms[i3 + 2];
-          const n1 = Math.sin(ox * density) * Math.cos(oy * density);
-          const n2 = Math.sin(oy * density) * Math.cos(oz * density);
-          const n3 = Math.sin(oz * density) * Math.cos(ox * density);
-          const raw = (n1 + n2 + n3) / 3;
-          const shaped = Math.pow(
-            Math.max(0, raw),
-            1.0 - bumpSpike * 0.98,
-          );
-          const amount = shaped * bumpAmount * 0.25 * detailGain;
-          px += nx * amount;
-          py += ny * amount;
-          pz += nz * amount;
+          const wave =
+            f > 0
+              ? Math.sin(ox * 2.5 + t * f * 3) *
+                Math.cos(oz * 2.5 + t * f * 2) *
+                0.08 *
+                f
+              : 0;
+          py += wave;
+
+          if (useBump && norms) {
+            const nx = norms[i3];
+            const ny = norms[i3 + 1];
+            const nz = norms[i3 + 2];
+            const n1 = Math.sin(ox * density) * Math.cos(oy * density);
+            const n2 = Math.sin(oy * density) * Math.cos(oz * density);
+            const n3 = Math.sin(oz * density) * Math.cos(ox * density);
+            const raw = (n1 + n2 + n3) / 3;
+            const shaped = Math.pow(
+              Math.max(0, raw),
+              1.0 - bumpSpike * 0.98,
+            );
+            const amount = shaped * bumpAmount * 0.25 * detailGain;
+            px += nx * amount;
+            py += ny * amount;
+            pz += nz * amount;
+          }
+
+          pos.setXYZ(i, px, py, pz);
         }
-
-        pos.setXYZ(i, px, py, pz);
+        pos.needsUpdate = true;
+        part.geometry.computeVertexNormals();
       }
-      pos.needsUpdate = true;
-      meshRef.current.geometry.computeVertexNormals();
     } else if (
       originalPositions.current &&
       meshRef.current?.geometry?.attributes?.position
@@ -633,6 +786,8 @@ interface SceneViewerProps {
   /** Archive/revisit: play sphere→form organic growth morph once on mount. */
   introMorph?: boolean;
   introMorphDuration?: number;
+  /** Optional memory photo wrapped on the sphere; fades out as the form grows. */
+  memoryPhotoUrl?: string;
 }
 
 // ─── Main Scene ───────────────────────────────────────────────────────────────
@@ -662,6 +817,7 @@ export function SceneViewer({
   morphProgress = 1,
   introMorph = false,
   introMorphDuration = 5.5,
+  memoryPhotoUrl,
 }: SceneViewerProps) {
   // Camera settings calibrated so fitTargetSize fills ~60-65% of viewport height
   // (whole shape visible with breathing room). Formula: cameraZ = fitTargetSize / (2*tan(fov/2) * 0.65)
@@ -805,28 +961,58 @@ export function SceneViewer({
         />
         <Environment preset="city" environmentIntensity={1.5} />
         <Suspense fallback={<Loader />}>
-          <Model
-            key={`${modelPath}-${introMorph ? "intro" : "static"}`}
-            modelPath={modelPath}
-            matColor={matColor}
-            matAttenuationColor={matAttenuationColor}
-            matSheenColor={matSheenColor}
-            autoRotate={autoRotate}
-            floatAmplitude={floatAmplitude}
-            fluidity={safeFluidity}
-            evolve={safeEvolve}
-            oscillatingEvolve={shapeBuildOscillatingEvolve}
-            still={still}
-            bumpAmount={safeBumpAmount}
-            bumpSpike={safeBumpSpike}
-            density={safeDensity}
-            matOpacity={matOpacity}
-            fitTargetSize={fitTargetSize}
-            morphProgress={morphProgress}
-            introMorph={introMorph}
-            introMorphDuration={introMorphDuration}
-            onBounds={handleBounds}
-          />
+          {memoryPhotoUrl ? (
+            <MemoryPhotoTexture url={memoryPhotoUrl}>
+              {(photoTexture) => (
+                <Model
+                  key={`${modelPath}-${introMorph ? "intro" : "static"}`}
+                  modelPath={modelPath}
+                  matColor={matColor}
+                  matAttenuationColor={matAttenuationColor}
+                  matSheenColor={matSheenColor}
+                  autoRotate={autoRotate}
+                  floatAmplitude={floatAmplitude}
+                  fluidity={safeFluidity}
+                  evolve={safeEvolve}
+                  oscillatingEvolve={shapeBuildOscillatingEvolve}
+                  still={still}
+                  bumpAmount={safeBumpAmount}
+                  bumpSpike={safeBumpSpike}
+                  density={safeDensity}
+                  matOpacity={matOpacity}
+                  fitTargetSize={fitTargetSize}
+                  morphProgress={morphProgress}
+                  introMorph={introMorph}
+                  introMorphDuration={introMorphDuration}
+                  photoTexture={photoTexture}
+                  onBounds={handleBounds}
+                />
+              )}
+            </MemoryPhotoTexture>
+          ) : (
+            <Model
+              key={`${modelPath}-${introMorph ? "intro" : "static"}`}
+              modelPath={modelPath}
+              matColor={matColor}
+              matAttenuationColor={matAttenuationColor}
+              matSheenColor={matSheenColor}
+              autoRotate={autoRotate}
+              floatAmplitude={floatAmplitude}
+              fluidity={safeFluidity}
+              evolve={safeEvolve}
+              oscillatingEvolve={shapeBuildOscillatingEvolve}
+              still={still}
+              bumpAmount={safeBumpAmount}
+              bumpSpike={safeBumpSpike}
+              density={safeDensity}
+              matOpacity={matOpacity}
+              fitTargetSize={fitTargetSize}
+              morphProgress={morphProgress}
+              introMorph={introMorph}
+              introMorphDuration={introMorphDuration}
+              onBounds={handleBounds}
+            />
+          )}
           {frameloop === "demand" && <DemandFrames />}
         </Suspense>
         <OrbitControls

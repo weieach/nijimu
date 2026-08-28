@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
-import { BubbleViewer, BUBBLE_BACKGROUND } from "./BubbleViewer";
+import { BubbleViewer, BUBBLE_BACKGROUND, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
 import {
   createGestureGate,
@@ -12,10 +12,20 @@ import {
 import { SANS, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+import { LightGeometryView } from "./LightGeometryView";
+import { BubbleMaterialView } from "./BubbleMaterialView";
+import memoryPhotoUrl from "../../assets/memory-photo.jpg";
+import {
+  DEFAULT_BUBBLE_AMBIENTS,
+  DEFAULT_BUBBLE_LIGHTS,
+  EditableLight,
+  AmbientFill,
+  TransformMode,
+} from "../lib/sceneLights";
 
 const FORM_LABELS = ["form 01", "form 02", "form 03"] as const;
 
-/** 'glass' is the original lit render; 'bubble' is the unlit fresnel variant. */
+/** 'glass' is the original lit render; 'bubble' is the fresnel + editable env lights variant. */
 type RenderVariant = "glass" | "bubble";
 
 const VARIANT_KEY = "nijimu.growVariant";
@@ -64,6 +74,33 @@ export function ShapeGrowPage() {
     }
   });
 
+  const [lightEditOpen, setLightEditOpen] = useState(false);
+  const [lights, setLights] = useState<EditableLight[]>(DEFAULT_BUBBLE_LIGHTS);
+  const [ambients, setAmbients] = useState<AmbientFill[]>(DEFAULT_BUBBLE_AMBIENTS);
+  const [selectedLightId, setSelectedLightId] = useState<string | null>(null);
+  const [transformMode, setTransformMode] = useState<TransformMode>("translate");
+  const [materialOpen, setMaterialOpen] = useState(false);
+  const [bubbleMaterial, setBubbleMaterial] = useState(DEFAULT_BUBBLE_MATERIAL);
+
+  const openLightEdit = (open: boolean) => {
+    if (open) {
+      setMaterialOpen(false);
+      setVariant("bubble");
+      try {
+        sessionStorage.setItem(VARIANT_KEY, "bubble");
+      } catch {
+        // private mode
+      }
+      setSelectedLightId((id) => id ?? "dir-key");
+    }
+    setLightEditOpen(open);
+  };
+
+  const openMaterial = (open: boolean) => {
+    if (open) setLightEditOpen(false);
+    setMaterialOpen(open);
+  };
+
   useEffect(() => {
     setTimeout(() => setFadeIn(true), 100);
     setTimeout(() => setSceneReady(true), 300);
@@ -74,6 +111,8 @@ export function ShapeGrowPage() {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "a" && e.key !== "A") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      setLightEditOpen(false);
+      setMaterialOpen(false);
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
         return;
@@ -195,21 +234,33 @@ export function ShapeGrowPage() {
           width: "100%",
           height: "100%",
           zIndex: 1,
-          pointerEvents: "none",
+          pointerEvents: lightEditOpen ? "auto" : "none",
         }}
       >
         {variant === "bubble" ? (
           <BubbleViewer
             key={`bubble-${modelPath}`}
-            autoRotate
+            autoRotate={!lightEditOpen}
             morphProgress={morphProgress}
             ready={sceneReady}
             modelPath={modelPath}
+            memoryPhotoUrl={lightEditOpen ? undefined : memoryPhotoUrl}
+            lightEditMode={lightEditOpen}
+            lights={lights}
+            onLightsChange={setLights}
+            ambients={ambients}
+            selectedLightId={selectedLightId}
+            onSelectLight={setSelectedLightId}
+            transformMode={transformMode}
+            roughness={bubbleMaterial.roughness}
+            reflectivity={bubbleMaterial.reflectivity}
+            transparency={bubbleMaterial.transparency}
+            fog={bubbleMaterial.fog}
           />
         ) : (
           <SceneViewer
             key={modelPath}
-            autoRotate={true}
+            autoRotate
             floatAmplitude={0.05}
             shapeBuildOscillatingEvolve={false}
             evolve={0}
@@ -221,16 +272,24 @@ export function ShapeGrowPage() {
             ready={sceneReady}
             matPresetIndex={0}
             modelPath={modelPath}
+            memoryPhotoUrl={memoryPhotoUrl}
           />
         )}
       </div>
 
       <div
         className="flex flex-col h-full transition-opacity duration-1000"
-        style={{ opacity: fadeIn ? 1 : 0, position: "relative", zIndex: 2 }}
+        style={{
+          opacity: fadeIn ? 1 : 0,
+          position: "relative",
+          zIndex: 2,
+          pointerEvents: lightEditOpen ? "none" : "auto",
+        }}
       >
         <PageHeader layout="block" />
 
+        {!lightEditOpen && (
+          <>
         <p
           style={{
             position: "absolute",
@@ -444,7 +503,32 @@ export function ShapeGrowPage() {
             </p>
           </div>
         )}
+          </>
+        )}
       </div>
+
+      {variant === "bubble" && (
+        <>
+          <LightGeometryView
+            open={lightEditOpen}
+            onOpenChange={openLightEdit}
+            lights={lights}
+            onLightsChange={setLights}
+            ambients={ambients}
+            onAmbientsChange={setAmbients}
+            selectedId={selectedLightId}
+            onSelect={setSelectedLightId}
+            transformMode={transformMode}
+            onTransformModeChange={setTransformMode}
+          />
+          <BubbleMaterialView
+            open={materialOpen}
+            onOpenChange={openMaterial}
+            value={bubbleMaterial}
+            onChange={setBubbleMaterial}
+          />
+        </>
+      )}
 
       <BackButton />
 

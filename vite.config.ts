@@ -33,6 +33,9 @@ export default defineConfig(({ mode }) => {
     assetsInclude: ['**/*.svg', '**/*.csv'],
 
     server: {
+      // Listen on IPv4 as well as IPv6. Node 17+ otherwise binds [::1] only,
+      // so http://127.0.0.1:5173 fails while http://localhost:5173 works.
+      host: true,
       // The workspace path contains parentheses — "nijimu (3.28)" — which
       // breaks chokidar/fsevents glob matching, so the default watcher never
       // sees file changes and the dev server serves stale modules (no HMR,
