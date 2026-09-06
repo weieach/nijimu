@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // import NewMomoryIdle from "../../imports/NewMomoryIdle"; // button hidden — cursor hint replaces it
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
-import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
+import { CHROME_GRAY, COLOR_PALETTE, MEMORY_COLORS } from "../lib/colors";
 import { SERIF } from "../lib/theme";
 import { createPuddleSimulation, PUDDLE_TUNING, PuddleSimulation } from "../lib/puddle/simulation";
 import { createRipple2dSimulation, RIPPLE2D_TUNING } from "../lib/puddle/ripple2d";
@@ -37,7 +37,7 @@ const CAPTION_LIFE_MS = RIPPLE_CADENCE.captionLifeMs;
     so they rise out of the spreading ripple rather than arriving with it. */
 const CAPTION_REVEAL_DELAY_MS = 550;
 /** Per-drop weight wobble, so no two memories land with quite the same force. */
-const INTRO_WEIGHT_JITTER = 0.15;
+const INTRO_WEIGHT_JITTER = 0.42;
 /** Ripples visually settle in ~3–4 s with the default damping; pause a bit after. */
 const SETTLE_MS = 6000;
 const SETTLE_MS_REDUCED = 2000;
@@ -83,16 +83,16 @@ const HINT_KNOCKOUT_FEATHER = 0.7; // viewBox units
      press start   PRESS_DEPTH  (+ breathing cavity)
      press commit  COMMIT_DEPTH */
 /** Extra depth on every memory drop, over the tuned base strength. */
-const MEMORY_DEPTH = 1.5;
+const MEMORY_DEPTH = 0.82;
 /** A click — one quiet ring, near a memory's weight. Never the press flurry. */
-const TAP_DEPTH = MEMORY_DEPTH * 0.85;
+const TAP_DEPTH = MEMORY_DEPTH * 0.65;
 const TAP_RADIUS_SCALE = 1.0;
-/** The hold's opening drop — deeper than a memory, shy of the old rain-maker. */
-const PRESS_DEPTH = MEMORY_DEPTH * 1.45;
-const PRESS_RADIUS_SCALE = 1.05;
-/** The single deepest event in the app: the press committing to a new memory. */
-const COMMIT_DEPTH = MEMORY_DEPTH * 3.6;
-const COMMIT_RADIUS_SCALE = 1.5;
+/** The hold's opening drop — a soft well, not a drum. */
+const PRESS_DEPTH = 0.48;
+const PRESS_RADIUS_SCALE = 0.88;
+/** Commit: a little deeper than the hold, still shy of the old rain-maker. */
+const COMMIT_DEPTH = 1.05;
+const COMMIT_RADIUS_SCALE = 1.12;
 /** Grace period before a press opens the sustained cavity — a tap never does. */
 const PRESS_CAVITY_DELAY_MS = 220;
 
@@ -247,20 +247,38 @@ function computeAnchors(
 
 /* ───────── color: palette hex → saturated dye rgb ───────── */
 
-function dyeColorFor(colorIndex: number): [number, number, number] {
-  const hex = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length].color;
+/** Indices that still read as pigment on the paper (greys wash out). */
+const CHROMATIC_INDICES = [4, 5, 6, 7, 8];
+
+function paletteSaturation(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
   const b = parseInt(hex.slice(5, 7), 16) / 255;
-  // The palette is muted by design; push saturation so the dye reads as color
-  // in the near-black water (the iridescence ramp supplies the rest).
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max <= 1e-4 ? 0 : (max - min) / max;
+}
+
+function dyeColorFor(colorIndex: number, variety = 0): [number, number, number] {
+  const safe = Number.isFinite(colorIndex) ? Math.trunc(colorIndex) : 0;
+  let hex =
+    MEMORY_COLORS[safe] ??
+    COLOR_PALETTE[((safe % COLOR_PALETTE.length) + COLOR_PALETTE.length) % COLOR_PALETTE.length].color;
+  if (paletteSaturation(hex) < 0.16) {
+    const pick = CHROMATIC_INDICES[Math.abs(safe + variety) % CHROMATIC_INDICES.length];
+    hex = COLOR_PALETTE[pick].color;
+  }
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  // Keep a hint of hue, then wash it toward the paper — at least 70%
+  // less chroma than the previous dye boost (3.0 → 0.9).
   const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-  const boost = 3.0;
-  const saturate = (c: number) => Math.min(Math.max(lum + (c - lum) * boost, 0), 1);
-  // normalize brightness so dark palette entries (e.g. "night") still glow
-  const sr = saturate(r), sg = saturate(g), sb = saturate(b);
+  const boost = 0.9;
+  const wash = (c: number) => Math.min(Math.max(lum + (c - lum) * boost, 0), 1);
+  const sr = wash(r), sg = wash(g), sb = wash(b);
   const maxC = Math.max(sr, sg, sb, 0.001);
-  const gain = 0.85 / maxC;
+  const gain = 0.72 / maxC;
   return [sr * gain, sg * gain, sb * gain];
 }
 
@@ -557,13 +575,16 @@ export function PuddleScene({
 
     const dropAnchor = (idx: number, strengthScale = 1) => {
       const a = anchors[idx];
+      // each memory finds its own size and weight — rain, not a grid
+      const radiusJitter = 0.52 + Math.random() * 0.9;
+      const depthJitter = 0.5 + Math.random() * 0.75;
       sim.addDrop(
         a.x,
         a.y,
-        a.scale,
-        reducedMotion ? 0 : tuning.dropStrength * a.scale * strengthScale * MEMORY_DEPTH,
-        dyeColorFor(a.colorIndex),
-        a.scale * strengthScale,
+        a.scale * radiusJitter,
+        reducedMotion ? 0 : tuning.dropStrength * a.scale * strengthScale * MEMORY_DEPTH * depthJitter,
+        dyeColorFor(a.colorIndex, a.introIndex),
+        0.95 + Math.random() * 0.4,
       );
       // reduced motion has no ripple to follow, so the words come straight away
       showCaption(idx, reducedMotion ? 0 : CAPTION_REVEAL_DELAY_MS);
@@ -578,12 +599,14 @@ export function PuddleScene({
       .sort((p, q) => anchors[p].introIndex - anchors[q].introIndex);
     const intro = introSchedule(introOrder.length);
 
+    // a quiet stain for every memory first, so the field is never half-blank
+    for (const a of anchors) {
+      sim.addDrop(a.x, a.y, a.scale * 1.7, 0, dyeColorFor(a.colorIndex, a.introIndex), 0.7);
+    }
+    sim.runDyeSettle(140);
+
     if (reducedMotion) {
-      // No wave animation: pre-splat all dye, bleed it, show a settled still.
-      for (const a of anchors) {
-        sim.addDrop(a.x, a.y, a.scale * 1.3, 0, dyeColorFor(a.colorIndex), a.scale);
-      }
-      sim.runDyeSettle(120);
+      // No wave animation: bleed the stains and show a settled still.
       sim.render(0);
     } else {
       introOrder.forEach((anchorIdx, order) => {
@@ -605,7 +628,7 @@ export function PuddleScene({
           let idx = Math.floor(Math.random() * anchors.length);
           if (idx === lastDripIdx && anchors.length > 1) idx = (idx + 1) % anchors.length;
           lastDripIdx = idx;
-          dropAnchor(idx, 0.45 + Math.random() * 0.3);
+          dropAnchor(idx, 0.16 + Math.random() * 0.95);
         }
         scheduleDrip();
       }, dripGapMs());
@@ -613,6 +636,68 @@ export function PuddleScene({
     if (!reducedMotion) {
       timeouts.push(setTimeout(scheduleDrip, intro.endMs));
     }
+
+    /* wind: long stillness, then a brush or a small patch of cat's-paws —
+       depth wanders, then the water rests again. */
+    const scheduleWind = () => {
+      const rest = 4500 + Math.random() * 14000;
+      timeouts.push(
+        setTimeout(() => {
+          if (document.hidden || reducedMotion || underwater()) {
+            scheduleWind();
+            return;
+          }
+          if (Math.random() < 0.28) {
+            scheduleWind();
+            return;
+          }
+          if (Math.random() < 0.62) {
+            const x0 = 0.04 + Math.random() * 0.28;
+            const y0 = 0.12 + Math.random() * 0.72;
+            const dx = 0.5 + Math.random() * 0.4;
+            const dy = (Math.random() - 0.5) * 0.4;
+            const steps = 6 + Math.floor(Math.random() * 10);
+            const base = 0.18 + Math.random() * 0.7;
+            for (let i = 0; i < steps; i++) {
+              const t = steps === 1 ? 1 : i / (steps - 1);
+              const delay = i * (75 + Math.random() * 110);
+              const depth =
+                base * (0.4 + Math.random() * 0.95) * (0.55 + 0.7 * Math.sin(t * Math.PI));
+              timeouts.push(
+                setTimeout(() => {
+                  if (underwater()) return;
+                  sim.addStir(
+                    Math.min(0.95, Math.max(0.05, x0 + dx * t + (Math.random() - 0.5) * 0.05)),
+                    Math.min(0.95, Math.max(0.05, y0 + dy * t + (Math.random() - 0.5) * 0.05)),
+                    depth,
+                  );
+                  wake();
+                }, delay),
+              );
+            }
+          } else {
+            const cx = 0.18 + Math.random() * 0.64;
+            const cy = 0.18 + Math.random() * 0.64;
+            const n = 3 + Math.floor(Math.random() * 4);
+            for (let i = 0; i < n; i++) {
+              timeouts.push(
+                setTimeout(() => {
+                  if (underwater()) return;
+                  sim.addStir(
+                    cx + (Math.random() - 0.5) * 0.14,
+                    cy + (Math.random() - 0.5) * 0.14,
+                    0.12 + Math.random() * 0.5,
+                  );
+                  wake();
+                }, i * (70 + Math.random() * 160)),
+              );
+            }
+          }
+          scheduleWind();
+        }, rest),
+      );
+    };
+    if (!reducedMotion) scheduleWind();
 
     /* ─── pointer: stir (colorless) on move, drop on tap ─── */
     const toUv = (e: PointerEvent): [number, number] => {

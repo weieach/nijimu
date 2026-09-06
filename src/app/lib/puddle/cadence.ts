@@ -53,22 +53,21 @@ export interface RippleCadenceTuning {
 
 export const RIPPLE_CADENCE: RippleCadenceTuning = {
   captionLifeMs: 7000,
-  // ~2.8 s between opening drops: the next memory arrives while the last is
-  // still legible, so the field feels inhabited without ever crowding.
-  introConcurrency: 2.5,
-  idleConcurrency: 1.0,
-  openingDelayMs: 1000,
-  introGapEarly: 0.55,
-  introGapLate: 1.75,
-  openingEvenDrops: 3,
-  gapJitter: 0.35,
-  pairChance: 0.14,
-  pairGapFraction: 0.22,
-  pauseChance: 0.12,
-  pauseGapFactor: 1.8,
-  minGapMs: 800,
+  // sparser, less metronomic: rain finding gaps, not a grid.
+  introConcurrency: 2.2,
+  idleConcurrency: 1.15,
+  openingDelayMs: 900,
+  introGapEarly: 0.28,
+  introGapLate: 2.8,
+  openingEvenDrops: 0,
+  gapJitter: 0.72,
+  pairChance: 0.18,
+  pairGapFraction: 0.14,
+  pauseChance: 0.18,
+  pauseGapFactor: 3.2,
+  minGapMs: 380,
   dripBias: 1.6,
-  maxQuietMs: 3200,
+  maxQuietMs: 5200,
 };
 
 /** The gap a given density implies, in ms. */

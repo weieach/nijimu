@@ -19,10 +19,6 @@ import { BubbleMaterialView } from "./BubbleMaterialView";
 import { BubblePhotoView } from "./BubblePhotoView";
 import { BubbleFormView } from "./BubbleFormView";
 import { BubbleWrapView } from "./BubbleWrapView";
-import memoryPhotoUrl from "../../assets/memory-photo.jpg";
-import memoryPhoto02Url from "../../assets/memory-photo-02.png";
-
-const WRAP_PHOTOS = [memoryPhotoUrl, memoryPhoto02Url] as const;
 import { MEMORY_PHOTO_FILTER_DEFAULTS } from "./MemoryPhotoLayer";
 import {
   DEFAULT_BUBBLE_AMBIENTS,
@@ -31,6 +27,11 @@ import {
   AmbientFill,
   TransformMode,
 } from "../lib/sceneLights";
+import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
+import memoryPhotoUrl from "../../assets/memory-photo.jpg";
+import memoryPhoto02Url from "../../assets/memory-photo-02.png";
+
+const WRAP_PHOTOS = [memoryPhotoUrl, memoryPhoto02Url] as const;
 
 const FORM_LABELS = ["form 01", "form 02", "form 03"] as const;
 const BUBBLE_TABS = ["shape", "feeling", "distance"] as const;
@@ -84,7 +85,12 @@ export function ShapeGrowPage() {
   const [debugPalmY, setDebugPalmY] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const targetMorphRef = useRef(0);
+  const draft = loadFormDraft();
+  const startingMorph =
+    asFiniteNumber(location.state?.morphProgress) ??
+    asFiniteNumber(draft?.morphProgress) ??
+    0;
+  const targetMorphRef = useRef(startingMorph);
   const targetVividnessRef = useRef(1);
   const targetFeelingRef = useRef(MEMORY_PHOTO_FILTER_DEFAULTS.feeling);
   const smoothingFrameRef = useRef<number | null>(null);
@@ -98,9 +104,9 @@ export function ShapeGrowPage() {
 
   const cameraPermission = location.state?.cameraPermission ?? "denied";
   const [modelPath, setModelPath] = useState(
-    () => location.state?.modelPath ?? MODEL_PATHS[0],
+    () => location.state?.modelPath ?? draft?.modelPath ?? MODEL_PATHS[0],
   );
-  const [morphProgress, setMorphProgress] = useState(0);
+  const [morphProgress, setMorphProgress] = useState(startingMorph);
   const selectedIndex = Math.max(
     0,
     MODEL_PATHS.findIndex((p) => p === modelPath),
@@ -116,12 +122,18 @@ export function ShapeGrowPage() {
   variantRef.current = variant;
 
   const [lightEditOpen, setLightEditOpen] = useState(false);
-  const [lights, setLights] = useState<EditableLight[]>(DEFAULT_BUBBLE_LIGHTS);
-  const [ambients, setAmbients] = useState<AmbientFill[]>(DEFAULT_BUBBLE_AMBIENTS);
+  const [lights, setLights] = useState<EditableLight[]>(
+    () => location.state?.lights ?? draft?.lights ?? DEFAULT_BUBBLE_LIGHTS,
+  );
+  const [ambients, setAmbients] = useState<AmbientFill[]>(
+    () => location.state?.ambients ?? draft?.ambients ?? DEFAULT_BUBBLE_AMBIENTS,
+  );
   const [selectedLightId, setSelectedLightId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [materialOpen, setMaterialOpen] = useState(false);
-  const [bubbleMaterial, setBubbleMaterial] = useState(DEFAULT_BUBBLE_MATERIAL);
+  const [bubbleMaterial, setBubbleMaterial] = useState(
+    () => location.state?.bubbleMaterial ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL,
+  );
   const [photoOpen, setPhotoOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [wrapOpen, setWrapOpen] = useState(false);
@@ -220,6 +232,16 @@ export function ShapeGrowPage() {
     setTimeout(() => setFadeIn(true), 100);
     setTimeout(() => setSceneReady(true), 300);
   }, []);
+
+  useEffect(() => {
+    saveFormDraft({
+      modelPath,
+      morphProgress,
+      bubbleMaterial,
+      lights,
+      ambients,
+    });
+  }, [modelPath, morphProgress, bubbleMaterial, lights, ambients]);
 
   // "A" swaps the render variant; gesture state and form choice carry over.
   useEffect(() => {
@@ -355,6 +377,13 @@ export function ShapeGrowPage() {
   };
 
   const handleContinue = () => {
+    saveFormDraft({
+      modelPath,
+      morphProgress,
+      bubbleMaterial,
+      lights,
+      ambients,
+    });
     navigate("/record/shape/color", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
@@ -708,22 +737,6 @@ export function ShapeGrowPage() {
           />
         )}
 
-        <PillButton
-          label="continue"
-          onClick={handleContinue}
-          trailing="›"
-          className="transition-opacity duration-500"
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 40,
-            zIndex: 10,
-            boxSizing: "border-box",
-            width: 148,
-          }}
-        />
-
         {debugMode && (
           <div
             style={{
@@ -831,6 +844,23 @@ export function ShapeGrowPage() {
             onSelect={setWrapIndex}
           />
         </>
+      )}
+
+      {!lightEditOpen && (
+        <PillButton
+          label="continue"
+          onClick={handleContinue}
+          trailing="›"
+          className="transition-opacity duration-500"
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 40,
+            zIndex: 30,
+            pointerEvents: "auto",
+          }}
+        />
       )}
 
       <BackButton />

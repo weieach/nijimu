@@ -5,6 +5,7 @@ import {
   resetShapeBuildEvolveAnchor,
   stripLegacyEvolveFromState,
 } from "../hooks/useOscillatingEvolve";
+import { clearFormDraft } from "../lib/formDraft";
 import { SANS, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
@@ -53,6 +54,7 @@ export function BuildObjectPage() {
 
   const handleContinue = () => {
     resetShapeBuildEvolveAnchor();
+    clearFormDraft();
     // Camera only — form selection happens on /record/shape/grow
     navigate("/record/shape/grow", {
       state: {

@@ -252,7 +252,7 @@ void main() {
 
   // scanned-paper grain: uniform, slightly heavier in the midtones
   float l = dot(col, vec3(0.299, 0.587, 0.114));
-  float g = hash(floor(gl_FragCoord.xy * 0.75)) - 0.5;
+  float g = hash(gl_FragCoord.xy) - 0.5;
   col += g * u_grain * (0.55 + 0.45 * (4.0 * l * (1.0 - l)));
 
   // soft edge falloff
@@ -408,11 +408,15 @@ export function createRipple2dSimulation(
   });
   if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
 
-  /* sim resolution: long edge <= 512, aspect from the mount-time viewport.
+  /* sim resolution: long edge <= 1024, aspect from the mount-time viewport.
      Fixed for the lifetime of the sim so resizes never wipe the state. */
-  const cw = Math.max(canvas.clientWidth, 1);
-  const ch = Math.max(canvas.clientHeight, 1);
-  const simScale = 512 / Math.max(cw, ch);
+  let cw = canvas.clientWidth;
+  let ch = canvas.clientHeight;
+  if (cw < 64 || ch < 64) {
+    cw = window.innerWidth;
+    ch = window.innerHeight;
+  }
+  const simScale = 1024 / Math.max(cw, ch, 1);
   const simW = Math.max(Math.round(cw * Math.min(simScale, 1)), 32);
   const simH = Math.max(Math.round(ch * Math.min(simScale, 1)), 32);
   const texel: [number, number] = [1 / simW, 1 / simH];

@@ -1,7 +1,7 @@
 // Rain-puddle simulation for the "puddle" homescreen shader variant.
 //
 // Framework-free WebGL2. Two coupled ping-pong FBO pairs, both simulated at
-// quarter-ish resolution (long edge <= 512) and rendered full-res:
+// half-ish resolution (long edge <= 1024) and rendered full-res:
 //
 //   height (RG16F)  — R = surface height, G = velocity. Damped wave equation,
 //                     stepped at a fixed 60 Hz substep so tuning is stable.
@@ -64,37 +64,27 @@ export interface PuddleTuning {
 }
 
 export const PUDDLE_TUNING: PuddleTuning = {
-  // water, not milk: fast propagation, damping tuned so a ring dies just as
-  // it reaches ~half the screen in diameter — no ghost swells past that.
-  // (waveSpeed must stay < 0.5.) Radius and strength stay gentle: the calm
-  // comes from wide, low swells, the water-feel from how fast they travel.
-  waveSpeed: 0.32,
-  waveDamping: 0.985,
-  heightRetention: 0.9992,
-  dropRadius: 0.032,
-  dropStrength: 0.85,
-  dropDyeAmount: 1.0,
-  dyeDecayHalfLife: 75,
-  dyeDiffusion: 0.09,
-  // dye rides the expanding rings well outward, so a memory's color travels
-  // with its ripple group instead of staying a static blot
-  dyeAdvection: 2.2,
-  iridescenceStrength: 1.0,
-  filmScale: 7.0,
-  grainAmount: 0.05,
-  idleShimmer: 0.0035,
-  // the shimmer's wavelets are ~0.12 uv across, so this carries the pattern
-  // about two thirds of a wavelength per second — a current you can follow
-  // without the surface ever looking like it is scrolling
-  idleDrift: 0.08,
-  // the held well sits far deeper than a memory's crater, and breathes fast —
-  // a ring sheds from its rim every cycle, so holding reads as a live pulse
-  holdDepth: 0.44,
-  // a held press opens with a short flurry, then settles into a calm breath —
-  // enough rings to feel alive, not so many the surface rains
-  holdPulsePeriod: 1.05,
-  holdPulseStartPeriod: 0.6,
-  holdPulseSettle: 0.85,
+  // quieter water: rings travel a little slower and die sooner, so they
+  // never march across the field as one even family.
+  waveSpeed: 0.24,
+  waveDamping: 0.976,
+  heightRetention: 0.9988,
+  dropRadius: 0.046,
+  dropStrength: 0.32,
+  dropDyeAmount: 0.55,
+  dyeDecayHalfLife: 140,
+  dyeDiffusion: 0.34,
+  dyeAdvection: 2.1,
+  iridescenceStrength: 0.28,
+  filmScale: 5.4,
+  grainAmount: 0.07,
+  idleShimmer: 0.0032,
+  idleDrift: 0.03,
+  // a held press is a soft well, not a drum — shallow, slow breath
+  holdDepth: 0.14,
+  holdPulsePeriod: 1.75,
+  holdPulseStartPeriod: 1.15,
+  holdPulseSettle: 1.35,
 };
 
 /* ───────── support probe ───────── */
@@ -245,6 +235,17 @@ float hash(vec2 p) {
   return fract((p3.x + p3.y) * p3.z);
 }
 
+float valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 void main() {
   float hL = texture(u_height, v_uv - vec2(u_texel.x, 0.0)).r;
   float hR = texture(u_height, v_uv + vec2(u_texel.x, 0.0)).r;
@@ -253,66 +254,80 @@ void main() {
   float h = texture(u_height, v_uv).r;
   vec2 grad = vec2(hR - hL, hT - hB);
 
-  // idle shimmer: a slow, smooth perturbation of the surface normal. The field
-  // is sampled at a sliding point, so the whole pattern travels as one body of
-  // water; each wavelet keeps a small oscillation of its own, well under the
-  // drift, so the surface morphs as it goes instead of sliding like wallpaper.
-  vec2 suv = v_uv + u_time * u_drift;
-  grad += u_shimmer * vec2(
-    sin(dot(suv, vec2(41.0, 29.0)) + u_time * 0.22) + sin(dot(suv, vec2(13.0, 53.0)) - u_time * 0.14),
-    cos(dot(suv, vec2(23.0, 47.0)) - u_time * 0.19) + cos(dot(suv, vec2(59.0, 17.0)) + u_time * 0.12)
+  // wind on a still lake — long lulls, then a sheet of cat's-paws that
+  // drifts across. sometimes barely there, sometimes a little deeper. slow.
+  // the old paired-sine field read as wallpaper; this one spends most of
+  // its life near zero and only wakes in a traveling band.
+  float breath = sin(u_time * 0.047) * sin(u_time * 0.029 + 1.7);
+  breath = pow(max(breath, 0.0), 1.7);
+
+  vec2 dirA = normalize(vec2(0.86, 0.26 + 0.14 * sin(u_time * 0.019)));
+  vec2 dirB = normalize(vec2(-0.18, 0.93));
+  float passA = dot(v_uv, dirA) - fract(u_time * 0.034) * 1.75 + 0.12;
+  float passB = dot(v_uv, dirB) - fract(u_time * 0.019 + 0.37) * 1.55;
+  float sheetA = exp(-passA * passA * 20.0);
+  float sheetB = exp(-passB * passB * 32.0) * 0.5;
+  float local = max(sheetA, sheetB) * (0.15 + 0.85 * breath);
+
+  vec2 across = vec2(-dirA.y, dirA.x);
+  float broken = 0.5 + 0.5 * sin(dot(v_uv, across) * 9.5 + u_time * 0.33)
+               + 0.28 * sin(dot(v_uv, vec2(6.4, 3.8)) + u_time * 0.15);
+  local *= clamp(broken, 0.15, 1.15);
+
+  float amp = u_shimmer * (0.06 + 2.6 * local);
+  vec2 suv = v_uv * vec2(1.0, 1.12);
+  grad += amp * vec2(
+    sin(dot(suv, vec2(14.7, 6.2)) + u_time * 0.31 + sin(u_time * 0.055) * 1.6)
+      + 0.38 * sin(dot(suv, vec2(5.1, 17.4)) - u_time * 0.2),
+    cos(dot(suv, vec2(9.4, 13.8)) - u_time * 0.25 + 1.3)
+      + 0.32 * cos(dot(suv, vec2(18.6, 4.5)) + u_time * 0.14)
   );
 
   float slope = length(grad);
-  vec3 n = normalize(vec3(-grad * 20.0, 1.0));
+  vec3 n = normalize(vec3(-grad * 11.0, 1.0));
 
   vec4 dyeS = texture(u_dye, v_uv);
   float dyeAmt = max(dyeS.r, max(dyeS.g, dyeS.b));
 
-  // chroma restore: pull mixed dye back toward its dominant hue so many
-  // overlapping memories stay distinct instead of averaging to mud
+  // keep hue barely present — 70% less chroma restore than before (2.2 → 0.66)
   float lum = dot(dyeS.rgb, vec3(0.299, 0.587, 0.114));
-  vec3 dye = clamp(mix(vec3(lum), dyeS.rgb, 2.2), 0.0, 4.0);
+  vec3 dye = clamp(mix(vec3(lum), dyeS.rgb, 0.66), 0.0, 4.0);
   vec3 tint = dye / max(max(dye.r, max(dye.g, dye.b)), 1e-4);
 
-  // color only where the surface has been disturbed; kept translucent so the
-  // water never goes dark — a wash, not a stain
-  float mask = min(smoothstep(0.01, 1.1, dyeAmt), 0.62);
+  // a thin, blurry wash — never a solid disk
+  float mask = min(smoothstep(0.004, 1.4, dyeAmt), 0.32);
 
-  // the original home background, with a whisper of paper grain
-  vec3 base = vec3(0.9294, 0.9294, 0.9333);
-  base += (hash(floor(gl_FragCoord.xy * 0.75)) - 0.5) * u_grain * u_postFx;
+  // paper under the water. ripples refract it (uv warp by the slope), so a
+  // moving ring reads as bending something behind the surface, not as an
+  // opaque white disc. still water stays almost see-through.
+  vec2 warp = grad * 8.0;
+  vec2 pu = v_uv + warp;
+  float fiber = valueNoise(pu * vec2(2200.0, 2800.0));
+  float flock = valueNoise(pu * vec2(110.0, 140.0) + 8.3);
+  float vein = valueNoise(pu * vec2(28.0, 36.0) + 19.0);
+  float paperN = fiber * 0.42 + flock * 0.36 + vein * 0.22;
+  vec3 paper = vec3(0.922, 0.918, 0.910) + (paperN - 0.5) * vec3(0.032, 0.028, 0.024);
+  paper += (hash(gl_FragCoord.xy) - 0.5) * u_grain * 0.55 * u_postFx;
 
-  // watercolor bleed: dye multiplies onto the light surface, tint lifted
-  // toward white so even dark palette entries stay a soft gray-wash
-  tint = mix(tint, vec3(1.0), 0.24);
-  vec3 col = base * mix(vec3(1.0), tint, mask * 0.8);
+  // watercolor as a light stain over the paper
+  tint = mix(tint, vec3(1.0), 0.62);
+  float cover = mix(0.16, 0.42, mask);
+  vec3 col = mix(paper, paper * mix(vec3(1.0), tint, mask * 0.45), cover);
 
-  // thin-film iridescence on everything disturbed (dye or live ripples),
-  // swept through a soft japanese-gradient palette — sakura pink, lavender,
-  // mizu blue, pale gold — rather than a full oil-slick rainbow. The local
-  // dye hue rotates the palette's phase, so each memory's ripple group
-  // interferes in its own gradient rather than one shared rainbow.
-  float iriMask = max(mask, smoothstep(0.004, 0.08, slope) * 0.5);
+  // thin-film iridescence — quieter, so the paper still shows through
+  float iriMask = max(mask, smoothstep(0.004, 0.08, slope) * 0.35);
   float phase = u_filmScale * (dyeAmt * 2.6 + h * 5.0 + slope * 10.0)
               + dot(tint, vec3(0.0, 2.4, 4.8)) * mask;
   vec3 film = vec3(0.92, 0.88, 0.90) + vec3(0.13, 0.14, 0.13) * cos(phase + vec3(0.0, 1.35, 2.7));
   col *= mix(vec3(1.0), film, iriMask * u_iri);
 
-  // wave shading: crests catch light, troughs darken (flat water = exactly
-  // base). Where a memory's dye lives, the trough shadow deepens toward its
-  // hue instead of gray — each ripple group shades in its own color.
   vec3 lightDir = normalize(vec3(0.35, 0.55, 0.75));
   float diff = dot(n, lightDir) - lightDir.z;
-  col *= 1.0 + diff * 0.42;
-  // absolute-depth cue: slope shading saturates on steep rings, so past that
-  // point a harder press stopped reading. Water pressed well down darkens
-  // with its true depth; heaped crests pick up a little extra light. The
-  // floor sits just past the deepest memory, so only a press ever reaches it.
-  col *= 1.0 + clamp(h * 0.14, -0.42, 0.12);
-  col -= max(-diff, 0.0) * (vec3(1.0) - tint) * mask * 0.3;
-  float spec = pow(max(dot(reflect(-lightDir, n), vec3(0.0, 0.0, 1.0)), 0.0), 48.0);
-  col += spec * min(slope * 9.0, 1.0) * 0.09;
+  col *= 1.0 + diff * 0.12;
+  col *= 1.0 + clamp(h * 0.05, -0.12, 0.04);
+  col -= max(-diff, 0.0) * (vec3(1.0) - tint) * mask * 0.08;
+  float spec = pow(max(dot(reflect(-lightDir, n), vec3(0.0, 0.0, 1.0)), 0.0), 36.0);
+  col += spec * min(slope * 6.0, 1.0) * 0.03;
 
   // vignette, matching the original's soft rgba(0,0,0,0.08) edge
   vec2 vc = v_uv - 0.5;
@@ -380,7 +395,7 @@ void main() {
   // grain + vignette re-applied here, in final screen space — the paper
   // texture must stay glued to the glass, not magnify with the water (the
   // scene pass skips both while diving; see u_postFx there)
-  c += (hash(floor(gl_FragCoord.xy * 0.75)) - 0.5) * u_grain;
+  c += (hash(gl_FragCoord.xy) - 0.5) * u_grain;
   vec2 vc = v_uv - 0.5;
   c *= 1.0 - dot(vc, vc) * 0.16;
 
@@ -426,11 +441,11 @@ const DECAY_CADENCE = 12; // apply dye decay every N substeps (fp16 rounding, se
 /* The Worthington jet: a hard drop throws a plume up out of the water, and it
    falls back a beat later as a smaller drop — the paired concentric rings that
    make rain on water instantly recognizable. */
-const JET_MIN_STRENGTH_FRACTION = 0.5; // of dropStrength; stirs never jet
-const JET_STRENGTH = 0.4;
-const JET_RADIUS = 0.6;
-const JET_DELAY_MS = 210;
-const JET_DELAY_JITTER_MS = 130;
+const JET_MIN_STRENGTH_FRACTION = 0.88; // of dropStrength; only the rarer hard drops jet
+const JET_STRENGTH = 0.22;
+const JET_RADIUS = 0.55;
+const JET_DELAY_MS = 240;
+const JET_DELAY_JITTER_MS = 220;
 
 /** Per-frame camera state for the gallery descent. All values are final (pre-eased). */
 export interface PuddleDiveState {
@@ -575,11 +590,15 @@ export function createPuddleSimulation(
   });
   if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
 
-  /* sim resolution: long edge <= 512, aspect from the mount-time viewport.
+  /* sim resolution: long edge <= 1024, aspect from the mount-time viewport.
      Fixed for the lifetime of the sim so resizes never wipe the state. */
-  const cw = Math.max(canvas.clientWidth, 1);
-  const ch = Math.max(canvas.clientHeight, 1);
-  const simScale = 512 / Math.max(cw, ch);
+  let cw = canvas.clientWidth;
+  let ch = canvas.clientHeight;
+  if (cw < 64 || ch < 64) {
+    cw = window.innerWidth;
+    ch = window.innerHeight;
+  }
+  const simScale = 1024 / Math.max(cw, ch, 1);
   const simW = Math.max(Math.round(cw * Math.min(simScale, 1)), 32);
   const simH = Math.max(Math.round(ch * Math.min(simScale, 1)), 32);
   const texel: [number, number] = [1 / simW, 1 / simH];
@@ -738,7 +757,7 @@ export function createPuddleSimulation(
       }
       if (s.dye) {
         const a = tuning.dropDyeAmount * s.dyeScale;
-        runSplat(dye, { ...s, radius: s.radius * 1.25 }, [s.dye[0] * a, s.dye[1] * a, s.dye[2] * a, 0], 0);
+        runSplat(dye, { ...s, radius: s.radius * 2.05 }, [s.dye[0] * a, s.dye[1] * a, s.dye[2] * a, 0], 0);
       }
     }
   }
@@ -773,7 +792,7 @@ export function createPuddleSimulation(
     }
     gl!.uniform2f(heightPass.uniforms.u_press, pressPoint?.[0] ?? 0, pressPoint?.[1] ?? 0);
     gl!.uniform1f(heightPass.uniforms.u_pressAmp, amp);
-    gl!.uniform1f(heightPass.uniforms.u_pressRadius, tuning.dropRadius * 2.2);
+    gl!.uniform1f(heightPass.uniforms.u_pressRadius, tuning.dropRadius * 1.55);
     gl!.uniform1f(heightPass.uniforms.u_aspect, aspect);
     drawQuad();
     swap(height);

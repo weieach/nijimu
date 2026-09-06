@@ -61,6 +61,8 @@ precision highp float;
 
 uniform vec3 uCoreColor;
 uniform vec3 uRimColor;
+uniform vec3 uInterior;
+uniform float uTransmit;
 uniform float uRoughness;
 uniform float uReflectivity;
 uniform float uTransparency;
@@ -94,9 +96,13 @@ void main() {
   float rimAlpha = mix(1.0, 0.95, uTransparency);
 
   float rim = pow(clamp(facing, 0.0, 1.0), rimPower);
+  // Face-on: looking through the volume. Grazing: the film, not the dye.
+  float trans = pow(clamp(1.0 - facing, 0.0, 1.0), 1.2);
 
   vec3 col = mix(uCoreColor, uRimColor, rim);
   float alpha = mix(coreAlpha, rimAlpha, rim);
+  col = mix(col, uInterior, trans * uTransmit * 0.58);
+  alpha = clamp(alpha + trans * uTransmit * 0.15, 0.0, 1.0);
 
   // Thin bright ring just inside the silhouette — the soap-film highlight.
   float film = pow(clamp(facing, 0.0, 1.0), filmPower) * filmGain;
@@ -198,6 +204,8 @@ interface BubbleModelProps {
   fitTargetSize: number;
   coreColor: string;
   rimColor: string;
+  interiorColor: string;
+  transmit: number;
   roughness: number;
   reflectivity: number;
   transparency: number;
@@ -217,6 +225,8 @@ function BubbleModel({
   fitTargetSize,
   coreColor,
   rimColor,
+  interiorColor,
+  transmit,
   roughness,
   reflectivity,
   transparency,
@@ -290,6 +300,8 @@ function BubbleModel({
       uniforms: {
         uCoreColor: { value: new THREE.Color(coreColor) },
         uRimColor: { value: new THREE.Color(rimColor) },
+        uInterior: { value: new THREE.Color(interiorColor) },
+        uTransmit: { value: transmit },
         uRoughness: { value: roughness },
         uReflectivity: { value: reflectivity },
         uTransparency: { value: transparency },
@@ -372,10 +384,13 @@ function BubbleModel({
 
   useEffect(() => {
     const m = materialRef.current;
-    if (!m) return;
-    (m.uniforms.uCoreColor.value as THREE.Color).set(coreColor);
-    (m.uniforms.uRimColor.value as THREE.Color).set(rimColor);
-  }, [coreColor, rimColor]);
+    if (m) {
+      (m.uniforms.uCoreColor.value as THREE.Color).set(coreColor);
+      (m.uniforms.uRimColor.value as THREE.Color).set(rimColor);
+      (m.uniforms.uInterior.value as THREE.Color).set(interiorColor);
+      m.uniforms.uTransmit.value = transmit;
+    }
+  }, [coreColor, rimColor, interiorColor, transmit]);
 
   useEffect(() => {
     const m = materialRef.current;
@@ -521,6 +536,10 @@ export interface BubbleViewerProps {
   coreColor?: string;
   /** Silhouette tint — this is what reads as "bubble edge". */
   rimColor?: string;
+  /** Pale color that seeps through the volume (face-on), not the film. */
+  interiorColor?: string;
+  /** 0 = no interior wash; 1 = faint transmitted hue. */
+  transmit?: number;
   roughness?: number;
   reflectivity?: number;
   transparency?: number;
@@ -579,6 +598,8 @@ export function BubbleViewer({
   // the home field (#ededee / #9b9ba3).
   coreColor = "#8a8c94",
   rimColor = "#3a3c44",
+  interiorColor = "#e8e9ee",
+  transmit = 0,
   roughness = DEFAULT_BUBBLE_MATERIAL.roughness,
   reflectivity = DEFAULT_BUBBLE_MATERIAL.reflectivity,
   transparency = DEFAULT_BUBBLE_MATERIAL.transparency,
@@ -631,6 +652,8 @@ export function BubbleViewer({
     fitTargetSize,
     coreColor,
     rimColor,
+    interiorColor,
+    transmit,
     roughness,
     reflectivity,
     transparency,
@@ -655,6 +678,9 @@ export function BubbleViewer({
         }}
         style={{ background: lightEditMode ? "#c8c8c8" : "transparent" }}
         gl={{ antialias: true, alpha: true }}
+        onCreated={({ gl }) => {
+          if (!lightEditMode) gl.setClearColor(0x000000, 0);
+        }}
         onPointerMissed={() => {
           if (lightEditMode) onSelectLight?.(null);
         }}

@@ -2,120 +2,153 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { MATERIAL_PRESETS, MODEL_PATHS } from "./SceneViewer";
-import {
-  BubbleViewer,
-  BUBBLE_BACKGROUND,
-  DEFAULT_BUBBLE_MATERIAL,
-} from "./BubbleViewer";
-import { createGestureGate, useHandTracking } from "../hooks/useHandTracking";
+import { BubbleViewer, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
+import { AmbientSurround } from "./AmbientSurround";
+import { OklchColorField, WASH_HEIGHT } from "./OklchColorField";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
-import { COLOR_PALETTE } from "../lib/colors";
+import { landmarkDistance, useHandTracking } from "../hooks/useHandTracking";
+import {
+  DEFAULT_OKLCH,
+  Oklch,
+  meshCoreFromOklch,
+  rimFromOklch,
+  sampleField,
+  uvFromOklch,
+} from "../lib/oklch";
 import {
   DEFAULT_BUBBLE_AMBIENTS,
   DEFAULT_BUBBLE_LIGHTS,
 } from "../lib/sceneLights";
+import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
+import memoryPhotoUrl from "../../assets/memory-photo.jpg";
 import { SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
-
-function rimFromCore(hex: string): string {
-  if (!hex.startsWith("#") || hex.length < 7) return "#3a3c44";
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
-  return `#${clamp(r * 0.42)
-    .toString(16)
-    .padStart(2, "0")}${clamp(g * 0.42)
-    .toString(16)
-    .padStart(2, "0")}${clamp(b * 0.42)
-    .toString(16)
-    .padStart(2, "0")}`;
-}
 
 export function ShapeColorPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [fadeIn, setFadeIn] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  const [debugMode] = useState(true);
-  const [handDetected, setHandDetected] = useState(false);
-  const [debugPalmY, setDebugPalmY] = useState(0);
+
+  const draft = loadFormDraft();
+  const modelPath = location.state?.modelPath ?? draft?.modelPath ?? MODEL_PATHS[0];
+  const morphProgress =
+    asFiniteNumber(location.state?.morphProgress) ??
+    asFiniteNumber(draft?.morphProgress) ??
+    1;
+  const bubbleMaterial =
+    location.state?.bubbleMaterial ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL;
+  const lights = location.state?.lights ?? draft?.lights ?? DEFAULT_BUBBLE_LIGHTS;
+  const ambients = location.state?.ambients ?? draft?.ambients ?? DEFAULT_BUBBLE_AMBIENTS;
+
+  const initialOklch: Oklch = location.state?.oklch ?? DEFAULT_OKLCH;
+  const initialUv = uvFromOklch(initialOklch);
+  const [oklch, setOklch] = useState<Oklch>(initialOklch);
+  const [uv, setUv] = useState(initialUv);
+  const [handMode, setHandMode] = useState(false);
+  const [held, setHeld] = useState(false);
+  const [handsSeen, setHandsSeen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const gateRef = useRef(createGestureGate(0.04));
-  const targetColorIndexRef = useRef<number>(location.state?.colorIndex ?? 0);
+  const smoothUv = useRef(initialUv);
+  const heldRef = useRef(false);
+  const pinchCount = useRef(0);
 
-  const cameraPermission = location.state?.cameraPermission ?? "denied";
-  const modelPath = location.state?.modelPath ?? MODEL_PATHS[0];
-  const incomingMorph = location.state?.morphProgress;
-  const morphProgress =
-    typeof incomingMorph === "number" && incomingMorph > 0.08
-      ? incomingMorph
-      : 1;
-  const bubbleMaterial = location.state?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL;
-  const lights = location.state?.lights ?? DEFAULT_BUBBLE_LIGHTS;
-  const ambients = location.state?.ambients ?? DEFAULT_BUBBLE_AMBIENTS;
+  const applyPick = (nextU: number, nextV: number) => {
+    const u = clamp01(nextU);
+    const v = clamp01(nextV);
+    setUv({ u, v });
+    setOklch(sampleField(u, v));
+  };
 
-  const [selectedColorIndex, setSelectedColorIndex] = useState<number>(
-    location.state?.colorIndex ?? 0,
-  );
+  const { isTracking, error: handError } = useHandTracking({
+    enabled: handMode,
+    videoRef,
+    numHands: 1,
+    onLandmarks: (hands) => {
+      const hand = hands[0];
+      if (!hand) return;
+      setHandsSeen(true);
+      const pinch = landmarkDistance(hand[4], hand[8], true);
+      if (pinch < 0.052) {
+        pinchCount.current += 1;
+        if (!heldRef.current && pinchCount.current >= 2) {
+          heldRef.current = true;
+          setHeld(true);
+        }
+      } else {
+        pinchCount.current = 0;
+        if (heldRef.current && pinch > 0.08) {
+          heldRef.current = false;
+          setHeld(false);
+        }
+      }
+      // Selfie camera: flip X so moving right follows the wash.
+      // Color always tracks the finger.
+      const nextU = 1 - map01(hand[8].x, 0.12, 0.88);
+      const nextV = map01(hand[8].y, 0.16, 0.84);
+      smoothUv.current = {
+        u: smoothUv.current.u + (nextU - smoothUv.current.u) * 0.24,
+        v: smoothUv.current.v + (nextV - smoothUv.current.v) * 0.24,
+      };
+      applyPick(smoothUv.current.u, smoothUv.current.v);
+    },
+    onNoHands: () => setHandsSeen(false),
+  });
+
+  useEffect(() => {
+    if (handMode) {
+      smoothUv.current = uv;
+      return;
+    }
+    heldRef.current = false;
+    pinchCount.current = 0;
+    setHeld(false);
+    setHandsSeen(false);
+  }, [handMode]);
 
   useEffect(() => {
     setTimeout(() => setFadeIn(true), 100);
     setTimeout(() => setSceneReady(true), 300);
   }, []);
 
-  const { isTracking } = useHandTracking({
-    enabled: cameraPermission === "granted",
-    videoRef,
-    numHands: 1,
-    onLandmarks: (hands) => {
-      const palm = [0, 1, 5, 9, 13, 17].map((i) => hands[0][i]);
-      const palmY = palm.reduce((sum, lm) => sum + lm.y, 0) / palm.length;
+  const coreColor = meshCoreFromOklch(oklch);
+  const rimColor = rimFromOklch(oklch);
 
-      if (gateRef.current.update(palmY)) {
-        const minY = 0.5;
-        const maxY = 1.2;
-        const clampedY = Math.max(minY, Math.min(maxY, palmY));
-        const normalizedY = (clampedY - minY) / (maxY - minY);
-        targetColorIndexRef.current = Math.round(
-          (1 - normalizedY) * (COLOR_PALETTE.length - 1),
-        );
-        setSelectedColorIndex(targetColorIndexRef.current);
-      }
-      setHandDetected(true);
-      setDebugPalmY(palmY);
-    },
-    onNoHands: () => setHandDetected(false),
+  const formState = () => ({
+    ...stripLegacyEvolveFromState(location.state),
+    modelPath,
+    morphProgress,
+    bubbleMaterial,
+    lights,
+    ambients,
+    oklch,
+    cameraPermission:
+      handMode && isTracking ? "granted" : location.state?.cameraPermission,
   });
 
-  const currentIndex = Math.min(
-    Math.max(0, Math.round(selectedColorIndex)),
-    COLOR_PALETTE.length - 1,
-  );
-  const active = COLOR_PALETTE[currentIndex];
-  const coreColor = active.color;
-  const rimColor = rimFromCore(active.color);
-
-  const handleSelect = (index: number) => {
-    targetColorIndexRef.current = index;
-    setSelectedColorIndex(index);
+  const handleBackToForm = () => {
+    saveFormDraft({
+      modelPath,
+      morphProgress,
+      bubbleMaterial,
+      lights,
+      ambients,
+    });
+    navigate("/record/shape/grow", { state: formState() });
   };
 
   const handleContinue = () => {
     navigate("/record/shape/texture", {
       state: {
-        ...stripLegacyEvolveFromState(location.state),
-        modelPath,
-        morphProgress,
-        bubbleMaterial,
-        lights,
-        ambients,
+        ...formState(),
         coreColor,
         rimColor,
-        colorIndex: currentIndex,
-        matPresetIndex: Math.min(currentIndex, MATERIAL_PRESETS.length - 1),
+        matPresetIndex: Math.min(
+          Math.round((((oklch.h % 360) + 360) % 360) / 360 * (MATERIAL_PRESETS.length - 1)),
+          MATERIAL_PRESETS.length - 1,
+        ),
       },
     });
   };
@@ -123,26 +156,9 @@ export function ShapeColorPage() {
   return (
     <div
       className="relative w-full h-screen flex flex-col overflow-hidden"
-      style={{ background: BUBBLE_BACKGROUND }}
+      style={{ background: "#ededee" }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          display: debugMode && cameraPermission === "granted" ? "block" : "none",
-          position: "absolute",
-          bottom: 10,
-          right: 10,
-          width: 200,
-          height: 150,
-          border: "2px solid #fff",
-          borderRadius: 10,
-          zIndex: 1000,
-        }}
-      />
-
+      <AmbientSurround oklch={oklch} />
       <div
         style={{
           position: "fixed",
@@ -168,6 +184,7 @@ export function ShapeColorPage() {
           fog={bubbleMaterial.fog}
           lights={lights}
           ambients={ambients}
+          memoryPhotoUrl={morphProgress < 0.98 ? memoryPhotoUrl : undefined}
         />
       </div>
 
@@ -219,120 +236,119 @@ export function ShapeColorPage() {
           }}
         >
           <p style={{ margin: 0 }}>the form is settled.</p>
-          <p style={{ margin: 0 }}>now let a tint find it.</p>
-          <p style={{ margin: 0 }}>raise your palm to warm the film.</p>
-          <p style={{ margin: 0 }}>lower it toward cool.</p>
-        </div>
-
-        <div
-          style={{
-            position: "absolute",
-            bottom: cameraPermission === "denied" ? 160 : 110,
-            left: "50%",
-            transform: "translateX(-50%)",
-            display: "flex",
-            gap: 8,
-            padding: "8px 12px",
-            borderRadius: 100,
-            background: "rgba(163, 167, 175, 0.22)",
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-        >
-          {COLOR_PALETTE.map((swatch, i) => {
-            const activeSwatch = i === currentIndex;
-            return (
-              <button
-                key={swatch.id}
-                type="button"
-                onClick={() => handleSelect(i)}
-                aria-label={swatch.id}
-                title={swatch.id}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: "50%",
-                  border: activeSwatch
-                    ? "2px solid #ffffff"
-                    : "2px solid transparent",
-                  background: swatch.color,
-                  cursor: "pointer",
-                  boxShadow: activeSwatch
-                    ? "0 0 0 1px rgba(123,123,135,0.45)"
-                    : "none",
-                  transform: activeSwatch ? "scale(1.12)" : "scale(1)",
-                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                }}
-              />
-            );
-          })}
-        </div>
-
-        {cameraPermission === "denied" && (
-          <p
-            style={{
-              position: "absolute",
-              bottom: 220,
-              left: "50%",
-              transform: "translateX(-50%)",
-              fontFamily: SERIF,
-              fontSize: 15,
-              lineHeight: 1,
-              color: "rgba(42, 32, 24, 0.6)",
-              textAlign: "center",
-              whiteSpace: "nowrap",
-              zIndex: 10,
-            }}
-          >
-            (grant camera permission to access gesture control. )
+          <p style={{ margin: 0 }}>
+            {handMode
+              ? "move your hand — the wash follows. pinch for a ripple."
+              : "move across the wash below. click for a ripple."}
           </p>
-        )}
+        </div>
 
-        <PillButton
-          label="continue"
-          onClick={handleContinue}
-          trailing="›"
-          className="transition-opacity duration-500"
-          style={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 40,
-            zIndex: 10,
-          }}
-        />
-
-        {debugMode && (
-          <div
-            style={{
-              position: "absolute",
-              top: 10,
-              left: 10,
-              background: "rgba(0, 0, 0, 0.7)",
-              color: "#fff",
-              padding: "10px",
-              borderRadius: 5,
-              zIndex: 1000,
-              fontFamily: "monospace",
-              fontSize: 12,
-            }}
-          >
-            <p style={{ margin: "5px 0" }}>Camera: {cameraPermission}</p>
-            <p style={{ margin: "5px 0" }}>
-              Hand Detected: {handDetected ? "✓ Yes" : "✗ No"}
-            </p>
-            <p style={{ margin: "5px 0" }}>Palm Y: {debugPalmY.toFixed(4)}</p>
-            <p style={{ margin: "5px 0" }}>
-              Tint: {active.id} · {coreColor}
-            </p>
-            <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
-              MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
-            </p>
-          </div>
-        )}
       </div>
 
-      <BackButton />
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{
+          display: handMode ? "block" : "none",
+          position: "absolute",
+          top: 72,
+          right: 18,
+          width: 160,
+          height: 120,
+          objectFit: "cover",
+          borderRadius: 10,
+          opacity: 0.55,
+          transform: "scaleX(-1)",
+          zIndex: 30,
+          pointerEvents: "none",
+        }}
+      />
+
+      <OklchColorField
+        u={uv.u}
+        v={uv.v}
+        held={held}
+        onPick={({ u: nextU, v: nextV, color }) => {
+          setUv({ u: nextU, v: nextV });
+          setOklch(color);
+        }}
+      />
+
+      <button
+        type="button"
+        aria-pressed={handMode}
+        onClick={() => setHandMode((on) => !on)}
+        style={{
+          position: "absolute",
+          left: 22,
+          bottom: `calc(${WASH_HEIGHT} + 22px)`,
+          zIndex: 20,
+          fontFamily: SERIF,
+          fontSize: 16,
+          letterSpacing: "-0.6px",
+          color: handMode ? "#5c5c68" : "#9a9aa6",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          textTransform: "lowercase",
+          padding: 0,
+        }}
+      >
+        {handMode ? "hand on" : "hand"}
+      </button>
+
+      {handMode && (
+        <p
+          style={{
+            position: "absolute",
+            left: 22,
+            bottom: `calc(${WASH_HEIGHT} + 44px)`,
+            zIndex: 20,
+            fontFamily: SERIF,
+            fontSize: 13,
+            letterSpacing: "-0.4px",
+            color: "#9a9aa6",
+            textTransform: "lowercase",
+            margin: 0,
+          }}
+        >
+          {handError
+            ? "camera unavailable"
+            : !isTracking
+              ? "asking the camera…"
+              : !handsSeen
+                ? "looking for a hand"
+                : held
+                  ? "ripple"
+                  : "browsing"}
+        </p>
+      )}
+
+      <PillButton
+        label="continue"
+        onClick={handleContinue}
+        trailing="›"
+        className="transition-opacity duration-500"
+        style={{
+          position: "absolute",
+          left: "50%",
+          transform: "translateX(-50%)",
+          bottom: `calc(${WASH_HEIGHT} + 18px)`,
+          zIndex: 20,
+        }}
+      />
+
+      <BackButton onClick={handleBackToForm} />
     </div>
   );
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
+function map01(n: number, a: number, b: number): number {
+  return clamp01((n - a) / (b - a));
 }
