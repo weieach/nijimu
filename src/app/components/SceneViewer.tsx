@@ -20,6 +20,7 @@ import {
   setMemoryPhotoFade,
   setPhotoUvAttribute,
 } from "./MemoryPhotoLayer";
+import { FrostOverlay } from "./FrostOverlay";
 
 // Available 3D model paths
 export const MODEL_PATHS = [
@@ -1026,64 +1027,7 @@ export function SceneViewer({
         />
       </Canvas>
 
-      {/* Frosted glass blur — main layer */}
-      {canvasBlurPx > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            zIndex: 10,
-            backdropFilter: `blur(${canvasBlurPx * 1.0}px) contrast(${
-              1 + canvasBlurPx * 0.05
-            }) brightness(${1.02 + canvasBlurPx * 0.02})`,
-            WebkitBackdropFilter: `blur(${canvasBlurPx * 1.0}px) contrast(${
-              1 + canvasBlurPx * 0.05
-            }) brightness(${1.02 + canvasBlurPx * 0.02})`,
-            background: `rgba(255, 255, 255, ${canvasBlurPx * 0.008})`,
-            transition: "backdrop-filter 0.2s ease",
-          }}
-        />
-      )}
-
-      {/* Edge vignette blur — heavier blur fading in from edges */}
-      {canvasBlurPx > 0 && (
-        <div
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            zIndex: 10,
-            backdropFilter: `blur(${canvasBlurPx * 2.8}px) saturate(1.2)`,
-            WebkitBackdropFilter: `blur(${canvasBlurPx * 2.8}px) saturate(1.2)`,
-            maskImage:
-              "radial-gradient(ellipse 88% 88% at 50% 50%, transparent 40%, black 90%)",
-            WebkitMaskImage:
-              "radial-gradient(ellipse 88% 88% at 50% 50%, transparent 40%, black 90%)",
-            transition: "backdrop-filter 0.2s ease",
-          }}
-        />
-      )}
-
-      {/* Subtle noise texture */}
-      {canvasBlurPx > 0 && (
-        <div
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            zIndex: 11,
-            opacity: Math.min(canvasBlurPx * 0.018, 0.12),
-            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix in='noise' type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
-            backgroundRepeat: "repeat",
-            backgroundSize: "512px 512px",
-            mixBlendMode: "soft-light",
-            transition: "opacity 0.2s ease",
-          }}
-        />
-      )}
+      <FrostOverlay canvasBlurPx={canvasBlurPx} />
     </div>
   );
 }

@@ -10,13 +10,17 @@ import {
 } from "./SceneViewer";
 import {
   MemoryPhotoTexture,
+  applyMemoryPhotoFilter,
   attachMemoryPhotoOverlay,
   buildPhotoUv,
   createMemoryPhotoMaterial,
   detachMemoryPhotoOverlays,
+  MEMORY_PHOTO_FILTER_DEFAULTS,
   setMemoryPhotoFade,
   setPhotoUvAttribute,
+  type MemoryPhotoFilter,
 } from "./MemoryPhotoLayer";
+import { FrostOverlay, vividnessToBlurPx } from "./FrostOverlay";
 import { LightRig } from "./LightRig";
 import {
   AmbientFill,
@@ -199,6 +203,7 @@ interface BubbleModelProps {
   transparency: number;
   fog: number;
   photoTexture?: THREE.Texture | null;
+  photoFilter: MemoryPhotoFilter;
   lightEditMode?: boolean;
   lights: EditableLight[];
   ambients: AmbientFill[];
@@ -217,6 +222,7 @@ function BubbleModel({
   transparency,
   fog,
   photoTexture = null,
+  photoFilter,
   lightEditMode = false,
   lights,
   ambients,
@@ -239,6 +245,8 @@ function BubbleModel({
   const morphRef = useRef(morphProgress);
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
   const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const photoFilterRef = useRef(photoFilter);
+  photoFilterRef.current = photoFilter;
   const editMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
   const lightEditRef = useRef(lightEditMode);
   lightEditRef.current = lightEditMode;
@@ -340,6 +348,7 @@ function BubbleModel({
       photoMaterial = createMemoryPhotoMaterial(
         photoTexture,
         1 - easeSoftMorph(morphRef.current),
+        photoFilterRef.current,
       );
       photoMaterialRef.current = photoMaterial;
       parts.forEach((part, i) => {
@@ -388,6 +397,10 @@ function BubbleModel({
   }, [lights, ambients]);
 
   useEffect(() => {
+    applyMemoryPhotoFilter(photoMaterialRef.current, photoFilter);
+  }, [photoFilter]);
+
+  useEffect(() => {
     const parts = partsRef.current;
     const prev = prevEditRef.current;
     prevEditRef.current = lightEditMode;
@@ -422,6 +435,7 @@ function BubbleModel({
         photoMaterialRef.current = createMemoryPhotoMaterial(
           photoTexture,
           1 - easeSoftMorph(morphRef.current),
+          photoFilterRef.current,
         );
       }
       parts.forEach((p) => {
@@ -519,6 +533,13 @@ export interface BubbleViewerProps {
   backgroundGradient?: string;
   /** Optional memory photo wrapped on the sphere; fades out as the form grows. */
   memoryPhotoUrl?: string;
+  /** CSS-like grading on the photo overlay only — does not touch the bubble film. */
+  photoFilter?: MemoryPhotoFilter;
+  /**
+   * 1 = current clear bubble (no frost). 0 = glass-default frost (canvasBlurPx 6).
+   * Hidden while the light geometry editor is open.
+   */
+  vividness?: number;
   /** KeyShot-style geometry view: gray mesh + light helpers. */
   lightEditMode?: boolean;
   lights?: EditableLight[];
@@ -564,6 +585,8 @@ export function BubbleViewer({
   fog = DEFAULT_BUBBLE_MATERIAL.fog,
   backgroundGradient = "transparent",
   memoryPhotoUrl,
+  photoFilter = MEMORY_PHOTO_FILTER_DEFAULTS,
+  vividness = 1,
   lightEditMode = false,
   lights = DEFAULT_BUBBLE_LIGHTS,
   onLightsChange,
@@ -612,6 +635,7 @@ export function BubbleViewer({
     reflectivity,
     transparency,
     fog,
+    photoFilter,
     lightEditMode,
     lights,
     ambients,
@@ -675,6 +699,9 @@ export function BubbleViewer({
           enabled={!gizmoDragging}
         />
       </Canvas>
+      {!lightEditMode && (
+        <FrostOverlay canvasBlurPx={vividnessToBlurPx(vividness)} />
+      )}
     </div>
   );
 }
