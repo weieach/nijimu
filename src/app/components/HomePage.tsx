@@ -17,13 +17,13 @@ const VARIANT_KEY = "nijimu.shaderVariant";
 
 /**
  * The home memory field, in one of three renderings:
- *  - 'blobs'    — the existing CSS blob field (BlobScene) — key A
- *  - 'puddle'   — WebGL2 watercolor / iridescent puddle — key B
+ *  - 'puddle'   — WebGL2 watercolor / iridescent puddle — the product default
+ *  - 'blobs'    — the legacy CSS blob field (BlobScene) — key A, compare only
  *  - 'ripple2d' — WebGL2 airy "rings of light" 2d texture — key Z
- * Same API as BlobScene so the variants can be A/B'd in place.
+ * Same API as BlobScene so the older variants can still be A/B'd in place.
  */
 export function MemoryField({
-  shaderVariant = "blobs",
+  shaderVariant = "puddle",
   onNewMemory,
   hideAnnotations = false,
   diveGalleryEnabled = false,
@@ -67,11 +67,11 @@ export function MemoryField({
 export function readVariant(): ShaderVariant {
   try {
     const v = sessionStorage.getItem(VARIANT_KEY);
-    if (v === "puddle" || v === "ripple2d") return v;
+    if (v === "blobs" || v === "puddle" || v === "ripple2d") return v;
   } catch {
     // private mode
   }
-  return "blobs";
+  return "puddle";
 }
 
 function writeVariant(next: ShaderVariant): void {
@@ -102,8 +102,8 @@ export function HomePage() {
     variant === "puddle" && galleryVariant === "dive" && isPuddleSupported();
 
   // Home-only shortcuts (see README):
-  //   A — original blob homescreen
-  //   B — puddle homescreen
+  //   B — puddle homescreen (default)
+  //   A — original blob homescreen (compare)
   //   Z — ripple2d homescreen
   //   G — open memory artifact gallery (any homescreen)
   //   V — toggle gallery variant: morph ↔ dive (dive runs on the puddle homescreen)

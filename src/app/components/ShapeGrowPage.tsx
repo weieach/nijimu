@@ -108,9 +108,9 @@ export function ShapeGrowPage() {
 
   const [variant, setVariant] = useState<RenderVariant>(() => {
     try {
-      return sessionStorage.getItem(VARIANT_KEY) === "bubble" ? "bubble" : "glass";
+      return sessionStorage.getItem(VARIANT_KEY) === "glass" ? "glass" : "bubble";
     } catch {
-      return "glass";
+      return "bubble";
     }
   });
   variantRef.current = variant;
@@ -355,11 +355,16 @@ export function ShapeGrowPage() {
   };
 
   const handleContinue = () => {
-    navigate("/record/shape/weight", {
+    navigate("/record/shape/color", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         cameraPermission,
         modelPath,
+        morphProgress,
+        bubbleMaterial,
+        lights,
+        ambients,
+        renderVariant: variant,
       },
     });
   };

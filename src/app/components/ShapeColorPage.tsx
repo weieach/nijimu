@@ -1,38 +1,64 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
-import { SceneViewer, MATERIAL_PRESETS } from "./SceneViewer";
+import { MATERIAL_PRESETS, MODEL_PATHS } from "./SceneViewer";
+import {
+  BubbleViewer,
+  BUBBLE_BACKGROUND,
+  DEFAULT_BUBBLE_MATERIAL,
+} from "./BubbleViewer";
 import { createGestureGate, useHandTracking } from "../hooks/useHandTracking";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
-import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { COLOR_PALETTE } from "../lib/colors";
+import {
+  DEFAULT_BUBBLE_AMBIENTS,
+  DEFAULT_BUBBLE_LIGHTS,
+} from "../lib/sceneLights";
+import { SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+
+function rimFromCore(hex: string): string {
+  if (!hex.startsWith("#") || hex.length < 7) return "#3a3c44";
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
+  return `#${clamp(r * 0.42)
+    .toString(16)
+    .padStart(2, "0")}${clamp(g * 0.42)
+    .toString(16)
+    .padStart(2, "0")}${clamp(b * 0.42)
+    .toString(16)
+    .padStart(2, "0")}`;
+}
 
 export function ShapeColorPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [fadeIn, setFadeIn] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  const [debugMode, setDebugMode] = useState(true);
+  const [debugMode] = useState(true);
   const [handDetected, setHandDetected] = useState(false);
   const [debugPalmY, setDebugPalmY] = useState(0);
-  
+
   const videoRef = useRef<HTMLVideoElement>(null);
-  const targetColorIndexRef = useRef<number>(location.state?.matPresetIndex ?? 0); // Target preset index (0-4)
-  const smoothingFrameRef = useRef<number | null>(null);
   const gateRef = useRef(createGestureGate(0.04));
+  const targetColorIndexRef = useRef<number>(location.state?.colorIndex ?? 0);
 
-  // Get camera permission from previous page (BuildObjectPage)
   const cameraPermission = location.state?.cameraPermission ?? "denied";
+  const modelPath = location.state?.modelPath ?? MODEL_PATHS[0];
+  const incomingMorph = location.state?.morphProgress;
+  const morphProgress =
+    typeof incomingMorph === "number" && incomingMorph > 0.08
+      ? incomingMorph
+      : 1;
+  const bubbleMaterial = location.state?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL;
+  const lights = location.state?.lights ?? DEFAULT_BUBBLE_LIGHTS;
+  const ambients = location.state?.ambients ?? DEFAULT_BUBBLE_AMBIENTS;
 
-  // Get state from previous page
-  const modelPath = location.state?.modelPath;
-  const fluidity = location.state?.fluidity ?? 0;
-  const bumpAmount = location.state?.bumpAmount ?? 0;
-
-  // selectedColorIndex is a float for smooth interpolation; snapped to int for display
   const [selectedColorIndex, setSelectedColorIndex] = useState<number>(
-    location.state?.matPresetIndex ?? 0
+    location.state?.colorIndex ?? 0,
   );
 
   useEffect(() => {
@@ -40,52 +66,23 @@ export function ShapeColorPage() {
     setTimeout(() => setSceneReady(true), 300);
   }, []);
 
-        // Smoothing animation loop for color index - runs independently
-  useEffect(() => {
-    const smoothingSpeed = 0.05;
-    
-    const animate = () => {
-      setSelectedColorIndex((current) => {
-        const target = targetColorIndexRef.current;
-        const diff = target - current;
-        
-        // Snap when close
-        if (Math.abs(diff) < 0.1) return Math.round(target);
-        
-        return current + diff * smoothingSpeed;
-      });
-      
-      smoothingFrameRef.current = requestAnimationFrame(animate);
-    };
-    
-    animate();
-    
-    return () => {
-      if (smoothingFrameRef.current) {
-        cancelAnimationFrame(smoothingFrameRef.current);
-      }
-    };
-  }, []);
-
-  // Palm height drives the material preset: raised hand = warmer.
   const { isTracking } = useHandTracking({
     enabled: cameraPermission === "granted",
     videoRef,
     numHands: 1,
     onLandmarks: (hands) => {
-      // Palm center from wrist + the five finger bases
       const palm = [0, 1, 5, 9, 13, 17].map((i) => hands[0][i]);
       const palmY = palm.reduce((sum, lm) => sum + lm.y, 0) / palm.length;
 
       if (gateRef.current.update(palmY)) {
-        // Map palm Y position to preset index (0-4)
-        // Lower Y = hand raised higher = warmer (higher index)
         const minY = 0.5;
         const maxY = 1.2;
         const clampedY = Math.max(minY, Math.min(maxY, palmY));
         const normalizedY = (clampedY - minY) / (maxY - minY);
-        // Invert so raised hand = higher index (warmer)
-        targetColorIndexRef.current = Math.round((1 - normalizedY) * (MATERIAL_PRESETS.length - 1));
+        targetColorIndexRef.current = Math.round(
+          (1 - normalizedY) * (COLOR_PALETTE.length - 1),
+        );
+        setSelectedColorIndex(targetColorIndexRef.current);
       }
       setHandDetected(true);
       setDebugPalmY(palmY);
@@ -93,36 +90,47 @@ export function ShapeColorPage() {
     onNoHands: () => setHandDetected(false),
   });
 
+  const currentIndex = Math.min(
+    Math.max(0, Math.round(selectedColorIndex)),
+    COLOR_PALETTE.length - 1,
+  );
+  const active = COLOR_PALETTE[currentIndex];
+  const coreColor = active.color;
+  const rimColor = rimFromCore(active.color);
+
+  const handleSelect = (index: number) => {
+    targetColorIndexRef.current = index;
+    setSelectedColorIndex(index);
+  };
+
   const handleContinue = () => {
     navigate("/record/shape/texture", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         modelPath,
-        matPresetIndex: Math.round(selectedColorIndex),
-        fluidity,
-        bumpAmount,
+        morphProgress,
+        bubbleMaterial,
+        lights,
+        ambients,
+        coreColor,
+        rimColor,
+        colorIndex: currentIndex,
+        matPresetIndex: Math.min(currentIndex, MATERIAL_PRESETS.length - 1),
       },
     });
   };
 
-  const currentPresetIndex = Math.min(
-    Math.max(0, Math.round(selectedColorIndex)),
-    MATERIAL_PRESETS.length - 1,
-  );
-  const activePreset = MATERIAL_PRESETS[currentPresetIndex];
-
   return (
     <div
       className="relative w-full h-screen flex flex-col overflow-hidden"
-      style={{ background: "#e0e0e0" }}
+      style={{ background: BUBBLE_BACKGROUND }}
     >
-      {/* Video element for MediaPipe - visible in debug mode */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ 
+        style={{
           display: debugMode && cameraPermission === "granted" ? "block" : "none",
           position: "absolute",
           bottom: 10,
@@ -135,7 +143,6 @@ export function ShapeColorPage() {
         }}
       />
 
-      {/* Full-screen 3D Scene */}
       <div
         style={{
           position: "fixed",
@@ -147,29 +154,33 @@ export function ShapeColorPage() {
           pointerEvents: "none",
         }}
       >
-        <SceneViewer
-          shapeBuildOscillatingEvolve
-          bumpAmount={bumpAmount}
-          bumpSpike={0}
-          density={200}
-          canvasBlurPx={3}
-          matOpacity={0.4}
-          fluidity={fluidity}
+        <BubbleViewer
+          key={modelPath}
+          autoRotate
+          morphProgress={morphProgress}
           ready={sceneReady}
-          matPresetIndex={currentPresetIndex}
           modelPath={modelPath}
+          coreColor={coreColor}
+          rimColor={rimColor}
+          roughness={bubbleMaterial.roughness}
+          reflectivity={bubbleMaterial.reflectivity}
+          transparency={bubbleMaterial.transparency}
+          fog={bubbleMaterial.fog}
+          lights={lights}
+          ambients={ambients}
         />
       </div>
 
-      {/* Content wrapper with fade in */}
       <div
         className="flex flex-col h-full transition-opacity duration-1000"
-        style={{ opacity: fadeIn ? 1 : 0, position: "relative", zIndex: 2 }}
+        style={{
+          opacity: fadeIn ? 1 : 0,
+          position: "relative",
+          zIndex: 2,
+        }}
       >
-        {/* nijimu wordmark */}
-      <PageHeader layout="block" />
+        <PageHeader layout="block" />
 
-        {/* Title */}
         <p
           style={{
             position: "absolute",
@@ -187,10 +198,9 @@ export function ShapeColorPage() {
             mixBlendMode: "difference",
           }}
         >
-          warm
+          color
         </p>
 
-        {/* Instructions */}
         <div
           style={{
             position: "absolute",
@@ -208,119 +218,90 @@ export function ShapeColorPage() {
             mixBlendMode: "difference",
           }}
         >
-          <p style={{ margin: 0 }}>lay your palm flat. </p>
-          <p style={{ margin: 0 }}>raise it to bring warmth. </p>
-          <p style={{ margin: 0 }}>lower it toward cool. </p>
-          <p style={{ margin: 0 }}>let the color find where this memory lives.</p>
+          <p style={{ margin: 0 }}>the form is settled.</p>
+          <p style={{ margin: 0 }}>now let a tint find it.</p>
+          <p style={{ margin: 0 }}>raise your palm to warm the film.</p>
+          <p style={{ margin: 0 }}>lower it toward cool.</p>
+        </div>
+
+        <div
+          style={{
+            position: "absolute",
+            bottom: cameraPermission === "denied" ? 160 : 110,
+            left: "50%",
+            transform: "translateX(-50%)",
+            display: "flex",
+            gap: 8,
+            padding: "8px 12px",
+            borderRadius: 100,
+            background: "rgba(163, 167, 175, 0.22)",
+            zIndex: 10,
+            pointerEvents: "auto",
+          }}
+        >
+          {COLOR_PALETTE.map((swatch, i) => {
+            const activeSwatch = i === currentIndex;
+            return (
+              <button
+                key={swatch.id}
+                type="button"
+                onClick={() => handleSelect(i)}
+                aria-label={swatch.id}
+                title={swatch.id}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  border: activeSwatch
+                    ? "2px solid #ffffff"
+                    : "2px solid transparent",
+                  background: swatch.color,
+                  cursor: "pointer",
+                  boxShadow: activeSwatch
+                    ? "0 0 0 1px rgba(123,123,135,0.45)"
+                    : "none",
+                  transform: activeSwatch ? "scale(1.12)" : "scale(1)",
+                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                }}
+              />
+            );
+          })}
         </div>
 
         {cameraPermission === "denied" && (
-          <>
-            <div
-              style={{
-                position: "absolute",
-                bottom: 160,
-                left: "50%",
-                transform: "translateX(-50%)",
-                width: "90%",
-                maxWidth: 400,
-                zIndex: 10,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 12,
-                }}
-              >
-                <label
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: 12,
-                    color: "#8C8C8C",
-                    textTransform: "lowercase",
-                  }}
-                >
-                  warmth
-                </label>
-                <span
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: 12,
-                    color: "#8C8C8C",
-                  }}
-                >
-                  {activePreset.id}
-                </span>
-              </div>
-              {/* 5 colour swatches */}
-              <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-                {MATERIAL_PRESETS.map((preset, index) => (
-                  <button
-                    key={preset.id}
-                    onClick={() => {
-                      setSelectedColorIndex(index);
-                      targetColorIndexRef.current = index;
-                    }}
-                    style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: "50%",
-                      border:
-                        currentPresetIndex === index
-                          ? "2px solid #8C8C8C"
-                          : "2px solid transparent",
-                      background: `linear-gradient(135deg, ${preset.matColor} 0%, ${preset.matSheenColor} 100%)`,
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      boxShadow:
-                        currentPresetIndex === index
-                          ? "0 0 0 2px rgba(140,140,140,0.2)"
-                          : "0 2px 4px rgba(0,0,0,0.1)",
-                      transform:
-                        currentPresetIndex === index
-                          ? "scale(1.15)"
-                          : "scale(1)",
-                    }}
-                    aria-label={`Select ${preset.id}`}
-                  />
-                ))}
-              </div>
-            </div>
-            
-            {/* Permission text below swatches */}
-            <p
-              style={{
-                position: "absolute",
-                bottom: 250,
-                left: "50%",
-                transform: "translateX(-50%)",
-                fontFamily: SERIF,
-                fontSize: 15,
-                lineHeight: 1,
-                color: "rgba(42, 32, 24, 0.6)",
-                textAlign: "center",
-                whiteSpace: "nowrap",
-                zIndex: 10,
-              }}
-            >
-              (grant camera permission to access gesture control. )
-            </p>
-          </>
+          <p
+            style={{
+              position: "absolute",
+              bottom: 220,
+              left: "50%",
+              transform: "translateX(-50%)",
+              fontFamily: SERIF,
+              fontSize: 15,
+              lineHeight: 1,
+              color: "rgba(42, 32, 24, 0.6)",
+              textAlign: "center",
+              whiteSpace: "nowrap",
+              zIndex: 10,
+            }}
+          >
+            (grant camera permission to access gesture control. )
+          </p>
         )}
 
-        {/* Continue button - positioned from Figma */}
         <PillButton
           label="continue"
           onClick={handleContinue}
           trailing="›"
           className="transition-opacity duration-500"
-          style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 40, zIndex: 10 }}
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 40,
+            zIndex: 10,
+          }}
         />
 
-        {/* Debug information */}
         {debugMode && (
           <div
             style={{
@@ -337,11 +318,13 @@ export function ShapeColorPage() {
             }}
           >
             <p style={{ margin: "5px 0" }}>Camera: {cameraPermission}</p>
-            <p style={{ margin: "5px 0" }}>Hand Detected: {handDetected ? "✓ Yes" : "✗ No"}</p>
+            <p style={{ margin: "5px 0" }}>
+              Hand Detected: {handDetected ? "✓ Yes" : "✗ No"}
+            </p>
             <p style={{ margin: "5px 0" }}>Palm Y: {debugPalmY.toFixed(4)}</p>
-            <p style={{ margin: "5px 0" }}>Target Preset: {targetColorIndexRef.current} ({MATERIAL_PRESETS[targetColorIndexRef.current]?.id})</p>
-            <p style={{ margin: "5px 0" }}>Current Preset: {currentPresetIndex} ({activePreset.id})</p>
-            <p style={{ margin: "5px 0" }}>Color: {activePreset.matColor}</p>
+            <p style={{ margin: "5px 0" }}>
+              Tint: {active.id} · {coreColor}
+            </p>
             <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
               MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
             </p>
@@ -349,7 +332,6 @@ export function ShapeColorPage() {
         )}
       </div>
 
-      {/* Back button */}
       <BackButton />
     </div>
   );
