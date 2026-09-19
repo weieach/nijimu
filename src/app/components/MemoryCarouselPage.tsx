@@ -4,6 +4,7 @@ import { isPuddleSupported } from "../lib/puddle/simulation";
 import { PuddleScene } from "./PuddleScene";
 import { PuddleDiveGallery } from "./PuddleDiveGallery";
 import { buildArchive } from "../lib/archive";
+import { MEMORY_FIELD_PATH } from "../lib/routes";
 import type { InkArrival } from "../lib/landingTransition";
 
 /** Dedicated 3D carousel at /memory — the dive gallery, not the blob overlay. */
@@ -13,6 +14,7 @@ export function MemoryCarouselPage({ inkArrival }: { inkArrival?: InkArrival }) 
   const [activeIdx, setActiveIdx] = useState(0);
   const goRecord = () => navigate("/record/start");
   const goHome = () => navigate("/");
+  const goRipple = () => navigate(MEMORY_FIELD_PATH);
   const goGrid = () => navigate("/memory/scroll");
 
   if (!isPuddleSupported()) {
@@ -25,6 +27,7 @@ export function MemoryCarouselPage({ inkArrival }: { inkArrival?: InkArrival }) 
         inkArrival={inkArrival}
         onNavigate={delta => setActiveIdx(i => Math.max(0, Math.min(items.length - 1, i + delta)))}
         onExit={goHome}
+        onOverscrollExit={goRipple}
         onToggleGrid={goGrid}
       />
     );
@@ -40,6 +43,7 @@ export function MemoryCarouselPage({ inkArrival }: { inkArrival?: InkArrival }) 
       hideAnnotations
       onNewMemory={goRecord}
       onGalleryExit={goHome}
+      onOverscrollExit={goRipple}
       onToggleGrid={goGrid}
     />
   );

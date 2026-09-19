@@ -224,6 +224,7 @@ export function PuddleDiveGallery({
   reducedMotion,
   onNavigate,
   onExit,
+  onOverscrollExit,
   caption,
   exitOnBackdropClick = true,
   onToggleGrid,
@@ -241,6 +242,9 @@ export function PuddleDiveGallery({
   /** Steps to travel around the rim: negative = older (left), positive = newer. */
   onNavigate: (delta: number) => void;
   onExit: () => void;
+  /** Leave past the first or last memory — the dedicated carousel uses this
+      to open the ripple field; the G-gallery falls back to onExit. */
+  onOverscrollExit?: () => void;
   /** Replace the default title / year caption (used by the naming step). */
   caption?: ReactNode;
   /** Homescreen G-gallery exits on a blank click; the naming step does not. */
@@ -278,6 +282,34 @@ export function PuddleDiveGallery({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [phase, growth, onNavigate, onExit]);
+
+  /* scroll — one notch steps the rim; another notch past either end leaves.
+     The naming step has no arrows and must not steal the wheel. */
+  useEffect(() => {
+    if (!showArrows) return;
+    let leftover = 0;
+    let lockedUntil = 0;
+    const leave = onOverscrollExit ?? onExit;
+    const handler = (e: WheelEvent) => {
+      if (phase !== "gallery" || growth < 1) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      const now = performance.now();
+      if (now < lockedUntil) return;
+      const primary = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      leftover += primary;
+      if (Math.abs(leftover) < 72) return;
+      const dir = leftover > 0 ? 1 : -1;
+      leftover = 0;
+      lockedUntil = now + (reducedMotion ? 180 : 480);
+      if (dir < 0 && !hasOlder) leave();
+      else if (dir > 0 && !hasNewer) leave();
+      else onNavigate(dir);
+    };
+    window.addEventListener("wheel", handler, { passive: false });
+    return () => window.removeEventListener("wheel", handler);
+  }, [showArrows, phase, growth, reducedMotion, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
 
   /* preload the artifacts just off the end of the rim, so the memory that
      swings in on an arrow press never stalls on a network fetch */

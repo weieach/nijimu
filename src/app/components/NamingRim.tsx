@@ -561,6 +561,7 @@ export interface DiveGalleryProps {
   phase: DivePhase;
   onNavigate: (delta: number) => void;
   onExit: () => void;
+  onOverscrollExit?: () => void;
   onToggleGrid?: () => void;
   arrival: DiveArrival;
 }

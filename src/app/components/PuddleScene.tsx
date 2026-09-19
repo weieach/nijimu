@@ -306,6 +306,7 @@ export function PuddleScene({
   inkArrival,
   naming = null,
   onGalleryExit,
+  onOverscrollExit,
   onToggleGrid,
 }: {
   /** Receives the uv point the descent ended on, so the next screen can surface there. */
@@ -334,6 +335,9 @@ export function PuddleScene({
   naming?: NamingSession | null;
   /** Fired when the gallery starts surfacing, so the G toggle stays in sync. */
   onGalleryExit?: () => void;
+  /** Scroll past the first or last memory. The dedicated carousel uses this
+      to open the ripple field; unset, overscroll uses onGalleryExit. */
+  onOverscrollExit?: () => void;
   /** Switch from the G-key carousel to the card grid. */
   onToggleGrid?: () => void;
 }) {
@@ -1166,7 +1170,8 @@ export function PuddleScene({
     if (galleryOnly) return <PuddleDiveGallery items={galleryItems} activeIdx={galleryIdx}
       phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival}
       onNavigate={delta => setGalleryIdx(i => Math.max(0, Math.min(galleryItems.length - 1, i + delta)))}
-      onExit={() => onGalleryExit?.()} onToggleGrid={onToggleGrid} />;
+      onExit={() => onGalleryExit?.()} onOverscrollExit={onOverscrollExit}
+      onToggleGrid={onToggleGrid} />;
     return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
   }
 
@@ -1477,6 +1482,7 @@ export function PuddleScene({
               diveControlsRef.current?.ripple(next);
             },
             onExit: () => diveControlsRef.current?.close(),
+            onOverscrollExit: onOverscrollExit ?? (() => diveControlsRef.current?.close()),
             onToggleGrid,
             arrival: galleryCarried ? "carried" : "resolve",
           }}
