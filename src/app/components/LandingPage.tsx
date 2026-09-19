@@ -1,18 +1,30 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import { MemoryCarouselPage } from "./MemoryCarouselPage";
 import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
 import { buildArchive } from "../lib/archive";
-import { CAROUSEL_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, NAMING_PATH } from "../lib/routes";
+import type { NameFlowState, NamingSession } from "./NamingRim";
+
+/** What the create flow asks for when it lands on /memory: the gallery already
+    open, on the memory just saved, continuing the rim the naming step showed. */
+interface GalleryEntry {
+  galleryOpen?: boolean;
+  galleryFocusId?: string;
+  galleryCarried?: boolean;
+}
 
 /**
- * One layout owns / and /memory. The gallery starts loading behind the ink
- * when Enter is pressed and survives the URL change after its artifacts grow.
+ * One layout owns /, /memory, and /record/name. The gallery starts loading
+ * behind the ink when Enter is pressed, and the naming rim becomes that same
+ * gallery when a memory is saved — both need the page (and its canvases) to
+ * survive the URL change.
  */
 export function LandingPage() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [arrival, setArrival] = useState<InkArrival | null>(null);
   const [entryFocus, setEntryFocus] = useState<{ id: string; slot: number } | null>(null);
@@ -20,10 +32,22 @@ export function LandingPage() {
   const [seenPath, setSeenPath] = useState(pathname);
   const galleryRef = useRef<HTMLDivElement>(null);
   const inGallery = pathname === CAROUSEL_PATH;
+  const inNaming = pathname === NAMING_PATH;
   if (seenPath !== pathname) {
     setSeenPath(pathname);
-    if (!inGallery) { setStartedAt(null); setArrival(null); setEntryFocus(null); }
+    if (!inGallery && !inNaming) { setStartedAt(null); setArrival(null); setEntryFocus(null); }
   }
+
+  const [draftId] = useState(() => crypto.randomUUID());
+  const naming = useMemo<NamingSession | null>(
+    () =>
+      inNaming
+        ? { draftId, state: (location.state as NameFlowState | null) ?? {} }
+        : null,
+    [draftId, inNaming, location.state],
+  );
+  const galleryEntry = !inNaming ? (location.state as GalleryEntry | null) : null;
+
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const change = () => setReducedMotion(media.matches);
@@ -31,7 +55,7 @@ export function LandingPage() {
     return () => media.removeEventListener("change", change);
   }, []);
   useEffect(() => {
-    if (startedAt === null || inGallery) return;
+    if (startedAt === null || inGallery || inNaming) return;
     let raf = 0;
     let last = performance.now(), elapsed = 0;
     const end = reducedMotion ? INK_ENTRY.reducedEnd : INK_ENTRY.end;
@@ -51,7 +75,7 @@ export function LandingPage() {
     };
     window.addEventListener("keydown", cancel);
     return () => { cancelAnimationFrame(raf); window.removeEventListener("keydown", cancel); };
-  }, [startedAt, inGallery, reducedMotion, navigate]);
+  }, [startedAt, inGallery, inNaming, reducedMotion, navigate]);
   useEffect(() => { if (inGallery && arrival) galleryRef.current?.focus(); }, [inGallery]);
   const enter = () => {
     if (startedAt !== null) return;
@@ -61,15 +85,21 @@ export function LandingPage() {
     setArrival({ elapsed: 0, reducedMotion });
     setStartedAt(performance.now());
   };
+  const showGallery = inGallery || inNaming || !!arrival;
   return (
     <main style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: "#ededee" }}>
-      {(inGallery || arrival) && (
-        <div ref={galleryRef} tabIndex={-1} aria-label="memory gallery" inert={!inGallery}
+      {showGallery && (
+        <div ref={galleryRef} tabIndex={-1} aria-label="memory gallery" inert={!inGallery && !inNaming}
           style={{ position: "absolute", inset: 0, zIndex: 0, outline: "none" }}>
-          <MemoryCarouselPage inkArrival={arrival ?? undefined} galleryFocusId={entryFocus?.id} />
+          <MemoryCarouselPage
+            inkArrival={inNaming ? undefined : arrival ?? undefined}
+            galleryFocusId={galleryEntry?.galleryFocusId ?? naming?.draftId ?? entryFocus?.id}
+            galleryCarried={!!galleryEntry?.galleryCarried}
+            naming={naming}
+          />
         </div>
       )}
-      {!inGallery && (
+      {!inGallery && !inNaming && (
         <div style={{ position: "absolute", inset: 0, zIndex: 40 }}>
           <BlobScene classicChrome ctaLabel="Enter" showPlus={false}
             onNewMemory={enter} landingArrival={arrival}

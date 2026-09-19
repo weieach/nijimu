@@ -50,19 +50,18 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       {
+        /* Landing, the dive carousel, and the naming step share one layout:
+           Enter preloads the gallery behind the ink, and saving a memory turns
+           the naming rim into that same gallery in place. The children render
+           nothing themselves; LandingPage reads the path. */
         Component: LandingPage,
-        children: [{ path: "/", element: null }, { path: CAROUSEL_PATH, element: null }],
+        children: [
+          { path: "/", element: null },
+          { path: CAROUSEL_PATH, element: null },
+          { path: NAMING_PATH, element: null },
+        ],
       },
-      {
-        /* The field and the naming step share one mounted HomePage: saving a
-           memory turns the naming rim into the field's gallery, and that only
-           holds without a flicker if HomePage (and the WebGL canvases under
-           it) survives the URL change. A pathless layout route does that;
-           HomePage reads the path to know which step it is showing, and the
-           children render nothing themselves. */
-        Component: HomePage,
-        children: [{ path: MEMORY_FIELD_PATH }, { path: NAMING_PATH }],
-      },
+      { path: MEMORY_FIELD_PATH, Component: HomePage },
       { path: "/record/click", Component: ClickToRecordPage },
       { path: "/record/start", Component: RecordingStartRoute },
       { path: "/record/process", Component: RecordingProcessPage },

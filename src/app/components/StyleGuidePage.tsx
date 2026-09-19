@@ -4,6 +4,7 @@ import { PAGE_BG } from "./PuddleBackdrop";
 import { SANS, SANS_UI, SERIF, SERIF_CJK, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+import { TextButton } from "./TextButton";
 
 const SECTION: CSSProperties = {
   display: "flex",
@@ -142,6 +143,11 @@ export function StyleGuidePage() {
               onClick={noop}
               icon={<StopIcon fill={CHROME_GRAY} />}
             />
+          </Specimen>
+
+          <Specimen name="text only" note="TextButton / Switzer">
+            <TextButton label="save memory" onClick={noop} />
+            <TextButton label="save memory" onClick={noop} disabled />
           </Specimen>
 
           <Specimen name="icon" note="back / chrome">

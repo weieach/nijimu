@@ -1,11 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { SERIF } from "../lib/theme";
-import { NAMING_PATH } from "../lib/routes";
 import { BlobScene } from "./BlobScene";
 import { PuddleScene } from "./PuddleScene";
-import { NameMemoryPage } from "./NameMemoryPage";
-import type { NameFlowState, NamingSession } from "./NamingRim";
 import { isPuddleSupported } from "../lib/puddle/simulation";
 import { isRipple2dSupported } from "../lib/puddle/ripple2d";
 import {
@@ -34,7 +31,6 @@ export function MemoryField({
   galleryOpen = false,
   galleryFocusId,
   galleryCarried = false,
-  naming = null,
   onGalleryExit,
   onToggleGrid,
 }: {
@@ -49,8 +45,6 @@ export function MemoryField({
   galleryFocusId?: string;
   /** The naming step handed its carousel over — open at depth, don't dive. */
   galleryCarried?: boolean;
-  /** The naming step, hosted inside the puddle field (see PuddleScene). */
-  naming?: NamingSession | null;
   onGalleryExit?: () => void;
   onToggleGrid?: () => void;
 }) {
@@ -73,7 +67,6 @@ export function MemoryField({
         galleryOpen={galleryOpen}
         galleryFocusId={galleryFocusId}
         galleryCarried={galleryCarried}
-        naming={naming}
         onGalleryExit={onGalleryExit}
         onToggleGrid={onToggleGrid}
       />
@@ -146,25 +139,9 @@ export function HomePage() {
   /** Transient confirmation after pressing V — otherwise the flag is invisible. */
   const [flagNotice, setFlagNotice] = useState<{ text: string; key: number } | null>(null);
 
-  /* The naming step. This page is also mounted for NAMING_PATH (see App.tsx):
-     the memory being made is named over the field's own scene, so saving it
-     changes what the scene shows without remounting anything. The id is the
-     memory's for good, minted when the step is entered. */
-  const namingActive = location.pathname === NAMING_PATH;
-  const [draftId] = useState(() => crypto.randomUUID());
-  const naming = useMemo<NamingSession | null>(
-    () =>
-      namingActive
-        ? { draftId, state: (location.state as NameFlowState | null) ?? {} }
-        : null,
-    [draftId, location.state, namingActive],
-  );
-
   // Fresh values for the keydown handler (registered once with [] deps).
   const variantRef = useRef(variant);
   variantRef.current = variant;
-  const namingRef = useRef(namingActive);
-  namingRef.current = namingActive;
 
   // The dive gallery only exists on the puddle homescreen; everywhere else G
   // falls back to the morph gallery so the flag never strands the shortcut.
@@ -180,7 +157,6 @@ export function HomePage() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-      if (namingRef.current) return; // the naming step owns the keyboard
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
 
@@ -239,13 +215,8 @@ export function HomePage() {
     setGalleryOpen(false);
   };
 
-  /* Only the puddle field has a dive gallery to hand the naming rim to. The
-     other fields get the naming step on its own page and the ordinary gallery
-     open afterwards. */
   const scene =
-    naming && !diveCapable ? (
-      <NameMemoryPage />
-    ) : galleryOpen && !diveCapable ? (
+    galleryOpen && !diveCapable ? (
       <BlobScene
         openGallery
         onNewMemory={() => navigate("/record/start")}
@@ -261,7 +232,6 @@ export function HomePage() {
         galleryOpen={galleryOpen && diveCapable}
         galleryFocusId={entry?.galleryFocusId}
         galleryCarried={!!entry?.galleryCarried}
-        naming={diveCapable ? naming : null}
         onGalleryExit={closeGallery}
         onToggleGrid={openGrid}
       />

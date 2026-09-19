@@ -483,11 +483,34 @@ export function PuddleScene({
      arrives — the naming step's save hands over its seat this way, and the
      rim must not be seen swinging to it a frame later. */
   const [seenFocusId, setSeenFocusId] = useState(galleryFocusId);
+  /* Apply the asked-for seat in this render, not the next: the naming save
+     hands over galleryFocusId in the same turn the rim becomes the gallery,
+     and a frame at index 0 would swing the new memory off the apex. */
+  let galleryAt = galleryIdx;
+  const focusId = naming?.draftId ?? galleryFocusId;
   if (galleryFocusId !== seenFocusId) {
     setSeenFocusId(galleryFocusId);
     if (galleryFocusId) {
       const i = galleryItems.findIndex((a) => a.id === galleryFocusId);
-      if (i >= 0) setGalleryIdx(i);
+      if (i >= 0) {
+        galleryAt = i;
+        if (i !== galleryIdx) setGalleryIdx(i);
+      }
+    }
+  }
+  /* The archive rebuilds when the draft is saved (empty year → real year).
+     The focus id is unchanged, so the change above does not fire — re-seat
+     here or the carousel stays on whoever is now at the old index (the first
+     memory). Do not run this on arrow steps: those keep the same list. */
+  const galleryItemsRefForSeat = useRef(galleryItems);
+  if (galleryItems !== galleryItemsRefForSeat.current) {
+    galleryItemsRefForSeat.current = galleryItems;
+    if (focusId && galleryItems[galleryAt]?.id !== focusId) {
+      const i = galleryItems.findIndex((a) => a.id === focusId);
+      if (i >= 0) {
+        galleryAt = i;
+        if (i !== galleryIdx) setGalleryIdx(i);
+      }
     }
   }
   /** The water is the one thing the naming step didn't have, so on a carried
@@ -1139,7 +1162,8 @@ export function PuddleScene({
       const idx = galleryFocusId
         ? galleryItemsRef.current.findIndex((a) => a.id === galleryFocusId)
         : -1;
-      diveControlsRef.current?.open(idx < 0 ? 0 : idx, galleryCarried);
+      if (idx >= 0) diveControlsRef.current?.open(idx, galleryCarried);
+      else if (!galleryFocusId) diveControlsRef.current?.open(0, galleryCarried);
     } else {
       diveControlsRef.current?.close(); // no-op when already surfaced
     }
@@ -1167,7 +1191,7 @@ export function PuddleScene({
   // (or, mid-naming, to the naming step on its own page).
   if (failed) {
     if (naming) return <NameMemoryPage />;
-    if (galleryOnly) return <PuddleDiveGallery items={galleryItems} activeIdx={galleryIdx}
+    if (galleryOnly) return <PuddleDiveGallery items={galleryItems} activeIdx={galleryAt}
       phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival}
       onNavigate={delta => setGalleryIdx(i => Math.max(0, Math.min(galleryItems.length - 1, i + delta)))}
       onExit={() => onGalleryExit?.()} onOverscrollExit={onOverscrollExit}
@@ -1474,10 +1498,10 @@ export function PuddleScene({
           gallery={{
             inkArrival,
             items: galleryItems,
-            activeIdx: galleryIdx,
+            activeIdx: galleryAt,
             phase: divePhase,
             onNavigate: (dir) => {
-              const next = galleryIdx + dir;
+              const next = galleryAt + dir;
               if (next < 0 || next >= galleryItems.length) return;
               setGalleryIdx(next);
               diveControlsRef.current?.ripple(next);

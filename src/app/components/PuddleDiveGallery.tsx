@@ -287,6 +287,20 @@ export function PuddleDiveGallery({
   const rimIdxRef = useRef(activeIdx);
   const activeIdxRef = useRef(activeIdx);
   activeIdxRef.current = activeIdx;
+  /* The naming year rebuilds the archive around the memory already at the
+     apex: its index jumps, but it must not travel. Snap the rim by the same
+     delta so its offset stays zero and only the neighbours gather. */
+  const focusId = items[activeIdx]?.id;
+  const seatRef = useRef({ id: focusId, idx: activeIdx });
+  let rimAt = rimIdx;
+  if (focusId && focusId === seatRef.current.id && activeIdx !== seatRef.current.idx) {
+    rimAt = rimIdx + (activeIdx - seatRef.current.idx);
+    if (rimAt !== rimIdx) {
+      rimIdxRef.current = rimAt;
+      setRimIdx(rimAt);
+    }
+  }
+  seatRef.current = { id: focusId, idx: activeIdx };
   useEffect(() => {
     if (reducedMotion) {
       rimIdxRef.current = activeIdx;
@@ -313,10 +327,10 @@ export function PuddleDiveGallery({
     return () => cancelAnimationFrame(raf);
   }, [activeIdx, reducedMotion]);
 
-  const focusIdx = Math.round(rimIdx);
+  const focusIdx = Math.round(rimAt);
   const item = items[focusIdx] ?? items[activeIdx];
   const captionItem = items[activeIdx] ?? item;
-  const rimSettled = Math.abs(rimIdx - activeIdx) < 0.04;
+  const rimSettled = Math.abs(rimAt - activeIdx) < 0.04;
   const rimSettledRef = useRef(rimSettled);
   rimSettledRef.current = rimSettled;
 
@@ -400,17 +414,55 @@ export function PuddleDiveGallery({
   /* The neighbours outlive `neighborsVisible` going false: they have to stay
      mounted long enough to sink back out, or the rim would simply blink away. */
   const [neighborsMounted, setNeighborsMounted] = useState(neighborsVisible);
+  if (neighborsVisible && !neighborsMounted) setNeighborsMounted(true);
   useEffect(() => {
-    if (neighborsVisible) {
-      setNeighborsMounted(true);
-      return;
-    }
+    if (neighborsVisible) return;
     const t = setTimeout(
       () => setNeighborsMounted(false),
       reducedMotion ? 0 : NEIGHBOR_OUT_MS + ARC_NEIGHBOURS * NEIGHBOR_OUT_STAGGER_MS,
     );
     return () => clearTimeout(t);
   }, [neighborsVisible, reducedMotion]);
+
+  /* Year-settle gather: first paint is hidden (blurred, faded), then a
+     two-frame hold so the transition has a from-value. Without that hold the
+     canvases paint at full opacity and the rim hard-cuts on. */
+  const [risen, setRisen] = useState<ReadonlySet<string>>(EMPTY_IDS);
+  const risenRef = useRef(risen);
+  risenRef.current = risen;
+  useEffect(() => {
+    if (!neighborsMounted) {
+      if (risenRef.current.size) setRisen(EMPTY_IDS);
+      return;
+    }
+    const pending: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const slotItem = items[i];
+      if (!slotItem) continue;
+      const off = Math.abs(i - rimAt);
+      if (off <= 0.5 || off > ARC_NEIGHBOURS + 0.05) continue;
+      if (!risenRef.current.has(slotItem.id)) pending.push(slotItem.id);
+    }
+    if (!pending.length) return;
+    if (reducedMotion) {
+      setRisen((prev) => {
+        const next = new Set(prev);
+        for (const id of pending) next.add(id);
+        return next;
+      });
+      return;
+    }
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        setRisen((prev) => {
+          const next = new Set(prev);
+          for (const id of pending) next.add(id);
+          return next;
+        });
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [neighborsMounted, items, rimAt, reducedMotion]);
 
   /* The memories the naming step already had on screen. They are not entering
      — they were simply handed over — so they get no entrance at all. Filled the
@@ -506,7 +558,7 @@ export function PuddleDiveGallery({
      still running; everything on the dome leaves together when it reverses. */
   const slots: { offset: number; item: DiveGalleryItem }[] = [];
   for (let i = 0; i < items.length; i++) {
-    const offset = i - rimIdx;
+    const offset = i - rimAt;
     if (phase === "diving" && Math.abs(offset) > 0.01) continue;
     if (!neighborsMounted && Math.abs(offset) > 0.01) continue;
     if (Math.abs(offset) > ARC_NEIGHBOURS + 0.05) continue;
@@ -660,6 +712,15 @@ export function PuddleDiveGallery({
           const entryScale = inkArrival && !inkArrival.reducedMotion
             ? INK_POINTER_SIZE / (geo.size * depth.scale) + (1 - INK_POINTER_SIZE / (geo.size * depth.scale)) * growth
             : 1;
+          /* Naming year: neighbours gather with a real CSS transition, not a
+             keyframe that can miss the first paint and hard-cut the canvases in. */
+          const gather = !focused && !waterEffect && !inkArrival;
+          const gatherHidden = gather && (!risen.has(slotItem.id) || neighborsLeaving);
+          const gatherDist = Math.min(Math.round(Math.abs(offset)), ARC_NEIGHBOURS);
+          const gatherDelay = neighborsLeaving
+            ? (ARC_NEIGHBOURS - gatherDist) * NEIGHBOR_OUT_STAGGER_MS
+            : gatherDist * NEIGHBOR_IN_STAGGER_MS;
+          const gatherMs = neighborsLeaving ? NEIGHBOR_OUT_MS : NEIGHBOR_IN_MS;
           return (
             <div
               key={slotItem.id}
@@ -689,19 +750,25 @@ export function PuddleDiveGallery({
                 style={{
                   width: "100%",
                   height: "100%",
-                  opacity: inkArrival ? Math.min(1, growth * 5) : phase === "diving" ? 0 : undefined,
-                  transform: inkArrival ? `scale(${entryScale})` : undefined,
+                  opacity: gather
+                    ? gatherHidden ? 0 : 1
+                    : inkArrival ? Math.min(1, growth * 5) : phase === "diving" ? 0 : undefined,
+                  filter: gather ? (gatherHidden ? "blur(24px)" : "blur(0px)") : undefined,
+                  transform: gather
+                    ? gatherHidden ? "translateY(22px) scale(0.94)" : "translateY(0) scale(1)"
+                    : inkArrival ? `scale(${entryScale})` : undefined,
+                  transition: gather && !reducedMotion
+                    ? `opacity ${gatherMs}ms ease ${gatherDelay}ms, filter ${gatherMs}ms ease ${gatherDelay}ms, transform ${gatherMs}ms ease ${gatherDelay}ms`
+                    : undefined,
                   /* A carried neighbour keeps the very animation string the
                      naming step gave it: unchanged, the browser lets it run on
                      to its end, so a rim still gathering when it was handed
                      over finishes gathering instead of snapping into place. */
-                  animation: inkArrival ? "none" : carried
+                  animation: gather || inkArrival ? "none" : carried
                     ? focused
                       ? "none"
                       : neighborAnimation(offset)
-                    : !focused && !waterEffect
-                      ? neighborAnimation(offset)
-                      : artifactAnimation,
+                    : artifactAnimation,
                   willChange: "filter, opacity, transform",
                 }}
               >
@@ -751,6 +818,8 @@ export function PuddleDiveGallery({
                     // ignore ancestor opacity/masks in Chromium). The artifact
                     // resolves sharp; the blur belongs to the puddle behind it.
                     canvasBlurPx={0}
+                    enableZoom={false}
+                    enablePan={false}
                     rectAreaLightColors={{
                       color1: slotPalette.light1,
                       color2: slotPalette.light2,
@@ -775,7 +844,7 @@ export function PuddleDiveGallery({
       {showTimeScale && (
         <TimeScale
           items={items}
-          activeIdx={rimIdx}
+          activeIdx={rimAt}
           viewport={viewport}
           visible={chromeVisible}
           travelMs={0}

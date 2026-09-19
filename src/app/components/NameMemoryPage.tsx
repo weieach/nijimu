@@ -8,11 +8,9 @@ import { useNamingRim, type NameFlowState, type NamingSession } from "./NamingRi
 /*
  * NameMemoryPage — the naming step on its own page.
  *
- * This is the fallback. On the puddle homescreen the naming step is hosted
- * inside the home scene itself (see HomePage / PuddleScene), so that saving
- * turns the rim already on screen into the gallery without remounting it. The
- * other homescreens have no dive gallery to hand the rim to, so they get this
- * standalone version and the ordinary gallery open afterwards.
+ * This is the fallback when the dive gallery's water cannot start. The usual
+ * naming step is hosted on LandingPage / MemoryCarouselPage so that saving
+ * turns the rim already on screen into the /memory gallery without remounting it.
  */
 export function NameMemoryPage() {
   const location = useLocation();

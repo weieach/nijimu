@@ -14,9 +14,10 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { saveMemory, type SavedMemory } from "../lib/memoryStore";
-import { MEMORY_FIELD_PATH } from "../lib/routes";
+import { CAROUSEL_PATH } from "../lib/routes";
 import { SERIF } from "../lib/theme";
 import { MODEL_PATHS } from "./SceneViewer";
+import { TextButton } from "./TextButton";
 import {
   CAPTION_TITLE_GAP,
   CAPTION_TITLE_STYLE,
@@ -356,35 +357,29 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
 
     const commit = () => {
       const shape = state?.shape;
-      if (shape?.modelPath) {
-        saveMemory({
-          id: draftId,
-          title: memoryName.trim(),
-          year,
-          transcript: state?.transcript ?? "",
-          highlightedWords: state?.highlightedWords ?? [],
-          shape: {
-            modelPath: shape.modelPath,
-            matPresetIndex,
-            fluidity: shape.fluidity ?? 0,
-            evolve: shape.evolve ?? 0.5,
-            bumpAmount: shape.bumpAmount ?? 0,
-          },
-          colorIndex,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      saveMemory({
+        id: draftId,
+        title: memoryName.trim(),
+        year,
+        transcript: state?.transcript ?? "",
+        highlightedWords: state?.highlightedWords ?? [],
+        shape: {
+          modelPath: shape?.modelPath ?? draftShape.modelPath,
+          matPresetIndex,
+          fluidity: shape?.fluidity ?? draftShape.fluidity,
+          evolve: shape?.evolve ?? draftShape.evolve,
+          bumpAmount: shape?.bumpAmount ?? draftShape.bumpAmount,
+        },
+        colorIndex,
+        createdAt: new Date().toISOString(),
+      });
 
       /* The gallery continues the rim that is already on screen: same memory at
          the apex, same neighbours, so only the water and the chrome arrive.
-         With nothing saved (a deep link into the flow) there is no seat to
-         hand over, so it falls back to the ordinary descent. The naming step
-         is replaced in history: there is no draft to come back to. */
-      navigate(MEMORY_FIELD_PATH, {
+         The naming step is replaced in history: there is no draft to come back to. */
+      navigate(CAROUSEL_PATH, {
         replace: true,
-        state: shape?.modelPath
-          ? { galleryOpen: true, galleryFocusId: draftId, galleryCarried: true }
-          : { galleryOpen: true },
+        state: { galleryOpen: true, galleryFocusId: draftId, galleryCarried: true },
       });
     };
 
@@ -499,8 +494,8 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
         </p>
       )}
       {memoryName.trim() !== "" && yearSettled && (
-        <button
-          type="button"
+        <TextButton
+          label="save memory"
           onClick={persistAndOpenGallery}
           disabled={saving}
           style={{
@@ -508,23 +503,13 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
             position: "absolute",
             top: "100%",
             marginTop: 56,
-            border: "none",
-            background: "transparent",
-            cursor: saving ? "default" : "pointer",
-            fontFamily: SERIF,
-            fontSize: 12,
-            color: "#7b7b87",
-            letterSpacing: "0.04em",
-            whiteSpace: "nowrap",
             opacity: saving ? 0 : 1,
             filter: saving ? "blur(4px)" : "none",
             transition: reducedMotion
               ? "none"
               : `opacity ${SAVE_FADE_MS}ms ease, filter ${SAVE_FADE_MS}ms ease`,
           }}
-        >
-          save to archive
-        </button>
+        />
       )}
       <style>{`
         @keyframes nijimu-caret {
@@ -583,7 +568,9 @@ export function DiveGalleryHost({
   gallery: DiveGalleryProps;
 }) {
   const rim = useNamingRim(naming, reducedMotion);
+  const handedFocusId = useRef<string | null>(null);
   if (rim) {
+    handedFocusId.current = rim.items[rim.activeIdx]?.id ?? null;
     return (
       <PuddleDiveGallery
         items={rim.items}
@@ -601,5 +588,13 @@ export function DiveGalleryHost({
       />
     );
   }
-  return <PuddleDiveGallery {...gallery} reducedMotion={reducedMotion} />;
+  let activeIdx = gallery.activeIdx;
+  if (handedFocusId.current) {
+    const i = gallery.items.findIndex((item) => item.id === handedFocusId.current);
+    if (i >= 0) {
+      activeIdx = i;
+      if (gallery.activeIdx === i) handedFocusId.current = null;
+    }
+  }
+  return <PuddleDiveGallery {...gallery} activeIdx={activeIdx} reducedMotion={reducedMotion} />;
 }

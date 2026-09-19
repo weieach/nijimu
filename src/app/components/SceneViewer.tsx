@@ -803,6 +803,10 @@ interface SceneViewerProps {
   introMorphDuration?: number;
   /** Optional memory photo wrapped on the sphere; fades out as the form grows. */
   memoryPhotoUrl?: string;
+  /** Scroll / pinch zoom. Off on the carousel so the wheel steps memories. */
+  enableZoom?: boolean;
+  /** Two-finger / right-drag pan. */
+  enablePan?: boolean;
 }
 
 // ─── Main Scene ───────────────────────────────────────────────────────────────
@@ -835,6 +839,8 @@ export function SceneViewer({
   introMorph = false,
   introMorphDuration = 5.5,
   memoryPhotoUrl,
+  enableZoom = true,
+  enablePan = false,
 }: SceneViewerProps) {
   // Camera settings calibrated so fitTargetSize fills ~60-65% of viewport height
   // (whole shape visible with breathing room). Formula: cameraZ = fitTargetSize / (2*tan(fov/2) * 0.65)
@@ -1049,8 +1055,8 @@ export function SceneViewer({
         </Suspense>
         <OrbitControls
           ref={controlsRef}
-          enableZoom={true}
-          enablePan={false}
+          enableZoom={enableZoom}
+          enablePan={enablePan}
           minDistance={orbitMin}
           maxDistance={orbitMax}
           autoRotate={false}
