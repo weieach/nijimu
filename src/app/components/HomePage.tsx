@@ -45,7 +45,7 @@ export function MemoryField({
   /** Flagged 'dive' gallery variant — puddle texture only (see lib/puddle/dive.ts). */
   diveGalleryEnabled?: boolean;
   galleryOpen?: boolean;
-  /** Which memory the gallery opens on; the newest when unset. */
+  /** Which memory the gallery opens on; the oldest when unset. */
   galleryFocusId?: string;
   /** The naming step handed its carousel over — open at depth, don't dive. */
   galleryCarried?: boolean;

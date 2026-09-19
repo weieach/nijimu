@@ -79,7 +79,7 @@ function artifactFor(event: MemoryEvent, index: number, saved?: SavedMemory): Ar
 }
 
 /**
- * Every memory, newest at the left, oldest at the right — the rim's direction.
+ * Every memory, oldest at the left, newest at the right — the rim's direction.
  * The sort is stable, so memories sharing a year keep list order and a memory
  * just saved sits last among them.
  */
@@ -90,12 +90,12 @@ export function buildArchive(saved: SavedMemory[] = loadMemories()): ArchiveArti
       artifactFor(toMemoryEvent(memory), LIFE_EVENTS.length + i, memory),
     ),
   ];
-  return artifacts.sort((a, b) => yearOf(b.year) - yearOf(a.year));
+  return artifacts.sort((a, b) => yearOf(a.year) - yearOf(b.year));
 }
 
 /**
  * Where a memory being made falls in time. It goes after everything at least
- * as new as it — the seat it will hold once it is saved and the archive is
+ * as old as it — the seat it will hold once it is saved and the archive is
  * rebuilt, so the rim the naming step shows is the rim the gallery keeps.
  */
 export function insertChronologically(
@@ -104,7 +104,7 @@ export function insertChronologically(
 ): { items: ArchiveArtifact[]; index: number } {
   const year = yearOf(draft.year);
   let index = 0;
-  while (index < archive.length && yearOf(archive[index].year) >= year) index++;
+  while (index < archive.length && yearOf(archive[index].year) <= year) index++;
   return {
     items: [...archive.slice(0, index), draft, ...archive.slice(index)],
     index,

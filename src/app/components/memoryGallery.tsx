@@ -79,8 +79,10 @@ export function generateGalleryMemories(): GalleryMemory[] {
     },
   }));
 
-  // Newest saved first, then curated (same spirit as the home gallery order).
-  return [...saved.reverse(), ...curated];
+  // Oldest first, newest last — same spirit as the home gallery order.
+  return [...curated, ...saved].sort(
+    (a, b) => (parseInt(a.year) || 0) - (parseInt(b.year) || 0),
+  );
 }
 
 export function ArtifactPreview({

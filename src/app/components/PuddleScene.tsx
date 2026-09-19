@@ -317,7 +317,7 @@ export function PuddleScene({
   diveGalleryEnabled?: boolean;
   /** Externally-driven open/close (the homescreen G shortcut). */
   galleryOpen?: boolean;
-  /** Which memory to open on. Defaults to the newest. */
+  /** Which memory to open on. Defaults to the oldest. */
   galleryFocusId?: string;
   /** The naming step already had this carousel on screen, so there is no
       surface left to dive through: the gallery opens at depth and the water
@@ -439,7 +439,7 @@ export function PuddleScene({
 
   /* ─── dive gallery (flagged variant) ─── */
 
-  /* One artifact per memory, newest (left) → oldest (right). Built by
+  /* One artifact per memory, oldest (left) → newest (right). Built by
      lib/archive so the naming step draws the exact same rim — the memory being
      made can then be handed straight over instead of the gallery rebuilding it
      into a different order with differently seeded forms. Each one keeps the
@@ -1127,7 +1127,7 @@ export function PuddleScene({
   }, [anchors, texture]);
 
   /* homescreen G shortcut / flag changes / a memory just saved: open on the
-     asked-for memory (newest by default), close on toggle-off */
+     asked-for memory (oldest by default), close on toggle-off */
   useEffect(() => {
     // the naming step holds the camera at depth itself; nothing to open or close
     if (naming) return;

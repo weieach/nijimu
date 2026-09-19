@@ -13,7 +13,7 @@ export const INK_ENTRY = {
 
 export const INK_POINTER_SIZE = 6;
 
-/** Newest at twelve o'clock, older memories following clockwise, just as
+/** Oldest at twelve o'clock, newer memories following clockwise, just as
  * the archive's right-hand neighbours do. Equal dates keep archive order. */
 export function inkRingPoint(width: number, height: number, index: number, count: number) {
   const radius = Math.max(60, Math.min(width * 0.34, height * 0.3));

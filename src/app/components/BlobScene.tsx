@@ -97,14 +97,14 @@ function connectionCount(idx: number): number {
 }
 
 /*
- * Gallery sort order: chronological, newest (left) → oldest (right).
+ * Gallery sort order: chronological, oldest (left) → newest (right).
  * gallerySortOrder[slot] = blobIndex
- * gallerySlot[blobIndex] = slot position (0 = leftmost = newest)
+ * gallerySlot[blobIndex] = slot position (0 = leftmost = oldest)
  */
 function computeGalleryOrder(events: { year: string }[]) {
   const sortOrder = events
     .map((_, i) => i)
-    .sort((a, b) => parseInt(events[b].year) - parseInt(events[a].year));
+    .sort((a, b) => parseInt(events[a].year) - parseInt(events[b].year));
   const slot: number[] = new Array(events.length);
   sortOrder.forEach((blobIdx, s) => {
     slot[blobIdx] = s;
@@ -820,7 +820,7 @@ export function BlobScene({
     if (classicChrome) return; // landing: blobs stay put; Enter is the way in
     if (hoveredIdx !== null) return; // don't morph while hovering an annotation
     if (morphTarget.current === 0 && morphProgress.current < 0.1) {
-      // Default: open gallery at the newest event (slot 0)
+      // Default: open gallery at the oldest event (slot 0)
       const defaultSlot = 0;
       carouselTgt.current = defaultSlot;
       carouselIdx.current = defaultSlot;

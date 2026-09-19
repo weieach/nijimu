@@ -238,7 +238,7 @@ export function PuddleDiveGallery({
   activeIdx: number;
   phase: DivePhase;
   reducedMotion: boolean;
-  /** Steps to travel around the rim: negative = newer (left), positive = older. */
+  /** Steps to travel around the rim: negative = older (left), positive = newer. */
   onNavigate: (delta: number) => void;
   onExit: () => void;
   /** Replace the default title / year caption (used by the naming step). */
@@ -259,8 +259,8 @@ export function PuddleDiveGallery({
   inkArrival?: InkArrival;
 }) {
   const item = items[activeIdx];
-  const hasNewer = activeIdx > 0;
-  const hasOlder = activeIdx < items.length - 1;
+  const hasOlder = activeIdx > 0;
+  const hasNewer = activeIdx < items.length - 1;
   const viewport = useViewport();
   const geo = domeGeometry(viewport.w, viewport.h);
   const growth = inkArrival ? inkGrowth(inkArrival) : 1;
@@ -708,9 +708,9 @@ export function PuddleDiveGallery({
       </div>
 
       {/* ═══ ARROWS ═══ */}
-      {showArrows && hasNewer && (
+      {showArrows && hasOlder && (
         <button
-          aria-label="newer memory"
+          aria-label="older memory"
           style={arrowStyle("left")}
           onClick={(e) => {
             e.stopPropagation();
@@ -724,9 +724,9 @@ export function PuddleDiveGallery({
           </svg>
         </button>
       )}
-      {showArrows && hasOlder && (
+      {showArrows && hasNewer && (
         <button
-          aria-label="older memory"
+          aria-label="newer memory"
           style={arrowStyle("right")}
           onClick={(e) => {
             e.stopPropagation();
@@ -917,7 +917,7 @@ export function PuddleDiveGallery({
    One line across the foot of the screen. Short ticks mark each memory (no
    year). Longer ticks land on regular five-year increments (2010, 2015, …)
    and carry the only numbers. The focused memory's mark slides along as the
-   dome swings. Newest at the left, oldest at the right — same as the dome. */
+   dome swings. Oldest at the left, newest at the right — same as the dome. */
 
 /** Inset at each end, as a fraction of the width. */
 const TS_SIDE_PAD_VW = 0.07;
@@ -959,8 +959,8 @@ function TimeScale({
     const domainMin = Math.floor(min / TS_YEAR_STEP) * TS_YEAR_STEP;
     const domainMax = Math.ceil(max / TS_YEAR_STEP) * TS_YEAR_STEP;
     const span = domainMax - domainMin || 1;
-    // newest to the left, oldest to the right — the dome's own direction
-    const ofYear = (y: number) => 1 - (y - domainMin) / span;
+    // oldest to the left, newest to the right — the dome's own direction
+    const ofYear = (y: number) => (y - domainMin) / span;
 
     const tally = new Map<number, number>();
     for (const y of parsed) tally.set(y, (tally.get(y) ?? 0) + 1);
@@ -974,7 +974,7 @@ function TimeScale({
     });
 
     const yearTicks: { year: number; t: number }[] = [];
-    for (let y = domainMax; y >= domainMin; y -= TS_YEAR_STEP) {
+    for (let y = domainMin; y <= domainMax; y += TS_YEAR_STEP) {
       yearTicks.push({ year: y, t: ofYear(y) });
     }
 
