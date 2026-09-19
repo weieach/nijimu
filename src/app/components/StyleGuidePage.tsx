@@ -209,16 +209,17 @@ export function StyleGuidePage() {
           <Specimen name="wordmark" note="PageHeader">
             <span
               style={{
-                fontFamily: SERIF,
+                fontFamily: SERIF_CJK,
                 fontSize: 12,
                 letterSpacing: "0.16px",
                 color: CHROME_GRAY,
+                textTransform: "lowercase",
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
               }}
             >
-              <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
+              <span>滲む</span>
               <span>nijimu</span>
             </span>
           </Specimen>

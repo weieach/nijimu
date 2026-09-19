@@ -14,6 +14,7 @@ import { PageHeader } from "./PageHeader";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import type { DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
 import { DiveGalleryHost, draftAsSaved, type NamingSession } from "./NamingRim";
+import { NameMemoryPage } from "./NameMemoryPage";
 import { buildArchive } from "../lib/archive";
 
 /*
@@ -1128,6 +1129,14 @@ export function PuddleScene({
     }
   }, [galleryOpen, diveGalleryEnabled, galleryFocusId, galleryCarried, naming]);
 
+  /* The naming step is meant to be there from mount (see openAtDepth). Should
+     it arrive on a scene already at the surface, go down to meet it. */
+  useEffect(() => {
+    if (!naming || openAtDepthRef.current !== null) return;
+    const idx = galleryItemsRef.current.findIndex((a) => a.id === naming.draftId);
+    diveControlsRef.current?.open(idx < 0 ? 0 : idx, true);
+  }, [naming]);
+
   /* The water fades up behind a carried rim. One paint has to land on the
      transparent canvas first, or there is nothing for the fade to start from. */
   useEffect(() => {
@@ -1138,8 +1147,10 @@ export function PuddleScene({
     return () => cancelAnimationFrame(raf);
   }, [waterArriving]);
 
-  // WebGL2 / float targets unavailable — quietly fall back to the blob field.
+  // WebGL2 / float targets unavailable — quietly fall back to the blob field
+  // (or, mid-naming, to the naming step on its own page).
   if (failed) {
+    if (naming) return <NameMemoryPage />;
     return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
   }
 

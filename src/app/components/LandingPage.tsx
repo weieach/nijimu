@@ -1,9 +1,9 @@
 import { useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import { writeVariant } from "./HomePage";
+import { MEMORY_FIELD_PATH } from "../lib/routes";
 
-/** The water / ripple memory field — the previous default homescreen. */
-export const MEMORY_FIELD_PATH = "/ripple";
+export { MEMORY_FIELD_PATH };
 
 /**
  * Original main-branch homescreen: the CSS blob field, restored as the
@@ -14,7 +14,7 @@ export function LandingPage() {
   return (
     <BlobScene
       classicChrome
-      ctaLabel="enter"
+      ctaLabel="Enter"
       showPlus={false}
       onNewMemory={() => {
         writeVariant("ripple2d");

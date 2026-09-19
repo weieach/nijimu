@@ -1,7 +1,7 @@
 import { CSSProperties } from "react";
 import { useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { SERIF, SERIF_CJK } from "../lib/theme";
+import { SERIF_CJK } from "../lib/theme";
 
 interface PageHeaderProps {
   /** absolute = pinned top-center (full-bleed pages); block = in-flow with bottom margin (light pages) */
@@ -41,7 +41,7 @@ export function PageHeader({
         };
 
   const markStyle: CSSProperties = {
-    fontFamily: SERIF,
+    fontFamily: SERIF_CJK,
     fontStyle: "normal",
     fontSize: 12,
     letterSpacing: "0.16px",
@@ -49,6 +49,7 @@ export function PageHeader({
     color: tone === "dark" ? "#d7d6d6" : CHROME_GRAY,
     whiteSpace: "nowrap",
     textDecoration: "none",
+    textTransform: "lowercase",
     display: "flex",
     alignItems: "center",
     gap: 12,
@@ -58,7 +59,7 @@ export function PageHeader({
 
   const children = (
     <>
-      <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
+      <span>滲む</span>
       <span>nijimu</span>
     </>
   );

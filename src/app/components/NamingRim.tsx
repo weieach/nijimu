@@ -14,6 +14,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { saveMemory, type SavedMemory } from "../lib/memoryStore";
+import { MEMORY_FIELD_PATH } from "../lib/routes";
 import { SERIF } from "../lib/theme";
 import { MODEL_PATHS } from "./SceneViewer";
 import {
@@ -165,7 +166,7 @@ function CaptionField({
     const el = sizerRef.current;
     if (!el) return;
     setFitWidth(Math.ceil(el.getBoundingClientRect().width));
-  }, [sizerText, style.fontSize, style.fontFamily, style.fontStyle]);
+  }, [sizerText, style.fontSize, style.fontFamily, style.fontStyle, style.fontWeight]);
 
   return (
     <label
@@ -379,7 +380,7 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
          With nothing saved (a deep link into the flow) there is no seat to
          hand over, so it falls back to the ordinary descent. The naming step
          is replaced in history: there is no draft to come back to. */
-      navigate("/", {
+      navigate(MEMORY_FIELD_PATH, {
         replace: true,
         state: shape?.modelPath
           ? { galleryOpen: true, galleryFocusId: draftId, galleryCarried: true }

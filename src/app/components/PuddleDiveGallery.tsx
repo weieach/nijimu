@@ -164,11 +164,16 @@ const EMPTY_IDS: ReadonlySet<string> = new Set();
    set of styles and one DOM shape: when the fields become words the text must
    not move by a pixel. Line-height is pinned on the inputs as well so the
    editable and the settled caption measure the same. */
+/* fontWeight is pinned because the naming step renders these same words in an
+   <input> inside a <label>, and the theme gives labels weight 500 while inputs
+   and the settled caption get 400 — unpinned, the sizer measures heavier text
+   than the field shows, and the words move by a pixel when they settle. */
 export const CAPTION_TITLE_STYLE: CSSProperties = {
   color: CHROME_GRAY,
   margin: 0,
   fontFamily: SERIF,
   fontStyle: "italic",
+  fontWeight: 400,
   fontSize: "clamp(13px, 1.05vw, 16px)",
   lineHeight: 1.35,
   textAlign: "center",
@@ -179,6 +184,7 @@ export const CAPTION_YEAR_STYLE: CSSProperties = {
   margin: 0,
   fontFamily: SERIF_CJK,
   fontStyle: "normal",
+  fontWeight: 400,
   fontSize: "clamp(11px, 0.9vw, 14px)",
   lineHeight: 1.35,
   textAlign: "center",

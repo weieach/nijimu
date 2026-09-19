@@ -3,13 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { isPuddleSupported } from "./lib/puddle/simulation";
 import { HomePage, readVariant } from "./components/HomePage";
-import { LandingPage, MEMORY_FIELD_PATH } from "./components/LandingPage";
+import { LandingPage } from "./components/LandingPage";
+import { MEMORY_FIELD_PATH, NAMING_PATH } from "./lib/routes";
 import { RecordingStartRoute } from "./components/PuddleRecordingPage";
 import { RecordingProcessPage } from "./components/RecordingProcessPage";
 import { TranscriptRoute } from "./components/PuddleTranscriptPage";
 import { OrbPage } from "./components/OrbPage";
 import { ClickToRecordPage } from "./components/ClickToRecordPage";
-import { NameMemoryPage } from "./components/NameMemoryPage";
 import { BuildObjectPage } from "./components/BuildObjectPage";
 import { ShapeEditorPage } from "./components/ShapeEditorPage";
 import { ShapeGrowPage } from "./components/ShapeGrowPage";
@@ -50,12 +50,20 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       { path: "/", Component: LandingPage },
-      { path: MEMORY_FIELD_PATH, Component: HomePage },
+      {
+        /* The field and the naming step share one mounted HomePage: saving a
+           memory turns the naming rim into the field's gallery, and that only
+           holds without a flicker if HomePage (and the WebGL canvases under
+           it) survives the URL change. A pathless layout route does that;
+           HomePage reads the path to know which step it is showing, and the
+           children render nothing themselves. */
+        Component: HomePage,
+        children: [{ path: MEMORY_FIELD_PATH }, { path: NAMING_PATH }],
+      },
       { path: "/record/click", Component: ClickToRecordPage },
       { path: "/record/start", Component: RecordingStartRoute },
       { path: "/record/process", Component: RecordingProcessPage },
       { path: "/record/transcript", Component: TranscriptRoute },
-      { path: "/record/name", Component: NameMemoryPage },
       { path: "/record/build", Component: BuildObjectPage },
       { path: "/record/shape", Component: ShapeEditorPage },
       { path: "/record/shape/grow", Component: ShapeGrowPage },
@@ -79,13 +87,11 @@ function GlobalControls() {
   const [muted, setMuted] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const { pathname } = useLocation();
-  /** Light chrome (muted gray, no pill) on the light-ground pages. The
-      original blob landing and the legacy dark blob recording screen keep
-      the frosted dark pills. */
+  /** Light chrome (muted gray, no pill) on the light-ground pages. Only the
+      legacy dark blob recording screen keeps the frosted dark pills. */
   const lightChrome =
-    pathname !== "/" &&
-    (pathname !== "/record/start" ||
-      (readVariant() === "puddle" && isPuddleSupported()));
+    pathname !== "/record/start" ||
+    (readVariant() === "puddle" && isPuddleSupported());
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);

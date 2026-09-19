@@ -9,6 +9,17 @@ import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 
+/** Caption + annotation dot — shared so the marks match the words. */
+const BLOB_CAPTION_COLOR = "#D6DADB";
+/** Dark label ink — a step below CHROME_GRAY so it holds on the paper. */
+const BLOB_LABEL_INK = "#5c5c64";
+/** Landing description. */
+const HEADER_DESC_SIZE = 12;
+/** Blob year + title — restored clamp, a step above the header description. */
+const BLOB_CAPTION_SIZE =
+  "clamp(13px, calc(13px + 2 * ((100vw - 390px) / (1024 - 390))), 15px)";
+const BLOB_DOT = 6;
+
 
 /* ───────── types ───────── */
 interface BlobData {
@@ -197,6 +208,37 @@ function gentleEase(t: number): number {
   return t - Math.sin(t * Math.PI * 2) / (Math.PI * 2);
 }
 
+const PAPER = "#ededee";
+const HEADER_INK = { mark: "#504A4A", desc: "#2A2018" };
+const HEADER_LIGHT = { mark: "#e2e2e3", desc: "#D6DADB" };
+
+function hexLuma(hex: string): number {
+  const n = hex.replace("#", "");
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+const PAPER_LUMA = hexLuma(PAPER);
+
+type WipeDir = "left" | "right" | "top" | "bottom";
+
+interface CaptionFx {
+  progress: number;
+  dir: WipeDir;
+  onDark: boolean;
+  stack: number;
+}
+
+function wipeInset(dir: WipeDir, p: number): string {
+  const t = `${(clamp(p, 0, 1) * 100).toFixed(1)}%`;
+  if (dir === "right") return `inset(0 ${t} 0 0)`;
+  if (dir === "left") return `inset(0 0 0 ${t})`;
+  if (dir === "top") return `inset(${t} 0 0 0)`;
+  return `inset(0 0 ${t} 0)`;
+}
+
 /* ──────── annotation ──────── */
 interface AnnPos {
   dotX: number;
@@ -290,6 +332,13 @@ export function BlobScene({
   const [annotations, setAnnotations] = useState<AnnPos[]>([]);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [panState, setPanState] = useState({ x: 0, y: 0 });
+  const headerCopyRef = useRef<HTMLDivElement>(null);
+  const headerOnDarkRef = useRef(false);
+  const [headerOnDark, setHeaderOnDark] = useState(false);
+  const captionEls = useRef<(HTMLDivElement | null)[]>([]);
+  const captionFxRef = useRef<CaptionFx[]>([]);
+  const captionPosRef = useRef<{ x: number; y: number }[]>([]);
+  const [captionFx, setCaptionFx] = useState<CaptionFx[]>([]);
 
   /* ─── sizing ─── */
   const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
@@ -681,6 +730,7 @@ export function BlobScene({
       return;
     }
     panDragDist.current = 0;
+    if (classicChrome) return; // landing: blobs stay put; Enter is the way in
     if (hoveredIdx !== null) return; // don't morph while hovering an annotation
     if (morphTarget.current === 0 && morphProgress.current < 0.1) {
       // Default: open gallery at the newest event (slot 0)
@@ -695,7 +745,7 @@ export function BlobScene({
       morphToBlend();
       return;
     }
-  }, [morphToGallery, morphToBlend, hoveredIdx]);
+  }, [classicChrome, morphToGallery, morphToBlend, hoveredIdx]);
 
   /* ─── wheel ─── */
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -793,6 +843,167 @@ export function BlobScene({
     }
   }, []);
 
+  /* ─── landing header + captions: ink follows the field; captions
+        wipe out of the middle keep-out from the side they approach. ─── */
+  useEffect(() => {
+    if (!classicChrome) return;
+    let raf = 0;
+    let last = performance.now();
+    const ENTER_DARK = 0.46;
+    const LEAVE_DARK = 0.58;
+    const INNER_PAD = 36;
+    const BAND = 90;
+    const TAU = 0.16;
+
+    const lumaAt = (px: number, py: number) => {
+      let luma = PAPER_LUMA;
+      for (let i = 0; i < blobs.length; i++) {
+        const el = blobEls.current[i];
+        if (!el) continue;
+        const br = el.getBoundingClientRect();
+        const rx = br.width / 2 || 1;
+        const ry = br.height / 2 || 1;
+        const nx = (px - (br.left + rx)) / rx;
+        const ny = (py - (br.top + ry)) / ry;
+        if (nx * nx + ny * ny > 1) continue;
+        const hex = COLOR_PALETTE[blobs[i].shape.colorIndex % COLOR_PALETTE.length].color;
+        luma = Math.min(luma, hexLuma(hex) * blobs[i].opacity);
+      }
+      return luma;
+    };
+
+    const onDarkFrom = (avg: number, was: boolean) =>
+      was ? avg < LEAVE_DARK : avg < ENTER_DARK;
+
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const copy = headerCopyRef.current;
+      if (!copy) return;
+      const hr = copy.getBoundingClientRect();
+      if (hr.width < 2 || hr.height < 2) return;
+
+      const kx = (hr.left + hr.right) / 2;
+      const ky = (hr.top + hr.bottom) / 2;
+      const follow = 1 - Math.exp(-dt / TAU);
+
+      const xs = [0.18, 0.5, 0.82];
+      const ys = [0.22, 0.78];
+      let sum = 0;
+      let n = 0;
+      for (const fx of xs) {
+        for (const fy of ys) {
+          sum += lumaAt(hr.left + hr.width * fx, hr.top + hr.height * fy);
+          n++;
+        }
+      }
+      const headerDark = onDarkFrom(sum / (n || 1), headerOnDarkRef.current);
+      if (headerDark !== headerOnDarkRef.current) {
+        headerOnDarkRef.current = headerDark;
+        setHeaderOnDark(headerDark);
+      }
+
+      const laid = blobs.map((_, i) => {
+        const cap = captionEls.current[i];
+        if (!cap) return null;
+        const cr = cap.getBoundingClientRect();
+        if (cr.width < 2 || cr.height < 2) return null;
+        const cx = cr.left + cr.width / 2;
+        const cy = cr.top + cr.height / 2;
+        const z = cy + blobs[i].size * 0.12 + i * 0.01;
+        return { i, cr, cx, cy, z };
+      });
+      const ranked = laid
+        .filter((row): row is NonNullable<typeof row> => !!row)
+        .sort((a, b) => a.z - b.z);
+      const stackOf = new Array<number>(blobs.length).fill(0);
+      ranked.forEach((row, rank) => { stackOf[row.i] = rank; });
+
+      const cover = blobs.map(() => ({ amount: 0, ax: 0, ay: 0 }));
+      for (const under of ranked) {
+        for (const over of ranked) {
+          if (over.z <= under.z) continue;
+          const ow = Math.min(under.cr.right, over.cr.right) - Math.max(under.cr.left, over.cr.left);
+          const oh = Math.min(under.cr.bottom, over.cr.bottom) - Math.max(under.cr.top, over.cr.top);
+          if (ow <= 0 || oh <= 0) continue;
+          const amount = (ow * oh) / (under.cr.width * under.cr.height);
+          if (amount > cover[under.i].amount) {
+            cover[under.i] = { amount, ax: over.cx - under.cx, ay: over.cy - under.cy };
+          }
+        }
+      }
+
+      const nextFx: CaptionFx[] = blobs.map((_, i) => {
+        const prev = captionFxRef.current[i] ?? {
+          progress: 0,
+          dir: "right" as WipeDir,
+          onDark: false,
+          stack: 0,
+        };
+        const row = laid[i];
+        if (!row) return { ...prev, progress: prev.progress + (0 - prev.progress) * follow };
+
+        const { cr, cx, cy } = row;
+        const rx = hr.width / 2 + INNER_PAD + cr.width / 2;
+        const ry = hr.height / 2 + INNER_PAD + cr.height / 2;
+        const d = Math.hypot((cx - kx) / rx, (cy - ky) / ry);
+        const outer = 1 + BAND / Math.max(rx, ry);
+        const headerTarget = clamp((outer - d) / (outer - 1), 0, 1);
+        const collide = cover[i];
+        const target = Math.max(headerTarget, collide.amount);
+
+        const lastPos = captionPosRef.current[i];
+        const vx = lastPos ? cx - lastPos.x : 0;
+        const vy = lastPos ? cy - lastPos.y : 0;
+        captionPosRef.current[i] = { x: cx, y: cy };
+
+        const towardX = collide.amount >= headerTarget && collide.amount > 0.02
+          ? collide.ax
+          : kx - cx;
+        const towardY = collide.amount >= headerTarget && collide.amount > 0.02
+          ? collide.ay
+          : ky - cy;
+        let ax = towardX;
+        let ay = towardY;
+        if (lastPos && vx * towardX + vy * towardY > 0.2) {
+          ax = vx;
+          ay = vy;
+        }
+
+        let dir: WipeDir = prev.dir;
+        if (prev.progress < 0.08) {
+          if (Math.abs(ax) >= Math.abs(ay)) dir = ax >= 0 ? "right" : "left";
+          else dir = ay >= 0 ? "bottom" : "top";
+        }
+
+        const progress = prev.progress + (target - prev.progress) * follow;
+        const onDark = onDarkFrom(lumaAt(cx, cy), prev.onDark);
+        return { progress, dir, onDark, stack: stackOf[i] };
+      });
+
+      const changed =
+        nextFx.length !== captionFxRef.current.length ||
+        nextFx.some((fx, i) => {
+          const prev = captionFxRef.current[i];
+          return (
+            !prev ||
+            Math.abs(prev.progress - fx.progress) > 0.01 ||
+            prev.dir !== fx.dir ||
+            prev.onDark !== fx.onDark ||
+            prev.stack !== fx.stack
+          );
+        });
+      if (changed) {
+        captionFxRef.current = nextFx;
+        setCaptionFx(nextFx);
+      }
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [classicChrome, blobs]);
+
   /* ─── derived ─── */
   const showGooey = morphVal < 0.5;
   const gooeyT = clamp(morphVal * 2.2, 0, 1);
@@ -804,7 +1015,7 @@ export function BlobScene({
     <div
       ref={viewportRef}
       className="relative w-full h-screen overflow-hidden cursor-pointer select-none"
-      style={{ background: "#ededee" }}
+      style={{ background: PAPER }}
       onClick={handleClick}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
@@ -942,21 +1153,35 @@ export function BlobScene({
         <div className="absolute inset-0" style={{ opacity: clamp(1 - morphVal * 5, 0, 1), zIndex: 19 }}>
           {blobs.map((blob, i) => {
             const a = annotations[i];
-            if (!a || (a.dotX === 0 && a.dotY === 0)) return null;
+            if (!a || (a.dotX === 0 && a.dotY === 0)) {
+              captionEls.current[i] = null;
+              return null;
+            }
             const cc = connectionCount(i);
             const ts = textScale(i);
             const isPulsating = cc > 2;
             const isHovered = hoveredIdx === i;
             const isConnectedToHovered = hoveredIdx !== null && hoveredConns.includes(i);
             const dimmed = hoveredIdx !== null && !isHovered && !isConnectedToHovered;
+            const fx = classicChrome ? captionFx[i] : undefined;
+            const wipe = fx?.progress ?? 0;
+            const stack = fx?.stack ?? i;
+            const erased = wipe > 0.55;
+            const captionColor = classicChrome
+              ? (fx?.onDark ? HEADER_LIGHT.desc : BLOB_LABEL_INK)
+              : BLOB_CAPTION_COLOR;
+            const visible = (1 - wipe) * (dimmed ? 0.2 : 1);
 
             return (
               <div
                 key={`a-${blob.id}`}
                 onMouseEnter={(e) => { e.stopPropagation(); setHoveredIdx(i); }}
                 onMouseLeave={() => setHoveredIdx(null)}
-                onClick={(e) => { e.stopPropagation(); morphToGalleryAt(i); }}
-                style={{ pointerEvents: "auto" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!classicChrome) morphToGalleryAt(i);
+                }}
+                style={{ pointerEvents: erased ? "none" : "auto" }}
               >
                 {/* Dot */}
                 <div
@@ -964,14 +1189,14 @@ export function BlobScene({
                   style={{
                     left: `${a.dotX}px`,
                     top: `${a.dotY}px`,
-                    width: 10,
-                    height: 10,
+                    width: BLOB_DOT,
+                    height: BLOB_DOT,
                     borderRadius: "50%",
-                    backgroundColor: "#1a1a1a",
+                    backgroundColor: captionColor,
                     transform: "translate(-50%, -50%)",
-                    zIndex: 22,
-                    opacity: dimmed ? 0.25 : 1,
-                    transition: "opacity 0.4s ease",
+                    zIndex: 22 + stack,
+                    opacity: (1 - wipe) * (dimmed ? 0.25 : 1),
+                    transition: "background-color 0.35s ease",
                   }}
                 />
                 {/* Pulsating ring for highly-connected events */}
@@ -981,41 +1206,52 @@ export function BlobScene({
                     style={{
                       left: `${a.dotX}px`,
                       top: `${a.dotY}px`,
-                      width: 10,
-                      height: 10,
+                      width: BLOB_DOT,
+                      height: BLOB_DOT,
                       borderRadius: "50%",
-                      border: "0.2px solid #1a1a1a",
+                      border: `0.2px solid ${captionColor}`,
                       backgroundColor: "transparent",
                       transform: "translate(-50%, -50%)",
-                      zIndex: 21,
-                      opacity: dimmed ? 0.15 : 1,
+                      zIndex: 21 + stack,
+                      opacity: (1 - wipe) * (dimmed ? 0.15 : 1),
                       animation: "ringPulse 2.5s ease-in-out infinite",
-                      transition: "opacity 0.4s ease",
+                      transition: "border-color 0.35s ease",
                     }}
                   />
                 )}
-                {/* Text hit area */}
+                {/* Outer box is the hit + keep-out measure; inner clip is the erase.
+                    Measuring the clipped node made the rect collapse and flicker. */}
                 <div
+                  ref={(el) => { captionEls.current[i] = el; }}
                   className="absolute"
                   style={{
                     left: `${a.anchorX}px`,
                     top: `${a.anchorY}px`,
                     transform: a.textAlign === "right" ? "translateX(-100%)" : "translateX(0)",
-                    zIndex: 22,
-                    opacity: dimmed ? 0.2 : 1,
-                    transition: "opacity 0.4s ease",
+                    zIndex: 22 + stack,
                     cursor: "pointer",
                     padding: "4px 8px",
                     margin: "-4px -8px",
+                    color: captionColor,
+                    pointerEvents: erased ? "none" : "auto",
                   }}
                 >
-                  {/* Year */}
+                  <div
+                    style={{
+                      opacity: visible,
+                      filter: wipe > 0.02 ? `blur(${wipe * 5}px)` : "none",
+                      clipPath: wipeInset(fx?.dir ?? "right", wipe),
+                    }}
+                  >
+                  {/* Year — GenRyuMin first, same rule as gallery / puddle captions */}
                   <div
                     style={{
                       fontFamily: SERIF_CJK,
-                      fontSize: 12,
-                      color: "#504A4A",
+                      fontStyle: "normal",
+                      fontSize: BLOB_CAPTION_SIZE,
+                      color: "inherit",
                       opacity: 0.8,
+                      letterSpacing: "0.06em",
                       marginBottom: 4,
                       whiteSpace: "nowrap",
                     }}
@@ -1026,8 +1262,8 @@ export function BlobScene({
                   <div
                     style={{
                       fontFamily: SERIF,
-                      fontSize: isMobile ? "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)" : 16,
-                      color: "#2A2018",
+                      fontSize: BLOB_CAPTION_SIZE,
+                      color: "inherit",
                       opacity: 0.9,
                       lineHeight: blob.event.includes("\n") ? 1.5 : "normal",
                       whiteSpace: blob.event.includes("\n") ? "pre-line" : "nowrap",
@@ -1043,7 +1279,7 @@ export function BlobScene({
                         fontFamily: "Georgia, serif",
                         fontStyle: "italic",
                         fontSize: 11,
-                        color: "#2A2018",
+                        color: "inherit",
                         opacity: 0.35,
                         marginTop: 8,
                         whiteSpace: "nowrap",
@@ -1052,6 +1288,7 @@ export function BlobScene({
                       ...
                     </div>
                   )}
+                  </div>
                 </div>
               </div>
             );
@@ -1160,51 +1397,88 @@ export function BlobScene({
                 zIndex: 2,
               }}
             >
-              <p
+              <div
+                ref={headerCopyRef}
                 style={{
-                  fontFamily: SERIF,
-                  fontStyle: "normal",
-                  color: "#e2e2e3",
-                  fontSize: 12,
-                  letterSpacing: "0.16px",
-                  lineHeight: 1.5,
-                  margin: 0,
                   display: "flex",
-                  alignItems: "center",
-                  gap: 12,
+                  flexDirection: "column",
+                  alignItems: "stretch",
+                  gap: 28,
+                  width: "fit-content",
                 }}
               >
-                <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
-                <span>Nijimu</span>
-              </p>
               <p
                 style={{
                   fontFamily: SERIF,
-                  color: "#D6DADB",
-                  fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
+                  color: headerOnDark ? HEADER_LIGHT.desc : HEADER_INK.desc,
+                  fontSize: HEADER_DESC_SIZE,
                   letterSpacing: "0.24px",
                   lineHeight: 1.5,
                   margin: 0,
+                  padding: 0,
                   textAlign: "center",
-                  maxWidth: "90%",
+                  width: 0,
+                  minWidth: "100%",
+                  boxSizing: "border-box",
+                  transition: "color 0.35s ease",
                 }}
               >
-                The things you've loved don't disappear.
-                <br />
-                They dissolve into who you're becoming.{" "}
+                An interactive memory sculpting tool to trace how memory evolves.
               </p>
-              <div
+              <button
+                type="button"
+                className="landing-enter-btn"
                 onClick={(e) => {
                   e.stopPropagation();
                   onNewMemory();
                 }}
                 style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 16,
+                  margin: 0,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
                   cursor: "pointer",
                   pointerEvents: "auto",
-                  width: "fit-content",
+                  color: headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark,
+                  fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
+                  lineHeight: 1.5,
+                  transition: "color 0.35s ease",
                 }}
               >
-                <NewMomoryIdle label={ctaLabel} showPlus={showPlus} />
+                <span
+                  style={{
+                    fontFamily: SANS,
+                    fontSize: HEADER_DESC_SIZE + 1,
+                    letterSpacing: "0.01em",
+                    whiteSpace: "nowrap",
+                    marginRight: -4,
+                  }}
+                >
+                  {ctaLabel}
+                </span>
+                <span
+                  style={{
+                    fontFamily: SERIF_CJK,
+                    fontStyle: "normal",
+                    letterSpacing: "0.16px",
+                    textTransform: "lowercase",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span>滲む</span>
+                  <span>nijimu</span>
+                </span>
+                <span className="landing-enter-arrow" aria-hidden>
+                  <span className="landing-enter-stem" />
+                  <span className="landing-enter-caret" />
+                </span>
+              </button>
               </div>
             </div>
           ) : (
@@ -1323,6 +1597,34 @@ export function BlobScene({
         }
         .connection-line-anim {
           animation: connDash 1.2s linear infinite;
+        }
+        .landing-enter-arrow {
+          display: flex;
+          align-items: center;
+          width: 0.42em;
+          height: 0.7em;
+          overflow: visible;
+        }
+        .landing-enter-stem {
+          display: block;
+          height: 1.25px;
+          width: 0;
+          flex-shrink: 0;
+          background: currentColor;
+          margin-right: -0.1em;
+          transition: width 0.28s ease;
+        }
+        .landing-enter-caret {
+          flex-shrink: 0;
+          width: 0.36em;
+          height: 0.36em;
+          border-top: 1.25px solid currentColor;
+          border-right: 1.25px solid currentColor;
+          transform: rotate(45deg);
+          box-sizing: border-box;
+        }
+        .landing-enter-btn:hover .landing-enter-stem {
+          width: 0.78em;
         }
         div::-webkit-scrollbar { display: none; }
       `}</style>
