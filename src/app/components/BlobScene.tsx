@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import svgPaths from "../../imports/svg-t19vgojqiy";
 import NewMomoryIdle from "../../imports/NewMomoryIdle";
 import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memoryData";
@@ -8,6 +8,8 @@ import { PageHeader } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
+import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, inkRingPoint, smoothProgress, type InkArrival } from "../lib/landingTransition";
+import { inkGallerySeat } from "./PuddleDiveGallery";
 
 /** Caption + annotation dot — shared so the marks match the words. */
 const BLOB_CAPTION_COLOR = "#D6DADB";
@@ -268,8 +270,10 @@ export function BlobScene({
   onGalleryExit,
   onToggleGrid,
   classicChrome = false,
+  galleryOnly = false,
   ctaLabel = "New Memory",
   showPlus = true,
+  landingArrival = null,
 }: {
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
@@ -280,8 +284,13 @@ export function BlobScene({
   onToggleGrid?: () => void;
   /** Main-branch overlay: top blur, tagline, original wordmark. */
   classicChrome?: boolean;
+  /** Dedicated carousel route: start (and stay) in gallery, no blend overlay. */
+  galleryOnly?: boolean;
   ctaLabel?: string;
   showPlus?: boolean;
+  /** Only the landing's Enter action uses this clock; the original field is
+      unchanged until that action begins. */
+  landingArrival?: InkArrival | null;
 }) {
   // Curated life events plus whatever the user has saved, so their memories
   // blend into the same field.
@@ -306,9 +315,9 @@ export function BlobScene({
   const scale = useScaleFactor();
 
   /* ─── refs for animation state ─── */
-  const morphProgress = useRef(0);
-  const morphTarget = useRef(0);
-  const modeRef = useRef<"blend" | "gallery">("blend");
+  const morphProgress = useRef(galleryOnly ? 1 : 0);
+  const morphTarget = useRef(galleryOnly ? 1 : 0);
+  const modeRef = useRef<"blend" | "gallery">(galleryOnly ? "gallery" : "blend");
   const carouselIdx = useRef(0);
   const carouselTgt = useRef(0);
   const scrollVel = useRef(0);
@@ -327,8 +336,10 @@ export function BlobScene({
   const panDragDist = useRef(0);
 
   /* ─── React state ─── */
-  const [morphVal, setMorphVal] = useState(0);
-  const [activeIdx, setActiveIdx] = useState(0);
+  const [morphVal, setMorphVal] = useState(galleryOnly ? 1 : 0);
+  const [activeIdx, setActiveIdx] = useState(() =>
+    galleryOnly ? (gallerySortOrder[0] ?? 0) : 0,
+  );
   const [annotations, setAnnotations] = useState<AnnPos[]>([]);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [panState, setPanState] = useState({ x: 0, y: 0 });
@@ -339,6 +350,21 @@ export function BlobScene({
   const captionFxRef = useRef<CaptionFx[]>([]);
   const captionPosRef = useRef<{ x: number; y: number }[]>([]);
   const [captionFx, setCaptionFx] = useState<CaptionFx[]>([]);
+  const entryRef = useRef(landingArrival);
+  entryRef.current = landingArrival;
+  const entryCapture = useRef<{
+    inline: string; x: number; y: number; dotX: number; dotY: number;
+    width: number; height: number; a: number; b: number; c: number; d: number;
+    radius: string; blur: number; opacity: number;
+  }[] | null>(null);
+  const entryTime = landingArrival?.elapsed ?? 0;
+  const entryReduced = landingArrival?.reducedMotion ?? false;
+  const entryHeader = landingArrival ? 1 - smoothProgress(entryTime, 0, entryReduced ? 180 : INK_ENTRY.headerEnd) : 1;
+  const entryLabels = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 180 : INK_ENTRY.headerEnd,
+    entryReduced ? 320 : INK_ENTRY.labelsEnd) : 1;
+  const entryShrink = landingArrival && !entryReduced ? smoothProgress(entryTime, INK_ENTRY.labelsEnd, INK_ENTRY.shrinkEnd) : 0;
+  const entryPaper = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 320 : INK_ENTRY.ringHoldEnd,
+    entryReduced ? INK_ENTRY.reducedEnd : INK_ENTRY.growEnd) : 1;
 
   /* ─── sizing ─── */
   const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
@@ -350,6 +376,62 @@ export function BlobScene({
   const selSize = 260 * scale;
   const gap = 36 * scale;
   const centerY = vh * 0.73; // Moved carousel lower
+
+  // Animate the actual CSS blobs from their live, panned positions. Capturing
+  // their computed transform and shape preserves the original first frame.
+  useLayoutEffect(() => {
+    if (!landingArrival) {
+      if (entryCapture.current) {
+        entryCapture.current.forEach((captured, i) => {
+          if (blobEls.current[i]) blobEls.current[i]!.style.cssText = captured.inline;
+        });
+        entryCapture.current = null;
+      }
+      return;
+    }
+    const container = containerRef.current;
+    if (!container) return;
+    const cr = container.getBoundingClientRect();
+    if (!entryCapture.current) {
+      panVelocity.current = { x: 0, y: 0 };
+      isPanning.current = false;
+      entryCapture.current = blobEls.current.map((el, i) => {
+        const style = getComputedStyle(el!);
+        const rect = el!.getBoundingClientRect();
+        const matrix = new DOMMatrixReadOnly(style.transform);
+        const s = parseFloat(style.scale) || 1;
+        return { inline: el!.style.cssText, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
+          dotX: annotations[i] ? cr.left + annotations[i].dotX : rect.left + rect.width / 2,
+          dotY: annotations[i] ? cr.top + annotations[i].dotY : rect.top + rect.height / 2,
+          width: parseFloat(style.width), height: parseFloat(style.height),
+          a: matrix.a * s, b: matrix.b * s, c: matrix.c * s, d: matrix.d * s,
+          radius: style.borderRadius, blur: blobs[i].blur * scale, opacity: blobs[i].opacity };
+      });
+    }
+    const gather = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.shrinkEnd, INK_ENTRY.ringEnd);
+    const unfold = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.ringHoldEnd, INK_ENTRY.unfoldEnd);
+    const growth = inkGrowth(landingArrival);
+    entryCapture.current.forEach((captured, i) => {
+      const el = blobEls.current[i];
+      if (!el) return;
+      const slot = gallerySlot[i];
+      const ring = inkRingPoint(vw, vh, slot, blobs.length);
+      const seat = inkGallerySeat(vw, vh, slot);
+      const x = lerp(lerp(lerp(captured.x, captured.dotX, entryShrink), ring.x, gather), seat.x, unfold);
+      const y = lerp(lerp(lerp(captured.y, captured.dotY, entryShrink), ring.y, gather), seat.y, unfold);
+      const width = lerp(captured.width, INK_POINTER_SIZE, entryShrink);
+      const height = lerp(captured.height, INK_POINTER_SIZE, entryShrink);
+      el.style.animation = "none";
+      el.style.scale = "1";
+      el.style.left = `${x - cr.left}px`; el.style.top = `${y - cr.top}px`;
+      el.style.width = `${width}px`; el.style.height = `${height}px`;
+      el.style.transform = `matrix(${lerp(captured.a, 1, entryShrink)}, ${lerp(captured.b, 0, entryShrink)}, ${lerp(captured.c, 0, entryShrink)}, ${lerp(captured.d, 1, entryShrink)}, ${-width / 2}, ${-height / 2})`;
+      el.style.borderRadius = entryShrink > 0.98 ? "50%" : captured.radius;
+      el.style.filter = `blur(${captured.blur * (1 - entryShrink)}px)`;
+      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * (slot > 3 ? 1 - unfold : 1) * (1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24))}`;
+      if (entryShrink > 0.98) el.style.background = blobs[i].color.match(/#[0-9a-f]{6}/i)?.[0] ?? MEMORY_COLORS[0];
+    });
+  }, [landingArrival, entryTime, entryShrink, entryReduced, gallerySlot, blobs, scale, vw, vh]);
 
   /* ─── initial pan offset (center the canvas) ─── */
   useEffect(() => {
@@ -623,6 +705,7 @@ export function BlobScene({
       return;
     }
     const update = () => {
+      if (entryRef.current) { annRafRef.current = requestAnimationFrame(update); return; }
       const ct = containerRef.current;
       if (!ct) { annRafRef.current = requestAnimationFrame(update); return; }
       const cr = ct.getBoundingClientRect();
@@ -673,11 +756,15 @@ export function BlobScene({
   }, [capture]);
 
   const morphToBlend = useCallback(() => {
+    if (galleryOnly) {
+      onGalleryExit?.();
+      return;
+    }
     if (morphTarget.current === 0) return;
     capture();
     morphTarget.current = 0;
     onGalleryExit?.();
-  }, [capture, onGalleryExit]);
+  }, [galleryOnly, capture, onGalleryExit]);
 
   /* ─── navigate to gallery with specific blob selected ─── */
   const morphToGalleryAt = useCallback((blobIdx: number) => {
@@ -691,7 +778,7 @@ export function BlobScene({
 
   /* ─── open gallery on mount (homescreen G shortcut) ─── */
   useEffect(() => {
-    if (!openGallery || blobs.length === 0) return;
+    if (galleryOnly || !openGallery || blobs.length === 0) return;
     const defaultSlot = 0;
     const id = requestAnimationFrame(() => {
       // Second frame so blob layout is measurable for capture()
@@ -703,7 +790,7 @@ export function BlobScene({
       });
     });
     return () => cancelAnimationFrame(id);
-  }, [openGallery, blobs.length, gallerySortOrder, morphToGallery]);
+  }, [galleryOnly, openGallery, blobs.length, gallerySortOrder, morphToGallery]);
 
   /* ─── keyboard ─── */
   useEffect(() => {
@@ -880,6 +967,7 @@ export function BlobScene({
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const copy = headerCopyRef.current;
+      if (entryRef.current) return;
       if (!copy) return;
       const hr = copy.getBoundingClientRect();
       if (hr.width < 2 || hr.height < 2) return;
@@ -1005,8 +1093,8 @@ export function BlobScene({
   }, [classicChrome, blobs]);
 
   /* ─── derived ─── */
-  const showGooey = morphVal < 0.5;
-  const gooeyT = clamp(morphVal * 2.2, 0, 1);
+  const showGooey = morphVal < 0.5 && entryShrink < 0.34;
+  const gooeyT = clamp(Math.max(morphVal * 2.2, entryShrink * 3), 0, 1);
 
   // Connection lines: from hovered event's dot to each connected event's dot
   const hoveredConns = hoveredIdx !== null ? getConnections(hoveredIdx) : [];
@@ -1014,8 +1102,12 @@ export function BlobScene({
   return (
     <div
       ref={viewportRef}
+      inert={!!landingArrival}
+      data-ink-stage={!landingArrival ? "field" : entryTime < INK_ENTRY.headerEnd ? "header" : entryTime < INK_ENTRY.labelsEnd ? "labels"
+        : entryTime < INK_ENTRY.shrinkEnd ? "shrink" : entryTime < INK_ENTRY.ringEnd ? "gather" : entryTime < INK_ENTRY.ringHoldEnd ? "ring"
+        : entryTime < INK_ENTRY.unfoldEnd ? "unfold" : "artifacts"}
       className="relative w-full h-screen overflow-hidden cursor-pointer select-none"
-      style={{ background: PAPER }}
+      style={{ background: landingArrival ? `rgba(237,237,238,${entryPaper})` : PAPER }}
       onClick={handleClick}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
@@ -1084,7 +1176,7 @@ export function BlobScene({
         {/* ═══ AMBIENT BLOBS ═══ */}
         <div
           className="absolute inset-0 pointer-events-none"
-          style={{ opacity: clamp(1 - morphVal * 3, 0, 1) }}
+          style={{ opacity: clamp(1 - morphVal * 3, 0, 1) * (landingArrival ? (1 - entryShrink) * entryPaper : 1) }}
         >
           <div className="absolute" style={{
             left: "20%", top: "30%",
@@ -1150,7 +1242,7 @@ export function BlobScene({
         )}
 
         {/* ═══ ANNOTATIONS ═══ */}
-        <div className="absolute inset-0" style={{ opacity: clamp(1 - morphVal * 5, 0, 1), zIndex: 19 }}>
+        <div className="absolute inset-0" style={{ opacity: clamp(1 - morphVal * 5, 0, 1) * entryLabels, zIndex: 19 }}>
           {blobs.map((blob, i) => {
             const a = annotations[i];
             if (!a || (a.dotX === 0 && a.dotY === 0)) {
@@ -1379,9 +1471,9 @@ export function BlobScene({
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
-            opacity: clamp(1 - morphVal * 4, 0, 1),
+            opacity: clamp(1 - morphVal * 4, 0, 1) * entryHeader,
             zIndex: 25,
-            transition: "opacity 0.3s ease",
+            transition: landingArrival ? "none" : "opacity 0.3s ease",
           }}
         >
           {classicChrome ? (
@@ -1428,6 +1520,7 @@ export function BlobScene({
               <button
                 type="button"
                 className="landing-enter-btn"
+                disabled={!!landingArrival}
                 onClick={(e) => {
                   e.stopPropagation();
                   onNewMemory();
@@ -1528,11 +1621,12 @@ export function BlobScene({
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full pointer-events-none opacity-40"
-        style={{ mixBlendMode: "overlay", imageRendering: "pixelated" }}
+        style={{ mixBlendMode: "overlay", imageRendering: "pixelated", opacity: landingArrival ? 0.4 * entryPaper : undefined }}
       />
 
       {/* Vignette */}
       <div className="absolute inset-0 pointer-events-none" style={{
+        opacity: entryPaper,
         background: "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.08) 100%)",
       }} />
 

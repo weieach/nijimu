@@ -7,6 +7,7 @@ import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { SERIF, SERIF_CJK } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
+import { inkGrowth, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
 
 /*
  * PuddleDiveGallery — the gallery presentation of the "dive" variant.
@@ -111,6 +112,15 @@ function domeGeometry(w: number, h: number): DomeGeometry {
 function domePoint(g: DomeGeometry, radius: number, deg: number) {
   const a = (deg * Math.PI) / 180;
   return { x: g.cx + radius * Math.sin(a), y: g.cy - radius * Math.cos(a) };
+}
+
+/** Shared with the ink field: its pointers finish at these exact seats. */
+export function inkGallerySeat(w: number, h: number, offset: number) {
+  const geo = domeGeometry(w, h);
+  const at = domePoint(geo, geo.r, Math.min(offset, 10) * ARC_STEP_DEG);
+  const depth = slotDepth(offset);
+  return { x: at.x, y: at.y + (offset === 0 ? ARC_FOCUS_DROP_VH * h : 0),
+    size: geo.size * depth.scale, opacity: depth.opacity };
 }
 
 function useViewport() {
@@ -222,6 +232,7 @@ export function PuddleDiveGallery({
   waterEffect = true,
   neighborsVisible = true,
   arrival = "resolve",
+  inkArrival,
 }: {
   items: DiveGalleryItem[];
   activeIdx: number;
@@ -244,17 +255,20 @@ export function PuddleDiveGallery({
   neighborsVisible?: boolean;
   /** Whether the rim was dived to or handed over from the naming step. */
   arrival?: DiveArrival;
+  /** A mounted ink field hands its six-pixel pointers to these same artifacts. */
+  inkArrival?: InkArrival;
 }) {
   const item = items[activeIdx];
   const hasNewer = activeIdx > 0;
   const hasOlder = activeIdx < items.length - 1;
   const viewport = useViewport();
   const geo = domeGeometry(viewport.w, viewport.h);
+  const growth = inkArrival ? inkGrowth(inkArrival) : 1;
 
   /* arrows — keyboard */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (phase !== "gallery") return;
+      if (phase !== "gallery" || growth < 1) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (e.key === "ArrowLeft") onNavigate(-1);
@@ -263,7 +277,7 @@ export function PuddleDiveGallery({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [phase, onNavigate, onExit]);
+  }, [phase, growth, onNavigate, onExit]);
 
   /* preload the artifacts just off the end of the rim, so the memory that
      swings in on an arrow press never stalls on a network fetch */
@@ -279,7 +293,7 @@ export function PuddleDiveGallery({
      A carried rim wasn't moving at all, so it starts calm. */
   const [wobbling, setWobbling] = useState(false);
   useEffect(() => {
-    if (!waterEffect || phase === "diving" || reducedMotion) {
+    if (!waterEffect || phase === "diving" || reducedMotion || inkArrival) {
       setWobbling(false);
       return;
     }
@@ -294,7 +308,7 @@ export function PuddleDiveGallery({
         : DIVE_TUNING.artifactResolveMs;
     const t = setTimeout(() => setWobbling(false), ms);
     return () => clearTimeout(t);
-  }, [arrival, phase, reducedMotion, waterEffect]);
+  }, [arrival, phase, reducedMotion, waterEffect, !!inkArrival]);
 
   /* The neighbours outlive `neighborsVisible` going false: they have to stay
      mounted long enough to sink back out, or the rim would simply blink away. */
@@ -372,7 +386,7 @@ export function PuddleDiveGallery({
       : // arriving: strongest at first sight, stilling as the shape settles
         { dur: Math.round(resolveMs), scale: "42;14;0" };
 
-  const chromeVisible = phase === "gallery";
+  const chromeVisible = phase === "gallery" && growth >= 1;
   const palette = COLOR_PALETTE[item.colorIndex % COLOR_PALETTE.length];
   const travelMs = reducedMotion ? 0 : ARC_TRAVEL_MS;
   const travelEase = "cubic-bezier(0.33, 0.02, 0.2, 1)";
@@ -440,9 +454,9 @@ export function PuddleDiveGallery({
   return (
     <div
       className="absolute inset-0 select-none"
-      style={{ zIndex: 30 }}
+      style={{ zIndex: 30, pointerEvents: growth < 1 ? "none" : undefined }}
       onClick={() => {
-        if (phase === "gallery" && exitOnBackdropClick) onExit();
+        if (chromeVisible && exitOnBackdropClick) onExit();
       }}
     >
       {/* ═══ BACKGROUND WASH — the memory's color, held around the focused
@@ -460,7 +474,7 @@ export function PuddleDiveGallery({
           borderRadius: "50%",
           backgroundColor: washColor(palette.color),
           opacity:
-            chromeVisible || !waterEffect
+            (chromeVisible || !waterEffect)
               ? waterEffect && washSettled
                 ? DIVE_TUNING.artifactWashOpacity
                 : Math.min(1, DIVE_TUNING.artifactWashOpacity / 0.62)
@@ -532,13 +546,17 @@ export function PuddleDiveGallery({
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
           /* handed over rather than arriving: it is already exactly here */
           const carried = carriedIds.has(slotItem.id) && phase === "gallery";
+          const entryScale = inkArrival && !inkArrival.reducedMotion
+            ? INK_POINTER_SIZE / (geo.size * depth.scale) + (1 - INK_POINTER_SIZE / (geo.size * depth.scale)) * growth
+            : 1;
           return (
             <div
               key={slotItem.id}
               className="dive-artifact"
+              data-memory-id={slotItem.id}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!focused && phase === "gallery") onNavigate(offset);
+                if (!focused && chromeVisible) onNavigate(offset);
               }}
               style={{
                 position: "absolute",
@@ -552,7 +570,7 @@ export function PuddleDiveGallery({
                 transition: `transform ${travelMs}ms ${travelEase}`,
                 zIndex: 10 - Math.abs(offset),
                 cursor: focused ? "default" : "pointer",
-                pointerEvents: phase === "gallery" ? "auto" : "none",
+                pointerEvents: chromeVisible ? "auto" : "none",
               }}
             >
               {/* the arrival / departure, on its own layer so the depth
@@ -561,12 +579,13 @@ export function PuddleDiveGallery({
                 style={{
                   width: "100%",
                   height: "100%",
-                  opacity: phase === "diving" ? 0 : undefined,
+                  opacity: inkArrival ? Math.min(1, growth * 5) : phase === "diving" ? 0 : undefined,
+                  transform: inkArrival ? `scale(${entryScale})` : undefined,
                   /* A carried neighbour keeps the very animation string the
                      naming step gave it: unchanged, the browser lets it run on
                      to its end, so a rim still gathering when it was handed
                      over finishes gathering instead of snapping into place. */
-                  animation: carried
+                  animation: inkArrival ? "none" : carried
                     ? focused
                       ? "none"
                       : neighborAnimation(offset)
@@ -594,12 +613,13 @@ export function PuddleDiveGallery({
                         .join(" ") || undefined,
                     transition: `opacity ${travelMs}ms ${travelEase}, filter ${travelMs}ms ${travelEase}`,
                     animation:
-                      waterEffect && focused && !reducedMotion && phase === "gallery"
+                      waterEffect && focused && !reducedMotion && phase === "gallery" && !inkArrival
                         ? `diveFloat 7s ease-in-out ${Math.round(resolveMs)}ms infinite alternate`
                         : undefined,
                   }}
                 >
                   <SceneViewer
+                    measureUnscaled={!!inkArrival}
                     modelPath={slotItem.shape.modelPath}
                     fluidity={slotItem.shape.fluidity}
                     evolve={slotItem.shape.evolve}

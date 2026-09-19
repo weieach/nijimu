@@ -12,7 +12,8 @@ import { RIPPLE_CADENCE, introSchedule, dripGapMs } from "../lib/puddle/cadence"
 import { BlobScene } from "./BlobScene";
 import { PageHeader } from "./PageHeader";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
-import type { DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
+import { PuddleDiveGallery, type DiveGalleryItem, type DivePhase } from "./PuddleDiveGallery";
+import { inkGrowth } from "../lib/landingTransition";
 import { DiveGalleryHost, draftAsSaved, type NamingSession } from "./NamingRim";
 import { NameMemoryPage } from "./NameMemoryPage";
 import { buildArchive } from "../lib/archive";
@@ -301,6 +302,8 @@ export function PuddleScene({
   galleryOpen = false,
   galleryFocusId,
   galleryCarried = false,
+  galleryOnly = false,
+  inkArrival,
   naming = null,
   onGalleryExit,
   onToggleGrid,
@@ -320,6 +323,10 @@ export function PuddleScene({
       surface left to dive through: the gallery opens at depth and the water
       settles in behind it instead. */
   galleryCarried?: boolean;
+  /** Dedicated /memory route: start (and stay) in the dive gallery, no
+      homescreen surface underneath. */
+  galleryOnly?: boolean;
+  inkArrival?: import("../lib/landingTransition").InkArrival;
   /** The naming step, hosted here. The scene mounts with it and shows the
       naming rim over hidden water; when it is saved (`naming` goes back to
       null, with `galleryOpen` + `galleryCarried`) the very same rim becomes the
@@ -446,12 +453,17 @@ export function PuddleScene({
     });
   }, [events, anchors, liveSaved]);
 
-  /** Opening straight into the settled gallery, with the memory the naming step
-      was already showing at the apex. */
-  const carriedOpen = galleryOpen && diveGalleryEnabled && galleryCarried;
+  /** Dedicated carousel route, or a rim handed over: the scene begins at depth
+      so the puddle field never flashes underneath. */
+  const startAtDepth =
+    !!naming || (galleryOpen && diveGalleryEnabled && (galleryCarried || galleryOnly));
   /** The scene begins at depth, with a rim already on screen: either hosting
       the naming step, or (a fresh mount) handed one by it. */
-  const openAtDepth = naming ? naming.draftId : carriedOpen ? (galleryFocusId ?? "") : null;
+  const openAtDepth = naming
+    ? naming.draftId
+    : startAtDepth
+      ? (galleryFocusId ?? "")
+      : null;
   const openAtDepthRef = useRef(openAtDepth);
 
   /** idle → diving → gallery → surfacing → idle. Anything non-idle mounts the overlay. */
@@ -476,7 +488,7 @@ export function PuddleScene({
   }
   /** The water is the one thing the naming step didn't have, so on a carried
       arrival it is also the only thing that comes in. */
-  const [waterArriving, setWaterArriving] = useState(carriedOpen && !naming);
+  const [waterArriving, setWaterArriving] = useState(startAtDepth && !naming);
   /** Sim-side controls, assigned inside the main effect (the sim must outlive the gallery). */
   const diveControlsRef = useRef<{
     open(itemIdx: number, carried?: boolean): void;
@@ -1151,6 +1163,10 @@ export function PuddleScene({
   // (or, mid-naming, to the naming step on its own page).
   if (failed) {
     if (naming) return <NameMemoryPage />;
+    if (galleryOnly) return <PuddleDiveGallery items={galleryItems} activeIdx={galleryIdx}
+      phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival}
+      onNavigate={delta => setGalleryIdx(i => Math.max(0, Math.min(galleryItems.length - 1, i + delta)))}
+      onExit={() => onGalleryExit?.()} onToggleGrid={onToggleGrid} />;
     return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
   }
 
@@ -1158,7 +1174,7 @@ export function PuddleScene({
   const chromeHidden = divePhase !== "idle" || descending;
   /** Wordmark stays once the dive gallery settles; it only leaves during transit. */
   const wordmarkHidden =
-    descending || divePhase === "diving" || divePhase === "surfacing";
+    descending || divePhase === "diving" || divePhase === "surfacing" || (!!inkArrival && inkGrowth(inkArrival) < 1);
 
   return (
     <div
@@ -1450,6 +1466,7 @@ export function PuddleScene({
           naming={naming}
           reducedMotion={reducedMotionPref}
           gallery={{
+            inkArrival,
             items: galleryItems,
             activeIdx: galleryIdx,
             phase: divePhase,

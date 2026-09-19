@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 import { saveMemory } from "../lib/memoryStore";
-import { MEMORY_FIELD_PATH } from "./LandingPage";
+import { MEMORY_FIELD_PATH } from "../lib/routes";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 

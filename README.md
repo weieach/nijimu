@@ -10,7 +10,8 @@ Run `npm run dev` to start the development server.
 
 ## Pages
 
-- `/`: original blob landing — enter opens the ripple / puddle field
+- `/`: original blob landing — enter opens the 3D memory carousel
+- `/memory`: 3D memory carousel
 - `/ripple`: home canvas where memories sit as a watercolor puddle, blob field, or ripple field
 - `/record/start`: speak a memory aloud — the main recording step of the create flow
 - `/record/click`: early click-to-record screen over the blob field

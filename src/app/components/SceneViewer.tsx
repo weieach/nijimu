@@ -763,6 +763,8 @@ interface SceneViewerProps {
   bumpSpike?: number;
   density?: number;
   ready?: boolean;
+  /** Preserve render resolution while a parent grows from a tiny ink pointer. */
+  measureUnscaled?: boolean;
   /** Tighter framing for small fixed viewports (cards, connect flow, thumbnails). */
   constrainedViewport?: boolean;
   /** Camera distance as a multiple of the model's bounding sphere — lower
@@ -819,6 +821,7 @@ export function SceneViewer({
   bumpSpike = 0,
   density = 200,
   ready: readyProp,
+  measureUnscaled = false,
   constrainedViewport = false,
   frameMargin,
   frameloop = "always",
@@ -936,6 +939,7 @@ export function SceneViewer({
   return (
     <div className={className} style={containerStyle}>
       <Canvas
+        resize={{ offsetSize: measureUnscaled }}
         frameloop={frameloop}
         camera={{
           position: [0, 0, fitCam?.z ?? cameraZ],

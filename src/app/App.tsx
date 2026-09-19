@@ -4,7 +4,7 @@ import { CHROME_GRAY } from "./lib/colors";
 import { isPuddleSupported } from "./lib/puddle/simulation";
 import { HomePage, readVariant } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { MEMORY_FIELD_PATH, NAMING_PATH } from "./lib/routes";
+import { CAROUSEL_PATH, MEMORY_FIELD_PATH, NAMING_PATH } from "./lib/routes";
 import { RecordingStartRoute } from "./components/PuddleRecordingPage";
 import { RecordingProcessPage } from "./components/RecordingProcessPage";
 import { TranscriptRoute } from "./components/PuddleTranscriptPage";
@@ -49,7 +49,10 @@ const router = createBrowserRouter([
   {
     Component: RootLayout,
     children: [
-      { path: "/", Component: LandingPage },
+      {
+        Component: LandingPage,
+        children: [{ path: "/", element: null }, { path: CAROUSEL_PATH, element: null }],
+      },
       {
         /* The field and the naming step share one mounted HomePage: saving a
            memory turns the naming rim into the field's gallery, and that only

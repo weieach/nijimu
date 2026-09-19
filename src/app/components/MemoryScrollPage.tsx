@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { COLOR_PALETTE } from "../lib/colors";
 import { GalleryViewToggle } from "./GalleryViewToggle";
-import { MEMORY_FIELD_PATH } from "./LandingPage";
+import { CAROUSEL_PATH } from "../lib/routes";
 import {
   AddMemoryCard,
   ArtifactCard,
@@ -52,7 +52,7 @@ export function MemoryScrollPage() {
       </GalleryPage>
       <GalleryViewToggle
         view="grid"
-        onToggle={() => navigate(MEMORY_FIELD_PATH, { state: { galleryOpen: true } })}
+        onToggle={() => navigate(CAROUSEL_PATH)}
       />
     </>
   );
