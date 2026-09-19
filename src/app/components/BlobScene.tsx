@@ -225,6 +225,9 @@ export function BlobScene({
   openGallery = false,
   onGalleryExit,
   onToggleGrid,
+  classicChrome = false,
+  ctaLabel = "New Memory",
+  showPlus = true,
 }: {
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
@@ -233,6 +236,10 @@ export function BlobScene({
   /** Fired when leaving gallery → blend (so HomePage can restore a test variant). */
   onGalleryExit?: () => void;
   onToggleGrid?: () => void;
+  /** Main-branch overlay: top blur, tagline, original wordmark. */
+  classicChrome?: boolean;
+  ctaLabel?: string;
+  showPlus?: boolean;
 }) {
   // Curated life events plus whatever the user has saved, so their memories
   // blend into the same field.
@@ -1118,8 +1125,9 @@ export function BlobScene({
         Scroll to browse &middot; Click to return
       </div>
 
-      {/* Wordmark stays through gallery; the rest of the homescreen chrome dissolves. */}
-      {onNewMemory && (
+      {/* Wordmark stays through gallery; the rest of the homescreen chrome dissolves.
+          The classic landing overlay carries its own mark, so skip this one there. */}
+      {onNewMemory && !classicChrome && (
         <PageHeader layout="absolute" link={false} style={{ zIndex: 26 }} />
       )}
 
@@ -1139,43 +1147,106 @@ export function BlobScene({
             transition: "opacity 0.3s ease",
           }}
         >
-          {/* Bottom blur gradient */}
-          <div
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: 222,
-              borderRadius: 0,
-              background: "linear-gradient(to top, rgba(27,27,27,0.4), rgba(129,129,129,0))",
-              backdropFilter: "blur(40px)",
-              WebkitBackdropFilter: "blur(40px)",
-              maskImage: "linear-gradient(to bottom, transparent, black)",
-              WebkitMaskImage: "linear-gradient(to bottom, transparent, black)",
-              zIndex: 1,
-            }}
-          />
+          {classicChrome ? (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 28,
+                zIndex: 2,
+              }}
+            >
+              <p
+                style={{
+                  fontFamily: SERIF,
+                  fontStyle: "normal",
+                  color: "#e2e2e3",
+                  fontSize: 12,
+                  letterSpacing: "0.16px",
+                  lineHeight: 1.5,
+                  margin: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
+                <span>Nijimu</span>
+              </p>
+              <p
+                style={{
+                  fontFamily: SERIF,
+                  color: "#D6DADB",
+                  fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
+                  letterSpacing: "0.24px",
+                  lineHeight: 1.5,
+                  margin: 0,
+                  textAlign: "center",
+                  maxWidth: "90%",
+                }}
+              >
+                The things you've loved don't disappear.
+                <br />
+                They dissolve into who you're becoming.{" "}
+              </p>
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewMemory();
+                }}
+                style={{
+                  cursor: "pointer",
+                  pointerEvents: "auto",
+                  width: "fit-content",
+                }}
+              >
+                <NewMomoryIdle label={ctaLabel} showPlus={showPlus} />
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Bottom blur gradient */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 222,
+                  borderRadius: 0,
+                  background: "linear-gradient(to top, rgba(27,27,27,0.4), rgba(129,129,129,0))",
+                  backdropFilter: "blur(40px)",
+                  WebkitBackdropFilter: "blur(40px)",
+                  maskImage: "linear-gradient(to bottom, transparent, black)",
+                  WebkitMaskImage: "linear-gradient(to bottom, transparent, black)",
+                  zIndex: 1,
+                }}
+              />
 
-          {/* "New Memory" button */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              onNewMemory();
-            }}
-            className="absolute"
-            style={{
-              bottom: 56,
-              left: "50%",
-              transform: "translateX(-50%)",
-              cursor: "pointer",
-              pointerEvents: "auto",
-              zIndex: 2,
-              width: "fit-content",
-            }}
-          >
-            <NewMomoryIdle />
-          </div>
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewMemory();
+                }}
+                className="absolute"
+                style={{
+                  bottom: 56,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  cursor: "pointer",
+                  pointerEvents: "auto",
+                  zIndex: 2,
+                  width: "fit-content",
+                }}
+              >
+                <NewMomoryIdle label={ctaLabel} showPlus={showPlus} />
+              </div>
+            </>
+          )}
         </div>
       )}
 

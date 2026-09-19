@@ -157,6 +157,50 @@ export type DiveArrival = "resolve" | "carried";
 /** How long the chrome that is new to the carried arrival takes to appear. */
 const CARRIED_CHROME_MS = 1200;
 
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/* ── the caption ──
+   The naming step types into this same block, so the two are built from one
+   set of styles and one DOM shape: when the fields become words the text must
+   not move by a pixel. Line-height is pinned on the inputs as well so the
+   editable and the settled caption measure the same. */
+export const CAPTION_TITLE_STYLE: CSSProperties = {
+  color: CHROME_GRAY,
+  margin: 0,
+  fontFamily: SERIF,
+  fontStyle: "italic",
+  fontSize: "clamp(13px, 1.05vw, 16px)",
+  lineHeight: 1.35,
+  textAlign: "center",
+};
+
+export const CAPTION_YEAR_STYLE: CSSProperties = {
+  color: "#999",
+  margin: 0,
+  fontFamily: SERIF_CJK,
+  fontStyle: "normal",
+  fontSize: "clamp(11px, 0.9vw, 14px)",
+  lineHeight: 1.35,
+  textAlign: "center",
+};
+
+/** Gap between the title and the year, in the caption block's own em. */
+export const CAPTION_TITLE_GAP = "0.8em";
+
+/** The settled caption — a memory's words and its year. */
+export function StaticCaption({ title, year }: { title: string; year: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <div style={{ marginBottom: CAPTION_TITLE_GAP }}>
+        <span style={{ ...CAPTION_TITLE_STYLE, display: "inline-block", whiteSpace: "pre-line" }}>
+          {title}
+        </span>
+      </div>
+      <span style={{ ...CAPTION_YEAR_STYLE, display: "inline-block" }}>{year}</span>
+    </div>
+  );
+}
+
 export function PuddleDiveGallery({
   items,
   activeIdx,
@@ -261,15 +305,20 @@ export function PuddleDiveGallery({
     return () => clearTimeout(t);
   }, [neighborsVisible, reducedMotion]);
 
-  /* The memories the previous screen already had on screen. They are not
-     entering — they were simply handed over — so they get no entrance at all.
-     Filled on the first render and then left alone, since which artifacts
-     carried over is a fact about the arrival, not about the current rim. */
+  /* The memories the naming step already had on screen. They are not entering
+     — they were simply handed over — so they get no entrance at all. Filled the
+     first time the rim is seen as carried and then left alone, since which
+     artifacts carried over is a fact about the hand-off, not the current rim.
+     Usually this component is the very same instance the naming step was
+     rendering, and `arrival` flips under it; the set is what remembers who was
+     there at that moment. */
   const carriedIdsRef = useRef<Set<string> | null>(null);
 
   /* A carried rim hands over a wash that was laid on paper; underwater the same
      color sits lower. It settles across the arrival, while the water itself is
-     still coming in, so the change is never read as the color shifting. */
+     still coming in, so the change is never read as the color shifting. Only a
+     rim that *mounts* carried needs the two-frame hold below — when the hand-off
+     happens in place the previous paint is already the value to travel from. */
   const [washSettled, setWashSettled] = useState(arrival !== "carried");
   useEffect(() => {
     if (washSettled) return;
@@ -361,12 +410,10 @@ export function PuddleDiveGallery({
     }ms both`;
   };
 
-  if (!carriedIdsRef.current) {
-    carriedIdsRef.current = new Set(
-      arrival === "carried" ? slots.map(({ item: slotItem }) => slotItem.id) : [],
-    );
+  if (!carriedIdsRef.current && arrival === "carried") {
+    carriedIdsRef.current = new Set(slots.map(({ item: slotItem }) => slotItem.id));
   }
-  const carriedIds = carriedIdsRef.current;
+  const carriedIds: ReadonlySet<string> = carriedIdsRef.current ?? EMPTY_IDS;
 
   const arrowStyle = (side: "left" | "right"): CSSProperties => ({
     position: "absolute",
@@ -509,8 +556,14 @@ export function PuddleDiveGallery({
                   width: "100%",
                   height: "100%",
                   opacity: phase === "diving" ? 0 : undefined,
+                  /* A carried neighbour keeps the very animation string the
+                     naming step gave it: unchanged, the browser lets it run on
+                     to its end, so a rim still gathering when it was handed
+                     over finishes gathering instead of snapping into place. */
                   animation: carried
-                    ? "none"
+                    ? focused
+                      ? "none"
+                      : neighborAnimation(offset)
                     : !focused && !waterEffect
                       ? neighborAnimation(offset)
                       : artifactAnimation,
@@ -624,33 +677,7 @@ export function PuddleDiveGallery({
             pointerEvents: caption ? "auto" : "none",
           }}
         >
-          {caption ?? (
-            <>
-              <p
-                style={{
-                  color: CHROME_GRAY,
-                  margin: "0 0 0.8em",
-                  whiteSpace: "pre-line",
-                  fontStyle: "italic",
-                  fontSize: "clamp(13px, 1.05vw, 16px)",
-                  lineHeight: 1.35,
-                }}
-              >
-                {item.event}
-              </p>
-              <p
-                style={{
-                  color: "#999",
-                  margin: 0,
-                  fontStyle: "normal",
-                  fontSize: "clamp(11px, 0.9vw, 14px)",
-                  fontFamily: SERIF_CJK,
-                }}
-              >
-                {item.year}
-              </p>
-            </>
-          )}
+          {caption ?? <StaticCaption title={item.event} year={item.year} />}
         </div>
       </div>
 
@@ -699,13 +726,12 @@ export function PuddleDiveGallery({
         <BackButton onClick={onExit} />
       </div>
 
-      <div style={{ animation: carriedChrome }}>
-        <GalleryViewToggle
-          view="carousel"
-          onToggle={onToggleGrid ?? (() => {})}
-          visible={chromeVisible && !!onToggleGrid}
-        />
-      </div>
+      <GalleryViewToggle
+        view="carousel"
+        onToggle={onToggleGrid ?? (() => {})}
+        visible={chromeVisible && !!onToggleGrid}
+        enterAnimation={carriedChrome}
+      />
 
       <style>{`
         /* The slots are scaled with a CSS transform, and r3f sizes its canvas
@@ -849,12 +875,12 @@ export function PuddleDiveGallery({
           from { opacity: 0; }
           to { opacity: 1; }
         }
-        /* Chrome that is new to a carried arrival. Only the 'from' is written:
-           with backwards fill the element travels from nothing to whatever
-           opacity it styles for itself, and keeps it afterwards — so hover
-           states still work once it has arrived. */
+        /* Chrome that is new to a carried arrival: it focuses in out of a soft
+           blur. Only the 'from' is written: with backwards fill the element
+           travels from nothing to whatever opacity it styles for itself, and
+           keeps it afterwards — so hover states still work once it has arrived. */
         @keyframes diveChromeIn {
-          from { opacity: 0; }
+          from { opacity: 0; filter: blur(6px); }
         }
       `}</style>
     </div>

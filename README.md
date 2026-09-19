@@ -10,7 +10,8 @@ Run `npm run dev` to start the development server.
 
 ## Pages
 
-- `/`: home canvas where memories sit as a watercolor puddle, blob field, or ripple field
+- `/`: original blob landing — enter opens the ripple / puddle field
+- `/ripple`: home canvas where memories sit as a watercolor puddle, blob field, or ripple field
 - `/record/start`: speak a memory aloud — the main recording step of the create flow
 - `/record/click`: early click-to-record screen over the blob field
 - `/record/process`: early recording screen that transcribes speech as you go
@@ -62,13 +63,13 @@ SANS           = Switzer, sans-serif
 SANS_UI        = 'SF Pro', system-ui, sans-serif
 ```
 
-## Homescreen shortcuts
+## Homescreen shortcuts (`/ripple`)
 
 | Key | Action |
 |---|---|
-| **A** | Original homescreen (blobs) |
-| **B** | Puddle homescreen |
-| **Z** | Ripple2d homescreen |
+| **A** | Original blob field (compare) |
+| **B** | Puddle field |
+| **Z** | Ripple2d field (default on this route) |
 | **G** | Open memory artifact gallery (on the puddle homescreen: the dive-through-the-water gallery) |
 | **V** | Toggle gallery variant: dive ↔ morph (A/B; dive is the default and only runs on the puddle homescreen) |
 | **← / →** | Browse gallery |

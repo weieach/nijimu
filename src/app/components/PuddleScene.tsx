@@ -12,7 +12,8 @@ import { RIPPLE_CADENCE, introSchedule, dripGapMs } from "../lib/puddle/cadence"
 import { BlobScene } from "./BlobScene";
 import { PageHeader } from "./PageHeader";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
-import { PuddleDiveGallery, DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
+import type { DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
+import { DiveGalleryHost, draftAsSaved, type NamingSession } from "./NamingRim";
 import { buildArchive } from "../lib/archive";
 
 /*
@@ -46,6 +47,8 @@ const HOLD_TO_CREATE_MS = 2000;
 /** How long the water takes to arrive behind a carried dive gallery — the rim
     was handed over from the naming step, so the puddle is the new element. */
 const WATER_ARRIVE_MS = 1500;
+/** The water focuses in from this blur as it arrives. */
+const WATER_ARRIVE_BLUR_PX = 14;
 /* Progress ring drawn around the cursor while pressing — ~135px at a laptop
    width. Sized in JS rather than a CSS clamp() because the sweep has to start
    where the label crosses the ring, and that angle depends on the diameter. */
@@ -297,6 +300,7 @@ export function PuddleScene({
   galleryOpen = false,
   galleryFocusId,
   galleryCarried = false,
+  naming = null,
   onGalleryExit,
   onToggleGrid,
 }: {
@@ -315,6 +319,11 @@ export function PuddleScene({
       surface left to dive through: the gallery opens at depth and the water
       settles in behind it instead. */
   galleryCarried?: boolean;
+  /** The naming step, hosted here. The scene mounts with it and shows the
+      naming rim over hidden water; when it is saved (`naming` goes back to
+      null, with `galleryOpen` + `galleryCarried`) the very same rim becomes the
+      gallery and the water fades in behind it. Only ever set at mount. */
+  naming?: NamingSession | null;
   /** Fired when the gallery starts surfacing, so the G toggle stays in sync. */
   onGalleryExit?: () => void;
   /** Switch from the G-key carousel to the card grid. */
@@ -385,7 +394,15 @@ export function PuddleScene({
     }
   }, [hintReady]);
 
-  const [savedMemories] = useState<SavedMemory[]>(() => loadMemories());
+  /* The memories on the water. Read once, at mount — the sim is keyed to the
+     anchors, and rebuilding it would erase the surface. When the scene hosts
+     the naming step, the memory being made is already among them (under its
+     final id, with no words yet), so it has a place on the water and a seat
+     in the archive before it is saved; the save then changes nothing here. */
+  const [savedMemories] = useState<SavedMemory[]>(() => {
+    const saved = loadMemories();
+    return naming ? [...saved, draftAsSaved(naming)] : saved;
+  });
   const events = useMemo(
     () => [...LIFE_EVENTS, ...savedMemories.map(toMemoryEvent)],
     [savedMemories],
@@ -397,6 +414,21 @@ export function PuddleScene({
     [events, savedMemories.length],
   );
 
+  /* The memories as they read *now*: once the naming step has saved, the
+     placeholder above has words and a year in storage. Same indices as
+     `anchors` (a saved memory is appended, and the draft was appended last),
+     so the surface captions and the intro order can read from here. */
+  const liveSaved = useMemo(
+    () => (naming ? savedMemories : loadMemories()),
+    [naming, savedMemories],
+  );
+  const liveEvents = useMemo(
+    () => [...LIFE_EVENTS, ...liveSaved.map(toMemoryEvent)],
+    [liveSaved],
+  );
+  const liveEventsRef = useRef(liveEvents);
+  liveEventsRef.current = liveEvents;
+
   /* ─── dive gallery (flagged variant) ─── */
 
   /* One artifact per memory, newest (left) → oldest (right). Built by
@@ -407,28 +439,43 @@ export function PuddleScene({
      ripples to as the rim swings. */
   const galleryItems = useMemo<DiveGalleryItem[]>(() => {
     const anchorById = new Map(events.map((e, i) => [e.id, anchors[i]]));
-    return buildArchive(savedMemories).map((artifact) => {
+    return buildArchive(liveSaved).map((artifact) => {
       const anchor = anchorById.get(artifact.id);
       return { ...artifact, anchor: { x: anchor?.x ?? 0.5, y: anchor?.y ?? 0.5 } };
     });
-  }, [events, anchors, savedMemories]);
+  }, [events, anchors, liveSaved]);
 
   /** Opening straight into the settled gallery, with the memory the naming step
       was already showing at the apex. */
   const carriedOpen = galleryOpen && diveGalleryEnabled && galleryCarried;
+  /** The scene begins at depth, with a rim already on screen: either hosting
+      the naming step, or (a fresh mount) handed one by it. */
+  const openAtDepth = naming ? naming.draftId : carriedOpen ? (galleryFocusId ?? "") : null;
+  const openAtDepthRef = useRef(openAtDepth);
 
   /** idle → diving → gallery → surfacing → idle. Anything non-idle mounts the overlay. */
   const [divePhase, setDivePhase] = useState<"idle" | DivePhase>(
-    carriedOpen ? "gallery" : "idle",
+    openAtDepth !== null ? "gallery" : "idle",
   );
   const [galleryIdx, setGalleryIdx] = useState(() => {
-    if (!carriedOpen) return 0;
-    const i = galleryItems.findIndex((a) => a.id === galleryFocusId);
+    if (openAtDepth === null) return 0;
+    const i = galleryItems.findIndex((a) => a.id === openAtDepth);
     return i < 0 ? 0 : i;
   });
+  /* A memory asked for by id takes the apex in the same render the ask
+     arrives — the naming step's save hands over its seat this way, and the
+     rim must not be seen swinging to it a frame later. */
+  const [seenFocusId, setSeenFocusId] = useState(galleryFocusId);
+  if (galleryFocusId !== seenFocusId) {
+    setSeenFocusId(galleryFocusId);
+    if (galleryFocusId) {
+      const i = galleryItems.findIndex((a) => a.id === galleryFocusId);
+      if (i >= 0) setGalleryIdx(i);
+    }
+  }
   /** The water is the one thing the naming step didn't have, so on a carried
       arrival it is also the only thing that comes in. */
-  const [waterArriving, setWaterArriving] = useState(carriedOpen);
+  const [waterArriving, setWaterArriving] = useState(carriedOpen && !naming);
   /** Sim-side controls, assigned inside the main effect (the sim must outlive the gallery). */
   const diveControlsRef = useRef<{
     open(itemIdx: number, carried?: boolean): void;
@@ -505,7 +552,12 @@ export function PuddleScene({
           }
         } else {
           if (dive.progress === 1) setDivePhase("gallery");
-          if (dive.progress === 0) setDivePhase("idle");
+          if (dive.progress === 0) {
+            setDivePhase("idle");
+            // a scene that began at depth meets its surface for the first
+            // time here — this is when the memories fall in
+            startIntro();
+          }
         }
       }
       // the focus glides toward the active memory's point (arrows move it)
@@ -601,29 +653,14 @@ export function PuddleScene({
       wake();
     };
 
-    /* intro: every memory falls in, oldest first; newest saved lands last.
-       The schedule comes from the cadence module — it holds the surface to a
-       fixed density, so more memories mean a longer reveal, not a busier one. */
-    const introOrder = anchors
-      .map((_, i) => i)
-      .sort((p, q) => anchors[p].introIndex - anchors[q].introIndex);
-    const intro = introSchedule(introOrder.length);
-
     // a quiet stain for every memory first, so the field is never half-blank
     for (const a of anchors) {
       sim.addDrop(a.x, a.y, a.scale * 1.7, 0, dyeColorFor(a.colorIndex, a.introIndex), 0.7);
     }
     sim.runDyeSettle(140);
 
-    if (reducedMotion) {
-      // No wave animation: bleed the stains and show a settled still.
-      sim.render(0);
-    } else {
-      introOrder.forEach((anchorIdx, order) => {
-        const weight = 1 + (Math.random() * 2 - 1) * INTRO_WEIGHT_JITTER;
-        timeouts.push(setTimeout(() => dropAnchor(anchorIdx, weight), intro.times[order]));
-      });
-    }
+    // No wave animation under reduced motion: bleed the stains, show a still.
+    if (reducedMotion) sim.render(0);
 
     /* idle drip: re-seed a random memory so the surface never fully dies.
        Suspended while underwater — the gallery's water is a backdrop the user
@@ -643,9 +680,34 @@ export function PuddleScene({
         scheduleDrip();
       }, dripGapMs());
     };
-    if (!reducedMotion) {
+
+    /* intro: every memory falls in, oldest first; newest saved lands last.
+       The schedule comes from the cadence module — it holds the surface to a
+       fixed density, so more memories mean a longer reveal, not a busier one.
+       It runs once, when the surface is first *seen*: at mount on an ordinary
+       visit, or — when the scene began at depth under the naming step or a
+       carried gallery — the moment that gallery surfaces. Running it behind
+       the blur would show the homescreen arriving through the carousel, and
+       the surface it played on would be thrown away on the way up anyway. */
+    let introStarted = false;
+    const startIntro = () => {
+      if (introStarted || reducedMotion) return;
+      introStarted = true;
+      const years = liveEventsRef.current;
+      const introOrder = anchors
+        .map((_, i) => i)
+        .sort(
+          (p, q) =>
+            (parseInt(years[p]?.year ?? anchors[p].year) || 0) -
+              (parseInt(years[q]?.year ?? anchors[q].year) || 0) || p - q,
+        );
+      const intro = introSchedule(introOrder.length);
+      introOrder.forEach((anchorIdx, order) => {
+        const weight = 1 + (Math.random() * 2 - 1) * INTRO_WEIGHT_JITTER;
+        timeouts.push(setTimeout(() => dropAnchor(anchorIdx, weight), intro.times[order]));
+      });
       timeouts.push(setTimeout(scheduleDrip, intro.endMs));
-    }
+    };
 
     /* wind: long stillness, then a brush or a small patch of cat's-paws —
        depth wanders, then the water rests again. */
@@ -908,10 +970,18 @@ export function PuddleScene({
     /* ─── dive gallery controls (assigned to the ref so React-side effects
        and the overlay can drive the sim without re-running this effect) ─── */
     const openDive = (itemIdx: number, carried = false) => {
-      if (!diveSim || dive.target === 1) return;
+      if (!diveSim) return;
       const item = galleryItemsRef.current[itemIdx];
       if (!item) return;
       const anchor = item.anchor ?? { x: 0.5, y: 0.5 };
+      if (dive.target === 1) {
+        /* Already down here — the scene began at depth under the naming step
+           and the save is only telling us which seat is now the apex. */
+        setGalleryIdx(itemIdx);
+        dive.focusTarget = [anchor.x, anchor.y];
+        wake();
+        return;
+      }
       endPress();
       // a fresh descent remembers the surface exactly as it stands, so closing
       // the gallery can hand it back untouched
@@ -970,6 +1040,18 @@ export function PuddleScene({
     };
 
     diveControlsRef.current = { open: openDive, close: closeDive, ripple: rippleTo };
+
+    /* Where the scene begins. Ordinarily on the surface, with the memories
+       about to fall in. Under the naming step (or handed a rim by it) it begins
+       at depth instead: the camera is already down, the surface is kept as it
+       stands for the way back up, and the intro waits for that surfacing. */
+    const atDepthId = openAtDepthRef.current;
+    if (atDepthId !== null) {
+      const idx = galleryItemsRef.current.findIndex((a) => a.id === atDepthId);
+      openDive(idx < 0 ? 0 : idx, true);
+    } else {
+      startIntro();
+    }
 
     /* Only a click wakes a memory: past the cavity's grace period the gesture
        has become a press toward a new memory, and abandoning it half-drawn
@@ -1034,6 +1116,8 @@ export function PuddleScene({
   /* homescreen G shortcut / flag changes / a memory just saved: open on the
      asked-for memory (newest by default), close on toggle-off */
   useEffect(() => {
+    // the naming step holds the camera at depth itself; nothing to open or close
+    if (naming) return;
     if (galleryOpen && diveGalleryEnabled) {
       const idx = galleryFocusId
         ? galleryItemsRef.current.findIndex((a) => a.id === galleryFocusId)
@@ -1042,7 +1126,7 @@ export function PuddleScene({
     } else {
       diveControlsRef.current?.close(); // no-op when already surfaced
     }
-  }, [galleryOpen, diveGalleryEnabled, galleryFocusId, galleryCarried]);
+  }, [galleryOpen, diveGalleryEnabled, galleryFocusId, galleryCarried, naming]);
 
   /* The water fades up behind a carried rim. One paint has to land on the
      transparent canvas first, or there is nothing for the fade to start from. */
@@ -1070,14 +1154,18 @@ export function PuddleScene({
       className="relative w-full h-screen overflow-hidden select-none"
       style={{ background: PAGE_BG }}
     >
+      {/* The water. Under the naming step it is there but unseen — at depth,
+          held — and arrives when the memory is saved: it fades in and focuses,
+          the one thing that screen didn't have. */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
         style={{
           display: "block",
           touchAction: "none",
-          opacity: waterArriving ? 0 : 1,
-          transition: `opacity ${WATER_ARRIVE_MS}ms ease`,
+          opacity: naming || waterArriving ? 0 : 1,
+          filter: naming || waterArriving ? `blur(${WATER_ARRIVE_BLUR_PX}px)` : "none",
+          transition: `opacity ${WATER_ARRIVE_MS}ms ease, filter ${WATER_ARRIVE_MS}ms ease`,
         }}
       />
 
@@ -1091,6 +1179,8 @@ export function PuddleScene({
           {captions.map((c) => {
             const a = anchors[c.anchorIdx];
             if (!a) return null;
+            // the words as saved — a memory named here had none when it was placed
+            const words = liveEvents[c.anchorIdx] ?? a;
             return (
               <div
                 key={c.key}
@@ -1117,7 +1207,7 @@ export function PuddleScene({
                     marginBottom: 3,
                   }}
                 >
-                  <ParticleText text={a.year} seed={c.key * 31 + 7} animate={!reducedMotionPref} />
+                  <ParticleText text={words.year} seed={c.key * 31 + 7} animate={!reducedMotionPref} />
                 </div>
                 <div
                   style={{
@@ -1128,7 +1218,7 @@ export function PuddleScene({
                   }}
                 >
                   <ParticleText
-                    text={a.event}
+                    text={words.event}
                     seed={c.key * 131 + 17}
                     animate={!reducedMotionPref}
                     wrap
@@ -1345,20 +1435,23 @@ export function PuddleScene({
       {/* ═══ DIVE GALLERY — flagged variant. One artifact resolving out of the
              defocused puddle; the sim keeps living underneath, slowed. ═══ */}
       {diveGalleryEnabled && divePhase !== "idle" && !descending && (
-        <PuddleDiveGallery
-          items={galleryItems}
-          activeIdx={galleryIdx}
-          phase={divePhase}
+        <DiveGalleryHost
+          naming={naming}
           reducedMotion={reducedMotionPref}
-          onNavigate={(dir) => {
-            const next = galleryIdx + dir;
-            if (next < 0 || next >= galleryItems.length) return;
-            setGalleryIdx(next);
-            diveControlsRef.current?.ripple(next);
+          gallery={{
+            items: galleryItems,
+            activeIdx: galleryIdx,
+            phase: divePhase,
+            onNavigate: (dir) => {
+              const next = galleryIdx + dir;
+              if (next < 0 || next >= galleryItems.length) return;
+              setGalleryIdx(next);
+              diveControlsRef.current?.ripple(next);
+            },
+            onExit: () => diveControlsRef.current?.close(),
+            onToggleGrid,
+            arrival: galleryCarried ? "carried" : "resolve",
           }}
-          onExit={() => diveControlsRef.current?.close()}
-          onToggleGrid={onToggleGrid}
-          arrival={galleryCarried ? "carried" : "resolve"}
         />
       )}
     </div>

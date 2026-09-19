@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 import { saveMemory } from "../lib/memoryStore";
+import { MEMORY_FIELD_PATH } from "./LandingPage";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 
@@ -152,7 +153,7 @@ export function MemorySavedPage() {
         {showButton && (
           <PillButton
             label="return home"
-            onClick={() => navigate("/")}
+            onClick={() => navigate(MEMORY_FIELD_PATH)}
             trailing="›"
             className="transition-all duration-1000"
             style={{

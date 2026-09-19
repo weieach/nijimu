@@ -6,10 +6,15 @@ export function GalleryViewToggle({
   view,
   onToggle,
   visible = true,
+  enterAnimation,
 }: {
   view: "carousel" | "grid";
   onToggle: () => void;
   visible?: boolean;
+  /** CSS animation for the button's own arrival. On the button itself — a
+      filter on a wrapper would become the containing block of this fixed
+      element and pull it out of the corner. */
+  enterAnimation?: string;
 }) {
   if (!visible) return null;
 
@@ -39,6 +44,7 @@ export function GalleryViewToggle({
         justifyContent: "center",
         padding: 0,
         opacity: 0.85,
+        animation: enterAnimation,
       }}
     >
       {toGrid ? (

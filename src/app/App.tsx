@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { isPuddleSupported } from "./lib/puddle/simulation";
 import { HomePage, readVariant } from "./components/HomePage";
+import { LandingPage, MEMORY_FIELD_PATH } from "./components/LandingPage";
 import { RecordingStartRoute } from "./components/PuddleRecordingPage";
 import { RecordingProcessPage } from "./components/RecordingProcessPage";
 import { TranscriptRoute } from "./components/PuddleTranscriptPage";
@@ -48,7 +49,8 @@ const router = createBrowserRouter([
   {
     Component: RootLayout,
     children: [
-      { path: "/", Component: HomePage },
+      { path: "/", Component: LandingPage },
+      { path: MEMORY_FIELD_PATH, Component: HomePage },
       { path: "/record/click", Component: ClickToRecordPage },
       { path: "/record/start", Component: RecordingStartRoute },
       { path: "/record/process", Component: RecordingProcessPage },
@@ -77,11 +79,13 @@ function GlobalControls() {
   const [muted, setMuted] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const { pathname } = useLocation();
-  /** Light chrome (muted gray, no pill) on the light-ground pages. Only the
-      legacy dark blob recording screen keeps the frosted dark pills. */
+  /** Light chrome (muted gray, no pill) on the light-ground pages. The
+      original blob landing and the legacy dark blob recording screen keep
+      the frosted dark pills. */
   const lightChrome =
-    pathname !== "/record/start" ||
-    (readVariant() === "puddle" && isPuddleSupported());
+    pathname !== "/" &&
+    (pathname !== "/record/start" ||
+      (readVariant() === "puddle" && isPuddleSupported()));
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);
