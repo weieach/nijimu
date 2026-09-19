@@ -48,7 +48,7 @@ library**; build with the existing primitives.
 
 ```bash
 pnpm install       # use pnpm, never npm
-pnpm dev           # Vite dev server on :5173 (includes the /api/polish endpoint)
+pnpm dev           # Vite dev server on :5180 (includes the /api/polish endpoint)
 pnpm build         # vite build + copy-404.mjs (the 404 copy is a harmless GH-Pages leftover)
 pnpm typecheck     # tsc --noEmit on the frontend AND the api/ function — run before pushing
 ```

@@ -1,0 +1,11 @@
+This copy of nijimu is inside OneDrive and is no longer the working repo.
+
+OneDrive was zeroing source files and git metadata.
+
+The working copy is now:
+  C:\Users\nicol\dev\nijimu
+
+In Cursor: File > Open Folder > C:\Users\nicol\dev\nijimu
+
+After you have opened the new folder and confirmed it runs, delete THIS folder
+so you do not edit the OneDrive copy by mistake.
