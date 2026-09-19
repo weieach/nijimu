@@ -1,322 +1,490 @@
+import { useGLTF } from "@react-three/drei";
 import { useLocation, useNavigate } from "react-router";
-import { useState, useRef, useEffect } from "react";
-import { BackButton } from "./BackButton";
-import { SANS, SANS_UI, SERIF } from "../lib/theme";
+import { CSSProperties, KeyboardEvent, Ref, useEffect, useMemo, useRef, useState } from "react";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
+import { COLOR_PALETTE } from "../lib/colors";
+import { saveMemory } from "../lib/memoryStore";
+import { SERIF } from "../lib/theme";
+import { PAGE_BG } from "./PuddleBackdrop";
+import { MODEL_PATHS } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
-import { PillButton } from "./PillButton";
+import { PuddleDiveGallery } from "./PuddleDiveGallery";
+
+interface NameFlowState {
+  transcript?: string;
+  highlightedWords?: string[];
+  matPresetIndex?: number;
+  shape?: {
+    modelPath?: string;
+    fluidity?: number;
+    evolve?: number;
+    bumpAmount?: number;
+  };
+}
+
+const TITLE_STYLE: CSSProperties = {
+  color: "#2a2a2a",
+  margin: 0,
+  fontFamily: SERIF,
+  fontStyle: "italic",
+  fontSize: "clamp(13px, 1.05vw, 16px)",
+  lineHeight: 1.35,
+  textAlign: "center",
+};
+
+const YEAR_STYLE: CSSProperties = {
+  color: "#999",
+  margin: 0,
+  fontFamily: SERIF,
+  fontStyle: "normal",
+  fontSize: "clamp(11px, 0.9vw, 14px)",
+  textAlign: "center",
+};
+
+const currentYear = new Date().getFullYear();
+
+/** The memory being made, before it has an id of its own. */
+const DRAFT_ID = "nijimu.draft";
+
+function FlickerCaret({
+  color = "#2a2a2a",
+  fontSize,
+}: {
+  color?: string;
+  fontSize?: CSSProperties["fontSize"];
+}) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: 1,
+        height: "1em",
+        fontSize,
+        background: color,
+        pointerEvents: "none",
+        zIndex: 3,
+        animation: "nijimu-caret 1.05s steps(1) infinite",
+      }}
+    />
+  );
+}
+
+function CaptionField({
+  value,
+  onChange,
+  placeholder,
+  ariaLabel,
+  autoFocus,
+  maxLength,
+  inputMode,
+  style,
+  className,
+  focused,
+  inputRef,
+  onFocus,
+  onBlur,
+  onKeyDown,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+  ariaLabel: string;
+  autoFocus?: boolean;
+  maxLength?: number;
+  inputMode?: "text" | "numeric";
+  style: CSSProperties;
+  className?: string;
+  focused: boolean;
+  inputRef?: Ref<HTMLInputElement>;
+  onFocus: () => void;
+  onBlur: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  const empty = value.length === 0;
+  const showCaret = focused && empty;
+  const sizerRef = useRef<HTMLSpanElement>(null);
+  const [fitWidth, setFitWidth] = useState(0);
+  const sizerText = value || placeholder;
+
+  useEffect(() => {
+    const el = sizerRef.current;
+    if (!el) return;
+    setFitWidth(Math.ceil(el.getBoundingClientRect().width));
+  }, [sizerText, style.fontSize, style.fontFamily, style.fontStyle]);
+
+  return (
+    <label
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "text",
+        maxWidth: "100%",
+        position: "relative",
+        zIndex: 2,
+        width: "fit-content",
+        verticalAlign: "middle",
+      }}
+    >
+      <span
+        ref={sizerRef}
+        aria-hidden
+        style={{
+          ...style,
+          position: "absolute",
+          visibility: "hidden",
+          whiteSpace: "pre",
+          pointerEvents: "none",
+        }}
+      >
+        {sizerText}
+      </span>
+      {showCaret && (
+        <FlickerCaret
+          color={String(style.color ?? "#2a2a2a")}
+          fontSize={style.fontSize}
+        />
+      )}
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        className={className}
+        autoFocus={autoFocus}
+        maxLength={maxLength}
+        inputMode={inputMode}
+        style={{
+          ...style,
+          width: fitWidth > 0 ? fitWidth : "auto",
+          fieldSizing: "content",
+          maxWidth: "70vw",
+          background: "transparent",
+          border: "none",
+          outline: "none",
+          padding: 0,
+          lineHeight: 1,
+          verticalAlign: "middle",
+          caretColor: showCaret ? "transparent" : focused ? style.color : "transparent",
+        }}
+      />
+    </label>
+  );
+}
 
 export function NameMemoryPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const state = (location.state as NameFlowState | null) ?? null;
   const [memoryName, setMemoryName] = useState("");
   const [year, setYear] = useState("");
-  const [fadeIn, setFadeIn] = useState(false);
-  const [showYearWheel, setShowYearWheel] = useState(false);
+  const [yearHint, setYearHint] = useState<string | null>(null);
+  const [focusedField, setFocusedField] = useState<"name" | "year" | null>(null);
+  const [fieldsVisible, setFieldsVisible] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const yearInputRef = useRef<HTMLInputElement>(null);
-  const wheelRef = useRef<HTMLDivElement>(null);
-
-  // Generate years from 1950 to current year
-  const currentYear = new Date().getFullYear();
-  const years = Array.from({ length: currentYear - 1949 }, (_, i) => currentYear - i);
+  const [archive] = useState(() => buildArchive());
+  const [reducedMotion] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
 
   useEffect(() => {
-    // Fade in effect
-    setTimeout(() => setFadeIn(true), 100);
-  }, []);
+    if (!yearHint) return;
+    const t = window.setTimeout(() => setYearHint(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [yearHint]);
 
-  const handleYearClick = () => {
-    setShowYearWheel(!showYearWheel);
+  const matPresetIndex = state?.matPresetIndex ?? 0;
+  const colorIndex = Math.round((matPresetIndex / 4) * (COLOR_PALETTE.length - 1));
+  const draftYear = year.trim() || String(currentYear);
+  const draftShape = useMemo(
+    () => ({
+      modelPath: state?.shape?.modelPath ?? MODEL_PATHS[0],
+      fluidity: state?.shape?.fluidity ?? 0,
+      evolve: state?.shape?.evolve ?? 0.5,
+      bumpAmount: state?.shape?.bumpAmount ?? 0,
+    }),
+    [state?.shape?.bumpAmount, state?.shape?.evolve, state?.shape?.fluidity, state?.shape?.modelPath],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    useGLTF.preload(draftShape.modelPath);
+
+    const reveal = () => {
+      if (cancelled) return;
+      const paint = () => {
+        if (cancelled) return;
+        setFieldsVisible(true);
+        setFocusedField("name");
+      };
+      if (reducedMotion) {
+        paint();
+        return;
+      }
+      // Let the artifact paint first, then fade the fields in.
+      window.setTimeout(() => {
+        requestAnimationFrame(paint);
+      }, 280);
+    };
+
+    const loader = new GLTFLoader();
+    loader.load(draftShape.modelPath, reveal, undefined, reveal);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftShape.modelPath, reducedMotion]);
+
+  useEffect(() => {
+    if (!fieldsVisible) return;
+    nameInputRef.current?.focus();
+    setFocusedField("name");
+  }, [fieldsVisible]);
+
+  const focusName = () => {
+    nameInputRef.current?.focus();
+    setFocusedField("name");
   };
 
-  const handleYearSelect = (selectedYear: number) => {
-    setYear(selectedYear.toString());
-    setShowYearWheel(false);
+  const focusYear = () => {
+    yearInputRef.current?.focus();
+    setFocusedField("year");
   };
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const element = e.currentTarget;
-    const scrollPosition = element.scrollTop;
-    const itemHeight = 44; // Height of each year item
-    const centerIndex = Math.round(scrollPosition / itemHeight);
-    
-    // Auto-select the centered year
-    if (years[centerIndex]) {
-      setYear(years[centerIndex].toString());
-    }
-  };
+  /** A year is only a year once all four digits are in and it has happened. */
+  const yearSettled = year.length === 4 && Number(year) <= currentYear;
 
-  const handleContinue = () => {
-    if (memoryName && year) {
-      console.log("Navigating with:", { memoryName, year }); // Debug log
-      navigate("/record/build", {
-        state: {
-          memoryName,
-          year,
-          ...location.state,
+  /* The year the rim is struck from. It outlives an edit to the field, so
+     clearing the year lets the neighbours sink back out from where they stand
+     instead of re-shuffling around a half-typed one on their way down. */
+  const [rimYear, setRimYear] = useState<string | null>(null);
+  useEffect(() => {
+    if (yearSettled) setRimYear(year);
+  }, [year, yearSettled]);
+
+  /* The rim, with the memory being made standing in it. Until there is a year
+     it has no place in time, so it hangs alone; once the year settles it takes
+     the seat it will keep in the archive and the memories on either side of it
+     are the ones it will actually sit between. */
+  const { items, activeIdx } = useMemo(() => {
+    const draft: ArchiveArtifact = {
+      id: DRAFT_ID,
+      year: rimYear ?? draftYear,
+      event: memoryName,
+      colorIndex,
+      shape: draftShape,
+    };
+    if (!rimYear) return { items: [draft], activeIdx: 0 };
+    const placed = insertChronologically(archive, draft);
+    return { items: placed.items, activeIdx: placed.index };
+  }, [archive, colorIndex, draftShape, draftYear, memoryName, rimYear]);
+
+  const canContinue = memoryName.trim() !== "" && yearSettled;
+
+  const persistAndOpenGallery = () => {
+    if (!canContinue) return;
+
+    const id = crypto.randomUUID();
+    const shape = state?.shape;
+    if (shape?.modelPath) {
+      saveMemory({
+        id,
+        title: memoryName.trim(),
+        year,
+        transcript: state?.transcript ?? "",
+        highlightedWords: state?.highlightedWords ?? [],
+        shape: {
+          modelPath: shape.modelPath,
+          matPresetIndex,
+          fluidity: shape.fluidity ?? 0,
+          evolve: shape.evolve ?? 0.5,
+          bumpAmount: shape.bumpAmount ?? 0,
         },
+        colorIndex,
+        createdAt: new Date().toISOString(),
       });
-    } else {
-      console.log("Cannot continue - missing data:", { memoryName, year }); // Debug log
     }
+
+    /* The gallery continues the rim that is already on screen: same memory at
+       the apex, same neighbours, so only the water and the chrome arrive. With
+       nothing saved (a deep link into the flow) there is no seat to hand over,
+       so it falls back to the ordinary descent. */
+    navigate("/", {
+      state: shape?.modelPath
+        ? { galleryOpen: true, galleryFocusId: id, galleryCarried: true }
+        : { galleryOpen: true },
+    });
   };
 
-  const canContinue = memoryName.trim() !== "" && year !== "";
+  const handleYearChange = (next: string) => {
+    if (/\D/.test(next)) {
+      setYearHint("use a four-digit year");
+    }
+    const digits = next.replace(/\D/g, "").slice(0, 4);
+    if (digits.length === 4 && Number(digits) > currentYear) {
+      setYearHint("that year hasn't happened yet");
+      return;
+    }
+    if (!/\D/.test(next)) setYearHint(null);
+    setYear(digits);
+  };
 
-  return (
+  const editableCaption = (
     <div
-      className="relative w-full h-screen flex flex-col overflow-hidden"
-      style={{ background: "#e0e0e0" }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        position: "relative",
+        zIndex: 2,
+        opacity: fieldsVisible ? 1 : 0,
+        transition: reducedMotion ? "none" : "opacity 0.9s ease",
+        pointerEvents: fieldsVisible ? "auto" : "none",
+      }}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
     >
-      {/* Content wrapper with fade in */}
-      <div
-        className="flex flex-col h-full transition-opacity duration-1000"
-        style={{ opacity: fadeIn ? 1 : 0 }}
-      >
-        {/* Top section */}
-        <div className="flex-shrink-0" style={{ paddingTop: 0 }}>
-          {/* nijimu wordmark */}
-      <PageHeader layout="block" />
-
-          {/* Header text */}
-          <p
-            style={{
-              fontFamily: SERIF,
-              fontSize: "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
-              fontWeight: 500,
-              lineHeight: "39.2px",
-              letterSpacing: "0px",
-              color: "#7b7b87",
-              textTransform: "lowercase",
-              whiteSpace: "nowrap",
-              marginTop: 0,
-              marginRight: 0,
-              marginLeft: 0,
-              textAlign: "center",
-              marginBottom: "clamp(40px, 8vh, 80px)",
-            }}
-          >
-            name this memory.
-          </p>
-        </div>
-
-        {/* Scrollable content area */}
-        <div 
-          className="flex-1 overflow-y-auto overflow-x-hidden"
-          style={{
-            paddingLeft: 20,
-            paddingRight: 20,
-            paddingBottom: "clamp(120px, 20vh, 160px)", // Space for button
+      <div style={{ marginBottom: "0.8em" }}>
+        <CaptionField
+          value={memoryName}
+          onChange={setMemoryName}
+          placeholder="name this memory"
+          ariaLabel="memory name"
+          autoFocus={fieldsVisible}
+          inputRef={nameInputRef}
+          focused={fieldsVisible && focusedField === "name"}
+          onFocus={() => setFocusedField("name")}
+          onBlur={() => setFocusedField((current) => (current === "name" ? null : current))}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              if (!memoryName.trim()) return;
+              event.preventDefault();
+              focusYear();
+              return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              focusYear();
+            }
           }}
-        >
-          <div style={{ maxWidth: 298, margin: "0 auto" }}>
-            {/* Memory name input */}
-            <div
-              style={{
-                width: "100%",
-                marginBottom: "clamp(20px, 5vh, 88px)",
-              }}
-            >
-              <input
-                type="text"
-                value={memoryName}
-                onChange={(e) => setMemoryName(e.target.value)}
-                placeholder="something simple is fine..."
-                style={{
-                  width: "100%",
-                  padding: "8px 0 12px 0",
-                  fontFamily: SERIF,
-                  fontSize: 12,
-                  lineHeight: "normal",
-                  color: "#2a2018",
-                  textAlign: "center",
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: "1px solid rgba(42, 32, 24, 0.3)",
-                  outline: "none",
-                }}
-                onFocus={(e) => {
-                  e.target.style.borderBottomColor = "rgba(42, 32, 24, 0.5)";
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderBottomColor = "rgba(42, 32, 24, 0.3)";
-                }}
-              />
-            </div>
-
-            {/* Year input */}
-            <div
-              style={{
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              <input
-                ref={yearInputRef}
-                type="text"
-                value={year}
-                onClick={handleYearClick}
-                readOnly
-                placeholder="year of event..."
-                style={{
-                  width: "100%",
-                  padding: "8px 0 12px 0",
-                  fontFamily: SERIF,
-                  fontSize: 12,
-                  lineHeight: "normal",
-                  color: year ? "rgba(42, 32, 24, 1)" : "rgba(42, 32, 24, 0.5)",
-                  textAlign: "center",
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: "1px solid rgba(42, 32, 24, 0.3)",
-                  outline: "none",
-                  cursor: "pointer",
-                }}
-              />
-
-              {/* Year wheel picker (positioned below input) */}
-              {showYearWheel && (
-                <>
-                  {/* Backdrop */}
-                  <div
-                    onClick={() => setShowYearWheel(false)}
-                    style={{
-                      position: "fixed",
-                      inset: 0,
-                      background: "transparent",
-                      zIndex: 10,
-                    }}
-                  />
-                  
-                  {/* Year wheel */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      transform: "translateX(-50%)",
-                      top: 60,
-                      width: "100%",
-                      maxWidth: 298,
-                      height: 240,
-                      background: "rgba(255, 255, 255, 0.95)",
-                      backdropFilter: "blur(20px)",
-                      borderRadius: 12,
-                      boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12)",
-                      zIndex: 20,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {/* Selection indicator */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: 0,
-                        right: 0,
-                        top: "50%",
-                        transform: "translateY(-50%)",
-                        height: 40,
-                        background: "rgba(205, 202, 202, 0.25)",
-                        pointerEvents: "none",
-                        zIndex: 1,
-                      }}
-                    />
-                    
-                    {/* Scrollable year list */}
-                    <div
-                      ref={wheelRef}
-                      onScroll={handleScroll}
-                      style={{
-                        height: "100%",
-                        overflowY: "scroll",
-                        scrollSnapType: "y mandatory",
-                        paddingTop: 100,
-                        paddingBottom: 100,
-                        WebkitOverflowScrolling: "touch",
-                      }}
-                      className="scrollbar-hide"
-                    >
-                      {years.map((y) => (
-                        <div
-                          key={y}
-                          onClick={() => handleYearSelect(y)}
-                          style={{
-                            height: 40,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontFamily: SERIF,
-                            fontSize: 18,
-                            color: year === y.toString() ? "#2a2018" : "rgba(42, 32, 24, 0.5)",
-                            fontWeight: year === y.toString() ? 500 : 400,
-                            cursor: "pointer",
-                            scrollSnapAlign: "center",
-                            transition: "all 0.2s ease",
-                          }}
-                        >
-                          {y}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Gradient overlays for fade effect */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: 60,
-                        background: "linear-gradient(to bottom, rgba(255, 255, 255, 0.95), transparent)",
-                        pointerEvents: "none",
-                      }}
-                    />
-                    <div
-                      style={{
-                        position: "absolute",
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        height: 60,
-                        background: "linear-gradient(to top, rgba(255, 255, 255, 0.95), transparent)",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Save to archive button - fixed at bottom */}
-        <PillButton
-          label="save to archive"
-          onClick={handleContinue}
-          disabled={!canContinue}
-          trailing="›"
-          className="transition-opacity duration-500"
-          style={{
-            position: "fixed",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: "clamp(40px, 8vh, 80px)",
-            zIndex: 10,
-          }}
+          style={TITLE_STYLE}
         />
       </div>
+      <CaptionField
+        value={year}
+        onChange={handleYearChange}
+        placeholder="year"
+        ariaLabel="year"
+        maxLength={4}
+        inputMode="numeric"
+        className="nijimu-year-field"
+        inputRef={yearInputRef}
+        focused={fieldsVisible && focusedField === "year"}
+        onFocus={() => setFocusedField("year")}
+        onBlur={() => setFocusedField((current) => (current === "year" ? null : current))}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            focusName();
+          }
+        }}
+        style={YEAR_STYLE}
+      />
+      {yearHint && (
+        <p
+          role="status"
+          style={{
+            position: "absolute",
+            top: "100%",
+            margin: "10px 0 0",
+            padding: "6px 12px",
+            fontFamily: SERIF,
+            fontSize: 11,
+            fontStyle: "italic",
+            color: "#7b7b87",
+            background: "rgba(255,255,255,0.82)",
+            borderRadius: 8,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+          }}
+        >
+          {yearHint}
+        </p>
+      )}
+      {canContinue && (
+        <button
+          type="button"
+          onClick={persistAndOpenGallery}
+          style={{
+            marginTop: 56,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontFamily: SERIF,
+            fontSize: 12,
+            color: "#7b7b87",
+            letterSpacing: "0.04em",
+          }}
+        >
+          save to archive
+        </button>
+      )}
+    </div>
+  );
 
-      {/* Back button */}
-      <BackButton />
+  /* The rim hangs off the sides of a wide dome, so the page is pinned to the
+     viewport and clips: a memory at the end of the arc is cut by the edge of the
+     screen rather than growing the document and raising scrollbars. */
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100vh",
+        overflow: "hidden",
+        background: PAGE_BG,
+      }}
+    >
+      <PageHeader layout="absolute" link={false} />
+      <PuddleDiveGallery
+        items={items}
+        activeIdx={activeIdx}
+        phase="gallery"
+        reducedMotion={reducedMotion}
+        onNavigate={() => {}}
+        onExit={() => navigate(-1)}
+        exitOnBackdropClick={false}
+        caption={editableCaption}
+        showTimeScale={false}
+        showArrows={false}
+        waterEffect={false}
+        neighborsVisible={yearSettled}
+      />
 
       <style>{`
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+        @keyframes nijimu-caret {
+          0%, 49% { opacity: 0.7; }
+          50%, 100% { opacity: 0; }
         }
         input::placeholder {
-          color: rgba(42, 32, 24, 0.5);
+          color: inherit;
+          opacity: 0.35;
+          font-style: inherit;
+        }
+        .nijimu-year-field::placeholder {
+          color: #2a2a2a;
+          opacity: 0.35;
         }
       `}</style>
     </div>

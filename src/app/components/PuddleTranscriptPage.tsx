@@ -138,7 +138,7 @@ export function PuddleTranscriptPage() {
     } else {
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate("/record/name", {
+        navigate("/record/build", {
           state: {
             transcript,
             highlightedWords: Array.from(highlightedWords).map((i) => words[i]),

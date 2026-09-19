@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet, RouterProvider, useLocation, useNavigate } from "react-router";
+import { createBrowserRouter, Outlet, RouterProvider, useLocation } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { isPuddleSupported } from "./lib/puddle/simulation";
@@ -15,14 +15,15 @@ import { ShapeGrowPage } from "./components/ShapeGrowPage";
 import { ShapeWeightPage } from "./components/ShapeWeightPage";
 import { ShapeColorPage } from "./components/ShapeColorPage";
 import { ShapeTexturePage } from "./components/ShapeTexturePage";
-import { ConnectMemoriesPage } from "./components/ConnectMemoriesPage";
+// import { ConnectMemoriesPage } from "./components/ConnectMemoriesPage";
 import { MemorySavedPage } from "./components/MemorySavedPage";
-import { ProfilePage } from "./components/ProfilePage";
+import { ProfilePanel } from "./components/ProfilePanel";
 import { MemoryScrollPage } from "./components/MemoryScrollPage";
 import { RevisitMemoryPage } from "./components/RevisitMemoryPage";
 import { EditWeightPage } from "./components/EditWeightPage";
 import { EditColorPage } from "./components/EditColorPage";
 import { EditTexturePage } from "./components/EditTexturePage";
+import { StyleGuidePage } from "./components/StyleGuidePage";
 
 const SOUNDTRACK_URL =
   "https://cdn.jsdelivr.net/gh/Noyok1vas/figbuildAssets/prodarmaan%20-%20somber%20springtime.mp3";
@@ -43,6 +44,7 @@ function RootLayout() {
 }
 
 const router = createBrowserRouter([
+  { path: "/style", Component: StyleGuidePage },
   {
     Component: RootLayout,
     children: [
@@ -58,10 +60,9 @@ const router = createBrowserRouter([
       { path: "/record/shape/weight", Component: ShapeWeightPage },
       { path: "/record/shape/color", Component: ShapeColorPage },
       { path: "/record/shape/texture", Component: ShapeTexturePage },
-      { path: "/record/connect", Component: ConnectMemoriesPage },
+      // { path: "/record/connect", Component: ConnectMemoriesPage },
       { path: "/record/saved", Component: MemorySavedPage },
       { path: "/record/orb", Component: OrbPage },
-      { path: "/profile", Component: ProfilePage },
       { path: "/memory/scroll", Component: MemoryScrollPage },
       { path: "/memory/revisit", Component: RevisitMemoryPage },
       { path: "/memory/edit/weight", Component: EditWeightPage },
@@ -74,7 +75,7 @@ const router = createBrowserRouter([
 function GlobalControls() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(true);
-  const navigate = useNavigate();
+  const [profileOpen, setProfileOpen] = useState(false);
   const { pathname } = useLocation();
   /** Light chrome (muted gray, no pill) on the light-ground pages. Only the
       legacy dark blob recording screen keeps the frosted dark pills. */
@@ -111,6 +112,11 @@ function GlobalControls() {
   useEffect(() => {
     if (audioRef.current) audioRef.current.muted = muted;
   }, [muted]);
+
+  /** The pane belongs to the page it opened over — leaving that page closes it. */
+  useEffect(() => {
+    setProfileOpen(false);
+  }, [pathname]);
 
   const iconButtonStyle = lightChrome
     ? {
@@ -151,8 +157,9 @@ function GlobalControls() {
     <>
       {/* Profile button */}
       <button
-        onClick={() => navigate("/profile")}
+        onClick={() => setProfileOpen((open) => !open)}
         title="Profile"
+        aria-expanded={profileOpen}
         style={{ ...iconButtonStyle, top: 22, right: 68 }}
       >
         <svg
@@ -192,6 +199,8 @@ function GlobalControls() {
           </svg>
         )}
       </button>
+
+      <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
   );
 }

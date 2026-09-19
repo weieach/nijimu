@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useGLTF } from "@react-three/drei";
 import { SceneViewer } from "./SceneViewer";
 import { BackButton } from "./BackButton";
+import { GalleryViewToggle } from "./GalleryViewToggle";
 import { COLOR_PALETTE } from "../lib/colors";
 import { SERIF } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
+import type { ArchiveArtifact } from "../lib/archive";
 
 /*
  * PuddleDiveGallery — the gallery presentation of the "dive" variant.
@@ -47,9 +49,21 @@ const ARTIFACT_MAX_PX = 420;
 const ARC_FOCUS_DROP_VH = 0.04;
 /** How long a memory takes to travel one step around the rim. */
 const ARC_TRAVEL_MS = 900;
+/* ── the neighbours arriving and leaving ──
+   On the naming step the rim isn't dived to: it gathers once the memory has a
+   year to stand in. The memories still surface the way they do on a descent —
+   blurred, rising — but they overshoot their seat, levitate there for most of
+   the arrival, and only then lower into place, so the rim reads as assembling
+   itself rather than being placed. Deleting the year sends them back down the
+   way they came. */
+const NEIGHBOR_IN_MS = 2600;
+const NEIGHBOR_OUT_MS = 950;
+/** Nearest memory leads the arrival; the outermost leads the departure. */
+const NEIGHBOR_IN_STAGGER_MS = 110;
+const NEIGHBOR_OUT_STAGGER_MS = 80;
 /** Caption block centre-ish, as a fraction of viewport height from the top —
     scales with the window instead of sitting a fixed px above the timescale. */
-const CAPTION_TOP_VH = 0.72;
+const CAPTION_TOP_VH = 0.62;
 /** Height of the timescale above the bottom of the viewport. */
 const TS_BOTTOM_PX = 78;
 /** Outermost artifact centre lands this many times TS_BOTTOM_PX from the
@@ -127,23 +141,21 @@ function washColor(hex: string): string {
   return `rgb(${wash(r)}, ${wash(g)}, ${wash(b)})`;
 }
 
-export interface DiveGalleryItem {
-  /** Index into the events/anchors arrays in PuddleScene. */
-  eventIdx: number;
-  year: string;
-  event: string;
-  /** The memory's drop anchor in puddle uv (y up) — where ripples/dye land. */
-  anchor: { x: number; y: number };
-  colorIndex: number;
-  shape: {
-    modelPath: string;
-    fluidity: number;
-    evolve: number;
-    bumpAmount: number;
-  };
-}
+export type DiveGalleryItem = ArchiveArtifact;
 
 export type DivePhase = "diving" | "gallery" | "surfacing";
+
+/**
+ * How the gallery came to be on screen.
+ *  - 'resolve' — it was dived to: every artifact rises out of the blurred water.
+ *  - 'carried' — the naming step already had this rim on screen and only handed
+ *    it over, so the memories must not move or re-resolve. Just the things that
+ *    weren't there yet (the water, the timescale, the arrows) arrive.
+ */
+export type DiveArrival = "resolve" | "carried";
+
+/** How long the chrome that is new to the carried arrival takes to appear. */
+const CARRIED_CHROME_MS = 1200;
 
 export function PuddleDiveGallery({
   items,
@@ -152,6 +164,14 @@ export function PuddleDiveGallery({
   reducedMotion,
   onNavigate,
   onExit,
+  caption,
+  exitOnBackdropClick = true,
+  onToggleGrid,
+  showTimeScale = true,
+  showArrows = true,
+  waterEffect = true,
+  neighborsVisible = true,
+  arrival = "resolve",
 }: {
   items: DiveGalleryItem[];
   activeIdx: number;
@@ -160,6 +180,20 @@ export function PuddleDiveGallery({
   /** Steps to travel around the rim: negative = newer (left), positive = older. */
   onNavigate: (delta: number) => void;
   onExit: () => void;
+  /** Replace the default title / year caption (used by the naming step). */
+  caption?: ReactNode;
+  /** Homescreen G-gallery exits on a blank click; the naming step does not. */
+  exitOnBackdropClick?: boolean;
+  onToggleGrid?: () => void;
+  /** The foot ruler — hidden on the naming step. */
+  showTimeScale?: boolean;
+  showArrows?: boolean;
+  /** Underwater resolve / refraction / buoyant bob. Off on the naming step. */
+  waterEffect?: boolean;
+  /** Neighbours on the rim. The naming step reveals them with a valid year. */
+  neighborsVisible?: boolean;
+  /** Whether the rim was dived to or handed over from the naming step. */
+  arrival?: DiveArrival;
 }) {
   const item = items[activeIdx];
   const hasNewer = activeIdx > 0;
@@ -171,6 +205,8 @@ export function PuddleDiveGallery({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (phase !== "gallery") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (e.key === "ArrowLeft") onNavigate(-1);
       else if (e.key === "ArrowRight") onNavigate(1);
       else if (e.key === "Escape") onExit();
@@ -189,10 +225,15 @@ export function PuddleDiveGallery({
   }, [items, activeIdx]);
 
   /* The refraction wobble is a full-element filter pass, so it only runs when
-     something is actually moving through the water: the arrival and the exit. */
+     something is actually moving through the water: the arrival and the exit.
+     A carried rim wasn't moving at all, so it starts calm. */
   const [wobbling, setWobbling] = useState(false);
   useEffect(() => {
-    if (phase === "diving" || reducedMotion) {
+    if (!waterEffect || phase === "diving" || reducedMotion) {
+      setWobbling(false);
+      return;
+    }
+    if (arrival === "carried" && phase === "gallery") {
       setWobbling(false);
       return;
     }
@@ -203,7 +244,42 @@ export function PuddleDiveGallery({
         : DIVE_TUNING.artifactResolveMs;
     const t = setTimeout(() => setWobbling(false), ms);
     return () => clearTimeout(t);
-  }, [phase, reducedMotion]);
+  }, [arrival, phase, reducedMotion, waterEffect]);
+
+  /* The neighbours outlive `neighborsVisible` going false: they have to stay
+     mounted long enough to sink back out, or the rim would simply blink away. */
+  const [neighborsMounted, setNeighborsMounted] = useState(neighborsVisible);
+  useEffect(() => {
+    if (neighborsVisible) {
+      setNeighborsMounted(true);
+      return;
+    }
+    const t = setTimeout(
+      () => setNeighborsMounted(false),
+      reducedMotion ? 0 : NEIGHBOR_OUT_MS + ARC_NEIGHBOURS * NEIGHBOR_OUT_STAGGER_MS,
+    );
+    return () => clearTimeout(t);
+  }, [neighborsVisible, reducedMotion]);
+
+  /* The memories the previous screen already had on screen. They are not
+     entering — they were simply handed over — so they get no entrance at all.
+     Filled on the first render and then left alone, since which artifacts
+     carried over is a fact about the arrival, not about the current rim. */
+  const carriedIdsRef = useRef<Set<string> | null>(null);
+
+  /* A carried rim hands over a wash that was laid on paper; underwater the same
+     color sits lower. It settles across the arrival, while the water itself is
+     still coming in, so the change is never read as the color shifting. */
+  const [washSettled, setWashSettled] = useState(arrival !== "carried");
+  useEffect(() => {
+    if (washSettled) return;
+    // two frames: the first paint has to land on the handed-over value, or the
+    // transition has nothing to travel from
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => setWashSettled(true));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [washSettled]);
 
   if (!item) return null;
 
@@ -216,14 +292,20 @@ export function PuddleDiveGallery({
   const dissolveMs = Math.round(
     (reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.surfaceMs) * 0.6,
   );
-  const artifactAnimation =
-    phase === "diving"
+  const artifactAnimation = !waterEffect
+    ? "none"
+    : phase === "diving"
       ? "none"
       : phase === "surfacing"
         ? `${reducedMotion ? "diveDissolveReduced" : "diveDissolve"} ${dissolveMs}ms ease forwards`
         : `${
             reducedMotion ? "diveResolveReduced" : "diveResolve"
           } ${Math.round(resolveMs)}ms cubic-bezier(0.22, 1, 0.36, 1) backwards`;
+
+  /* Chrome the carried arrival brings with it — the foot ruler, the arrows, the
+     view switch. These really are new, so they are the ones that fade in. */
+  const carriedChrome =
+    arrival === "carried" ? `diveChromeIn ${CARRIED_CHROME_MS}ms ease backwards` : undefined;
 
   /* Refraction wobble — an SVG turbulence/displacement filter over the focused
      artifact, seen as if through moving water. Its SMIL animation starts when
@@ -251,9 +333,40 @@ export function PuddleDiveGallery({
   const slots: { offset: number; item: DiveGalleryItem }[] = [];
   for (let k = -ARC_NEIGHBOURS; k <= ARC_NEIGHBOURS; k++) {
     if (phase === "diving" && k !== 0) continue;
+    if (!neighborsMounted && k !== 0) continue;
     const slotItem = items[activeIdx + k];
     if (slotItem) slots.push({ offset: k, item: slotItem });
   }
+
+  /** The rim is letting go: still on screen, but on its way back down. */
+  const neighborsLeaving = neighborsMounted && !neighborsVisible;
+
+  /** How a neighbour joins or leaves a rim that gathers rather than being dived
+      to. Nearest first on the way in, outermost first on the way out. */
+  const neighborAnimation = (offset: number) => {
+    const d = Math.abs(offset);
+    if (reducedMotion) {
+      // nothing rises or sinks here; the rim is simply there or not
+      return neighborsLeaving ? "none" : "diveNeighborInReduced 1.1s ease forwards";
+    }
+    /* ease-in-out, not a snappy ease-out: the curve is applied between every
+       pair of keyframes, so a sharp one would lurch four times over. Easing
+       each segment in and out instead is what lets the overshoot hang. */
+    if (neighborsLeaving) {
+      const delay = (ARC_NEIGHBOURS - d) * NEIGHBOR_OUT_STAGGER_MS;
+      return `diveNeighborOut ${NEIGHBOR_OUT_MS}ms ease-in-out ${delay}ms both`;
+    }
+    return `diveNeighborIn ${NEIGHBOR_IN_MS}ms ease-in-out ${
+      d * NEIGHBOR_IN_STAGGER_MS
+    }ms both`;
+  };
+
+  if (!carriedIdsRef.current) {
+    carriedIdsRef.current = new Set(
+      arrival === "carried" ? slots.map(({ item: slotItem }) => slotItem.id) : [],
+    );
+  }
+  const carriedIds = carriedIdsRef.current;
 
   const arrowStyle = (side: "left" | "right"): CSSProperties => ({
     position: "absolute",
@@ -267,6 +380,7 @@ export function PuddleDiveGallery({
     color: "#4a4a4a",
     opacity: chromeVisible ? 0.35 : 0,
     transition: "opacity 0.6s ease",
+    animation: carriedChrome,
     pointerEvents: chromeVisible ? "auto" : "none",
   });
 
@@ -275,7 +389,7 @@ export function PuddleDiveGallery({
       className="absolute inset-0 select-none"
       style={{ zIndex: 30 }}
       onClick={() => {
-        if (phase === "gallery") onExit();
+        if (phase === "gallery" && exitOnBackdropClick) onExit();
       }}
     >
       {/* ═══ BACKGROUND WASH — the memory's color, held around the focused
@@ -292,13 +406,20 @@ export function PuddleDiveGallery({
           height: "clamp(700px, 78vw, 1000px)",
           borderRadius: "50%",
           backgroundColor: washColor(palette.color),
-          opacity: chromeVisible ? DIVE_TUNING.artifactWashOpacity : 0,
+          opacity:
+            chromeVisible || !waterEffect
+              ? waterEffect && washSettled
+                ? DIVE_TUNING.artifactWashOpacity
+                : Math.min(1, DIVE_TUNING.artifactWashOpacity / 0.62)
+              : 0,
           maskImage:
             "radial-gradient(closest-side, #000 10%, rgba(0,0,0,0.5) 50%, transparent 82%)",
           WebkitMaskImage:
             "radial-gradient(closest-side, #000 10%, rgba(0,0,0,0.5) 50%, transparent 82%)",
-          transition: `background-color ${DIVE_TUNING.artifactWashFadeMs}ms ease, opacity ${washFadeMs}ms ease`,
-          willChange: "background-color, opacity",
+          transition: waterEffect
+            ? `background-color ${DIVE_TUNING.artifactWashFadeMs}ms ease, opacity ${washFadeMs}ms ease`
+            : "none",
+          willChange: waterEffect ? "background-color, opacity" : undefined,
         }}
       />
 
@@ -356,9 +477,11 @@ export function PuddleDiveGallery({
           const dropY = focused ? ARC_FOCUS_DROP_VH * viewport.h : 0;
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
+          /* handed over rather than arriving: it is already exactly here */
+          const carried = carriedIds.has(slotItem.id) && phase === "gallery";
           return (
             <div
-              key={slotItem.eventIdx}
+              key={slotItem.id}
               className="dive-artifact"
               onClick={(e) => {
                 e.stopPropagation();
@@ -386,27 +509,33 @@ export function PuddleDiveGallery({
                   width: "100%",
                   height: "100%",
                   opacity: phase === "diving" ? 0 : undefined,
-                  animation: artifactAnimation,
+                  animation: carried
+                    ? "none"
+                    : !focused && !waterEffect
+                      ? neighborAnimation(offset)
+                      : artifactAnimation,
                   willChange: "filter, opacity, transform",
                 }}
               >
                 {/* depth: how far into the water this slot has fallen, plus
                     the focused artifact's slow buoyant bob — nothing rests
-                    perfectly still underwater */}
+                    perfectly still underwater. The depth blur belongs to the
+                    dome, not the water, so both screens carry it. */}
                 <div
                   style={{
                     width: "100%",
                     height: "100%",
                     opacity: depth.opacity,
-                    filter: [
-                      depth.blurPx ? `blur(${depth.blurPx}px)` : "",
-                      focused && wobbling ? "url(#dive-refraction)" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" "),
+                    filter:
+                      [
+                        depth.blurPx ? `blur(${depth.blurPx}px)` : "",
+                        waterEffect && focused && wobbling ? "url(#dive-refraction)" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined,
                     transition: `opacity ${travelMs}ms ${travelEase}, filter ${travelMs}ms ${travelEase}`,
                     animation:
-                      focused && !reducedMotion && phase === "gallery"
+                      waterEffect && focused && !reducedMotion && phase === "gallery"
                         ? `diveFloat 7s ease-in-out ${Math.round(resolveMs)}ms infinite alternate`
                         : undefined,
                   }}
@@ -428,6 +557,10 @@ export function PuddleDiveGallery({
                     // neighbour holds one pose until it reaches the apex.
                     frameloop={focused ? "always" : "demand"}
                     still={!focused}
+                    // the apex artifact turns on the page's clock rather than
+                    // its canvas's, so the same memory on two screens reads as
+                    // one continuous rotation instead of snapping back to rest
+                    sharedClock={focused}
                     // no frosted-glass overlay here: its backdrop-filter draws
                     // a hard square over the defocused water (backdrop filters
                     // ignore ancestor opacity/masks in Chromium). The artifact
@@ -454,59 +587,74 @@ export function PuddleDiveGallery({
       </div>
 
       {/* ═══ TIMESCALE — one line across the foot of the screen ═══ */}
-      <TimeScale
-        items={items}
-        activeIdx={activeIdx}
-        viewport={viewport}
-        visible={chromeVisible}
-        travelMs={travelMs}
-        travelEase={travelEase}
-      />
+      {showTimeScale && (
+        <TimeScale
+          items={items}
+          activeIdx={activeIdx}
+          viewport={viewport}
+          visible={chromeVisible}
+          travelMs={travelMs}
+          travelEase={travelEase}
+          enterAnimation={carriedChrome}
+        />
+      )}
 
       {/* ═══ CAPTION — between the dome and the timescale ═══ */}
       <div
-        className="absolute left-0 right-0 text-center pointer-events-none"
+        className="absolute left-0 right-0 text-center"
         style={{
           top: CAPTION_TOP_VH * viewport.h,
           padding: "0 clamp(24px, 6vw, 80px)",
           fontFamily: SERIF,
           opacity: chromeVisible ? 1 : 0,
           transition: "opacity 0.8s ease",
+          zIndex: 30,
+          pointerEvents: caption ? "auto" : "none",
         }}
       >
         <div
-          key={item.eventIdx}
+          key={item.id}
           style={{
-            animation: reducedMotion ? undefined : `diveCaptionIn ${travelMs}ms ease`,
+            /* a carried caption reads the same words the naming step was
+               already showing, so fading them would only look like a blink */
+            animation:
+              caption || reducedMotion || carriedIds.has(item.id)
+                ? undefined
+                : `diveCaptionIn ${travelMs}ms ease`,
+            pointerEvents: caption ? "auto" : "none",
           }}
         >
-          <p
-            style={{
-              color: "#2a2a2a",
-              margin: "0 0 0.8em",
-              whiteSpace: "pre-line",
-              fontStyle: "italic",
-              fontSize: "clamp(11px, 1.15vw, 15px)",
-              lineHeight: 1.35,
-            }}
-          >
-            {item.event}
-          </p>
-          <p
-            style={{
-              color: "#999",
-              margin: 0,
-              fontStyle: "normal",
-              fontSize: "clamp(9px, 0.9vw, 12px)",
-            }}
-          >
-            {item.year}
-          </p>
+          {caption ?? (
+            <>
+              <p
+                style={{
+                  color: "#2a2a2a",
+                  margin: "0 0 0.8em",
+                  whiteSpace: "pre-line",
+                  fontStyle: "italic",
+                  fontSize: "clamp(13px, 1.05vw, 16px)",
+                  lineHeight: 1.35,
+                }}
+              >
+                {item.event}
+              </p>
+              <p
+                style={{
+                  color: "#999",
+                  margin: 0,
+                  fontStyle: "normal",
+                  fontSize: "clamp(11px, 0.9vw, 14px)",
+                }}
+              >
+                {item.year}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
       {/* ═══ ARROWS ═══ */}
-      {hasNewer && (
+      {showArrows && hasNewer && (
         <button
           aria-label="newer memory"
           style={arrowStyle("left")}
@@ -522,7 +670,7 @@ export function PuddleDiveGallery({
           </svg>
         </button>
       )}
-      {hasOlder && (
+      {showArrows && hasOlder && (
         <button
           aria-label="older memory"
           style={arrowStyle("right")}
@@ -548,6 +696,14 @@ export function PuddleDiveGallery({
         }}
       >
         <BackButton onClick={onExit} />
+      </div>
+
+      <div style={{ animation: carriedChrome }}>
+        <GalleryViewToggle
+          view="carousel"
+          onToggle={onToggleGrid ?? (() => {})}
+          visible={chromeVisible && !!onToggleGrid}
+        />
       </div>
 
       <style>{`
@@ -632,6 +788,73 @@ export function PuddleDiveGallery({
           from { opacity: 1; }
           to   { opacity: 0; }
         }
+        /* A rim that gathers instead of being dived to. Same surfacing as
+           diveResolve — deep blur clearing as the memory rises — but with no
+           water to tint, and it doesn't arrive straight onto its seat: it
+           floats up past it, hangs there while the blur lets go, and only then
+           lowers into place. */
+        @keyframes diveNeighborIn {
+          0% {
+            opacity: 0;
+            filter: blur(26px);
+            transform: translateY(30px) scale(0.93);
+          }
+          20% {
+            opacity: 0.85;
+            filter: blur(14px);
+            transform: translateY(-4px) scale(0.98);
+          }
+          38% {
+            opacity: 1;
+            filter: blur(6px);
+            transform: translateY(-13px) scale(1.012);
+          }
+          60% {
+            opacity: 1;
+            filter: blur(2.5px);
+            transform: translateY(-15px) scale(1.015);
+          }
+          80% {
+            opacity: 1;
+            filter: blur(0.8px);
+            transform: translateY(-11px) scale(1.008);
+          }
+          100% {
+            opacity: 1;
+            filter: blur(0);
+            transform: translateY(0) scale(1);
+          }
+        }
+        /* Letting go: one small lift, as if it had been held up, then back down
+           into the blur it came out of. */
+        @keyframes diveNeighborOut {
+          0% {
+            opacity: 1;
+            filter: blur(0);
+            transform: translateY(0) scale(1);
+          }
+          26% {
+            opacity: 0.92;
+            filter: blur(3px);
+            transform: translateY(-6px) scale(1.006);
+          }
+          100% {
+            opacity: 0;
+            filter: blur(22px);
+            transform: translateY(26px) scale(0.94);
+          }
+        }
+        @keyframes diveNeighborInReduced {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        /* Chrome that is new to a carried arrival. Only the 'from' is written:
+           with backwards fill the element travels from nothing to whatever
+           opacity it styles for itself, and keeps it afterwards — so hover
+           states still work once it has arrived. */
+        @keyframes diveChromeIn {
+          from { opacity: 0; }
+        }
       `}</style>
     </div>
   );
@@ -662,6 +885,7 @@ function TimeScale({
   visible,
   travelMs,
   travelEase,
+  enterAnimation,
 }: {
   items: DiveGalleryItem[];
   activeIdx: number;
@@ -669,6 +893,8 @@ function TimeScale({
   visible: boolean;
   travelMs: number;
   travelEase: string;
+  /** Set when the ruler is new to the screen and has to draw itself in. */
+  enterAnimation?: string;
 }) {
   /** Memory places + the five-year ticks that frame them. */
   const { positions, yearTicks } = useMemo(() => {
@@ -716,6 +942,7 @@ function TimeScale({
       style={{
         opacity: visible ? 1 : 0,
         transition: "opacity 0.8s ease",
+        animation: enterAnimation,
       }}
     >
       <defs>
@@ -740,7 +967,7 @@ function TimeScale({
       {/* every memory — short tick, no year */}
       {positions.map((t, i) => (
         <line
-          key={`m-${items[i].eventIdx}`}
+          key={`m-${items[i].id}`}
           x1={x(t)}
           y1={y}
           x2={x(t)}

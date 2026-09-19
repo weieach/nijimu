@@ -18,6 +18,8 @@ interface PillButtonProps {
 
 const DIMMED = "rgba(140, 140, 140, 0.5)";
 const TRACKING = "0.03em";
+/** Switzer sits tight; SF Pro on dark pills keeps a little air. */
+const SWITZER_TRACKING = "0.01em";
 /** Shared chrome — cool gray to match light-page UI */
 const LIGHT_TEXT = "#7b7b87";
 const OUTLINE_BORDER = "1px solid rgba(123, 123, 135, 0.28)";
@@ -77,7 +79,7 @@ export function PillButton({
           fontSize: isOutline ? 14 : 16,
           fontWeight: isDark ? 300 : 400,
           lineHeight: 1.5,
-          letterSpacing: TRACKING,
+          letterSpacing: isDark ? TRACKING : SWITZER_TRACKING,
           color: textColor,
           textShadow: isDark ? "0px 4px 100px black" : "none",
           textTransform: "lowercase",
@@ -91,7 +93,7 @@ export function PillButton({
             fontFamily: SANS_UI,
             fontSize: isOutline ? 12 : 14,
             lineHeight: 0,
-            letterSpacing: TRACKING,
+            letterSpacing: isDark ? TRACKING : SWITZER_TRACKING,
             color: textColor,
             fontVariationSettings: "'wdth' 100",
           }}

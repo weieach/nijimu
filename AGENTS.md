@@ -116,8 +116,12 @@ that renders `GlobalControls` (background music + profile button) once, so
    └ /memory/edit/weight | /color | /texture   EditXPage editors
 ```
 
-Other routes: `/profile` (ProfilePage), `/record/orb` (OrbPage — **orphaned**, no
-UI links to it), `/record/click` and `/record/process` (early recording variants).
+Other routes: `/record/orb` (OrbPage — **orphaned**, no UI links to it),
+`/record/click` and `/record/process` (early recording variants).
+
+The profile is **not a route** — the profile button in `GlobalControls` opens
+`ProfilePanel`, a glass popup over the current page (iridescent WebGL sheen from
+`IridescentSheen` + grain), so opening it never leaves the page you were on.
 
 ### State passing (important gotcha)
 The create flow carries data forward via **react-router `location.state`**

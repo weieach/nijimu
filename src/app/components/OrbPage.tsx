@@ -326,7 +326,7 @@ export function OrbPage() {
         {status === "loading" && (
           <p
             style={{
-              fontFamily: "'Playfair Display', Georgia, serif",
+              fontFamily: "Rowan, Georgia, serif",
               fontStyle: "italic",
               color: "#515151",
               fontSize: 15,
@@ -342,7 +342,7 @@ export function OrbPage() {
         {status === "ready" && (
           <p
             style={{
-              fontFamily: "'Playfair Display', Georgia, serif",
+              fontFamily: "Rowan, Georgia, serif",
               fontStyle: "italic",
               color: "#515151",
               fontSize: 15,
@@ -358,7 +358,7 @@ export function OrbPage() {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
             <p
               style={{
-                fontFamily: "'Playfair Display', Georgia, serif",
+                fontFamily: "Rowan, Georgia, serif",
                 fontStyle: "italic",
                 color: "#515151",
                 fontSize: 15,
@@ -391,7 +391,7 @@ export function OrbPage() {
         {status === "error" && (
           <p
             style={{
-              fontFamily: "'Playfair Display', Georgia, serif",
+              fontFamily: "Rowan, Georgia, serif",
               fontStyle: "italic",
               color: "#515151",
               fontSize: 15,

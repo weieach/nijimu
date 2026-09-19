@@ -5,6 +5,7 @@ import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memor
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
+import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 
@@ -223,6 +224,7 @@ export function BlobScene({
   hideAnnotations = false,
   openGallery = false,
   onGalleryExit,
+  onToggleGrid,
 }: {
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
@@ -230,6 +232,7 @@ export function BlobScene({
   openGallery?: boolean;
   /** Fired when leaving gallery → blend (so HomePage can restore a test variant). */
   onGalleryExit?: () => void;
+  onToggleGrid?: () => void;
 }) {
   // Curated life events plus whatever the user has saved, so their memories
   // blend into the same field.
@@ -1052,7 +1055,7 @@ export function BlobScene({
       {/* ═══ GALLERY TEXT ═══ */}
       <div
         className="absolute inset-0 pointer-events-none flex items-end justify-center"
-        style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.12}px` }}
+        style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.22}px` }}
       >
         <div className="text-center" style={{ fontFamily: SERIF }}>
           <p style={{ color: "#2a2a2a", marginBottom: 6, fontStyle: "italic" }}>{blobs[activeIdx]?.event}</p>
@@ -1119,6 +1122,12 @@ export function BlobScene({
       {onNewMemory && (
         <PageHeader layout="absolute" link={false} style={{ zIndex: 26 }} />
       )}
+
+      <GalleryViewToggle
+        view="carousel"
+        onToggle={onToggleGrid ?? (() => {})}
+        visible={morphVal > 0.65 && !!onToggleGrid}
+      />
 
       {/* ═══ HOMESCREEN OVERLAY (blend mode only) ═══ */}
       {onNewMemory && (

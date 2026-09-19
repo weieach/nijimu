@@ -12,8 +12,8 @@ import { RIPPLE_CADENCE, introSchedule, dripGapMs } from "../lib/puddle/cadence"
 import { BlobScene } from "./BlobScene";
 import { PageHeader } from "./PageHeader";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
-import { MODEL_PATHS } from "./SceneViewer";
 import { PuddleDiveGallery, DiveGalleryItem, DivePhase } from "./PuddleDiveGallery";
+import { buildArchive } from "../lib/archive";
 
 /*
  * PuddleScene — WebGL2 homescreen field variants.
@@ -43,6 +43,9 @@ const SETTLE_MS = 6000;
 const SETTLE_MS_REDUCED = 2000;
 /** Long-press duration that commits to creating a new memory. */
 const HOLD_TO_CREATE_MS = 2000;
+/** How long the water takes to arrive behind a carried dive gallery — the rim
+    was handed over from the naming step, so the puddle is the new element. */
+const WATER_ARRIVE_MS = 1500;
 /* Progress ring drawn around the cursor while pressing — ~135px at a laptop
    width. Sized in JS rather than a CSS clamp() because the sweep has to start
    where the label crosses the ring, and that angle depends on the diameter. */
@@ -292,7 +295,10 @@ export function PuddleScene({
   texture = "puddle",
   diveGalleryEnabled = false,
   galleryOpen = false,
+  galleryFocusId,
+  galleryCarried = false,
   onGalleryExit,
+  onToggleGrid,
 }: {
   /** Receives the uv point the descent ended on, so the next screen can surface there. */
   onNewMemory?: (focus?: [number, number]) => void;
@@ -303,8 +309,16 @@ export function PuddleScene({
   diveGalleryEnabled?: boolean;
   /** Externally-driven open/close (the homescreen G shortcut). */
   galleryOpen?: boolean;
+  /** Which memory to open on. Defaults to the newest. */
+  galleryFocusId?: string;
+  /** The naming step already had this carousel on screen, so there is no
+      surface left to dive through: the gallery opens at depth and the water
+      settles in behind it instead. */
+  galleryCarried?: boolean;
   /** Fired when the gallery starts surfacing, so the G toggle stays in sync. */
   onGalleryExit?: () => void;
+  /** Switch from the G-key carousel to the card grid. */
+  onToggleGrid?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [failed, setFailed] = useState(false);
@@ -384,47 +398,43 @@ export function PuddleScene({
   );
 
   /* ─── dive gallery (flagged variant) ─── */
+
+  /* One artifact per memory, newest (left) → oldest (right). Built by
+     lib/archive so the naming step draws the exact same rim — the memory being
+     made can then be handed straight over instead of the gallery rebuilding it
+     into a different order with differently seeded forms. Each one keeps the
+     drop anchor its memory holds on the surface, which is what the water
+     ripples to as the rim swings. */
+  const galleryItems = useMemo<DiveGalleryItem[]>(() => {
+    const anchorById = new Map(events.map((e, i) => [e.id, anchors[i]]));
+    return buildArchive(savedMemories).map((artifact) => {
+      const anchor = anchorById.get(artifact.id);
+      return { ...artifact, anchor: { x: anchor?.x ?? 0.5, y: anchor?.y ?? 0.5 } };
+    });
+  }, [events, anchors, savedMemories]);
+
+  /** Opening straight into the settled gallery, with the memory the naming step
+      was already showing at the apex. */
+  const carriedOpen = galleryOpen && diveGalleryEnabled && galleryCarried;
+
   /** idle → diving → gallery → surfacing → idle. Anything non-idle mounts the overlay. */
-  const [divePhase, setDivePhase] = useState<"idle" | DivePhase>("idle");
-  const [galleryIdx, setGalleryIdx] = useState(0);
+  const [divePhase, setDivePhase] = useState<"idle" | DivePhase>(
+    carriedOpen ? "gallery" : "idle",
+  );
+  const [galleryIdx, setGalleryIdx] = useState(() => {
+    if (!carriedOpen) return 0;
+    const i = galleryItems.findIndex((a) => a.id === galleryFocusId);
+    return i < 0 ? 0 : i;
+  });
+  /** The water is the one thing the naming step didn't have, so on a carried
+      arrival it is also the only thing that comes in. */
+  const [waterArriving, setWaterArriving] = useState(carriedOpen);
   /** Sim-side controls, assigned inside the main effect (the sim must outlive the gallery). */
   const diveControlsRef = useRef<{
-    open(itemIdx: number): void;
+    open(itemIdx: number, carried?: boolean): void;
     close(): void;
     ripple(itemIdx: number): void;
   } | null>(null);
-
-  /* One artifact per memory, newest (left) → oldest (right) — same content
-     and order as the morph gallery so the A/B compares presentation only.
-     Saved memories replay the shape the user sculpted; curated LIFE_EVENTS
-     get a deterministic seeded one so an artifact is stable across visits. */
-  const galleryItems = useMemo<DiveGalleryItem[]>(() => {
-    const items = events.map((e, i) => {
-      const saved = i >= LIFE_EVENTS.length ? savedMemories[i - LIFE_EVENTS.length] : undefined;
-      const rand = mulberry32(hashString(`shape|${e.id}|${e.year}|${e.event}`));
-      return {
-        eventIdx: i,
-        year: e.year,
-        event: e.event,
-        anchor: { x: anchors[i].x, y: anchors[i].y },
-        colorIndex: e.color % COLOR_PALETTE.length,
-        shape: saved
-          ? {
-              modelPath: saved.shape.modelPath,
-              fluidity: saved.shape.fluidity,
-              evolve: saved.shape.evolve,
-              bumpAmount: saved.shape.bumpAmount,
-            }
-          : {
-              modelPath: MODEL_PATHS[Math.floor(rand() * MODEL_PATHS.length)],
-              fluidity: rand() * 0.5 + 0.5,
-              evolve: rand() * 0.5 + 0.5,
-              bumpAmount: i % 2 === 0 ? rand() * 0.03 : 0.03 + rand() * 0.12,
-            },
-      };
-    });
-    return items.sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
-  }, [events, anchors, savedMemories]);
 
   // Refs so the main sim effect (keyed by anchors/texture only) sees fresh
   // values without re-running — re-running would rebuild the sim and erase
@@ -897,22 +907,31 @@ export function PuddleScene({
 
     /* ─── dive gallery controls (assigned to the ref so React-side effects
        and the overlay can drive the sim without re-running this effect) ─── */
-    const openDive = (itemIdx: number) => {
+    const openDive = (itemIdx: number, carried = false) => {
       if (!diveSim || dive.target === 1) return;
       const item = galleryItemsRef.current[itemIdx];
       if (!item) return;
+      const anchor = item.anchor ?? { x: 0.5, y: 0.5 };
       endPress();
       // a fresh descent remembers the surface exactly as it stands, so closing
       // the gallery can hand it back untouched
       if (dive.progress === 0) diveSim.captureState();
       setGalleryIdx(itemIdx);
-      setDivePhase("diving");
       dive.target = 1;
       dive.zoomScale = reducedMotion ? 0 : 1; // reduced motion: cross-fade, no dolly
-      dive.durMs = reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.diveMs;
-      dive.focusTarget = [item.anchor.x, item.anchor.y];
+      dive.focusTarget = [anchor.x, anchor.y];
       // fresh descent: push toward the tapped point from the start
-      if (dive.progress === 0) dive.focus = [item.anchor.x, item.anchor.y];
+      if (dive.progress === 0) dive.focus = [anchor.x, anchor.y];
+      if (carried) {
+        /* The carousel is already on screen and the viewer is already down
+           here — there is no surface left to push through, so the camera
+           starts at depth and only the water has to arrive. */
+        dive.progress = 1;
+        setDivePhase("gallery");
+      } else {
+        setDivePhase("diving");
+        dive.durMs = reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.diveMs;
+      }
       wake();
     };
 
@@ -931,21 +950,22 @@ export function PuddleScene({
     const rippleTo = (itemIdx: number) => {
       const item = galleryItemsRef.current[itemIdx];
       if (!item) return;
+      const anchor = item.anchor ?? { x: 0.5, y: 0.5 };
       // the water reacts behind the blur, but colorlessly: browsing must not
       // paint the puddle. The memory's color goes to the artifact's own
       // background wash instead (see PuddleDiveGallery), and whatever the ring
       // stirs is handed back when the gallery closes.
       if (!reducedMotion) {
         sim.addDrop(
-          item.anchor.x,
-          item.anchor.y,
+          anchor.x,
+          anchor.y,
           1.4,
           tuning.dropStrength * DIVE_TUNING.arrowRippleStrength,
           null,
           0,
         );
       }
-      dive.focusTarget = [item.anchor.x, item.anchor.y]; // the camera drifts with it
+      dive.focusTarget = [anchor.x, anchor.y]; // the camera drifts with it
       wake();
     };
 
@@ -1011,11 +1031,28 @@ export function PuddleScene({
     };
   }, [anchors, texture]);
 
-  /* homescreen G shortcut / flag changes: open on the newest memory, close on toggle-off */
+  /* homescreen G shortcut / flag changes / a memory just saved: open on the
+     asked-for memory (newest by default), close on toggle-off */
   useEffect(() => {
-    if (galleryOpen && diveGalleryEnabled) diveControlsRef.current?.open(0);
-    else diveControlsRef.current?.close(); // no-op when already surfaced
-  }, [galleryOpen, diveGalleryEnabled]);
+    if (galleryOpen && diveGalleryEnabled) {
+      const idx = galleryFocusId
+        ? galleryItemsRef.current.findIndex((a) => a.id === galleryFocusId)
+        : -1;
+      diveControlsRef.current?.open(idx < 0 ? 0 : idx, galleryCarried);
+    } else {
+      diveControlsRef.current?.close(); // no-op when already surfaced
+    }
+  }, [galleryOpen, diveGalleryEnabled, galleryFocusId, galleryCarried]);
+
+  /* The water fades up behind a carried rim. One paint has to land on the
+     transparent canvas first, or there is nothing for the fade to start from. */
+  useEffect(() => {
+    if (!waterArriving) return;
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => setWaterArriving(false));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [waterArriving]);
 
   // WebGL2 / float targets unavailable — quietly fall back to the blob field.
   if (failed) {
@@ -1036,7 +1073,12 @@ export function PuddleScene({
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
-        style={{ display: "block", touchAction: "none" }}
+        style={{
+          display: "block",
+          touchAction: "none",
+          opacity: waterArriving ? 0 : 1,
+          transition: `opacity ${WATER_ARRIVE_MS}ms ease`,
+        }}
       />
 
       {/* ═══ MEMORY CAPTIONS — live with their ripple: focus in from particles,
@@ -1315,6 +1357,8 @@ export function PuddleScene({
             diveControlsRef.current?.ripple(next);
           }}
           onExit={() => diveControlsRef.current?.close()}
+          onToggleGrid={onToggleGrid}
+          arrival={galleryCarried ? "carried" : "resolve"}
         />
       )}
     </div>

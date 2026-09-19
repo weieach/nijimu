@@ -155,10 +155,10 @@ export function TranscriptPage() {
       setHighlightMode(true);
       setShowContinue(false);
     } else {
-      // Second continue: fade out and navigate to naming page
+      // Second continue: fade out and start building the object
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate("/record/name", {
+        navigate("/record/build", {
           state: {
             transcript: activeText,
             highlightedWords: Array.from(highlightedWords).map(i => words[i])

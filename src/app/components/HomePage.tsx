@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { SERIF } from "../lib/theme";
 import { BlobScene } from "./BlobScene";
 import { PuddleScene } from "./PuddleScene";
@@ -28,7 +28,10 @@ export function MemoryField({
   hideAnnotations = false,
   diveGalleryEnabled = false,
   galleryOpen = false,
+  galleryFocusId,
+  galleryCarried = false,
   onGalleryExit,
+  onToggleGrid,
 }: {
   shaderVariant?: ShaderVariant;
   /** The puddle hands back the uv point its descent ended on (see PuddleScene). */
@@ -37,7 +40,12 @@ export function MemoryField({
   /** Flagged 'dive' gallery variant — puddle texture only (see lib/puddle/dive.ts). */
   diveGalleryEnabled?: boolean;
   galleryOpen?: boolean;
+  /** Which memory the gallery opens on; the newest when unset. */
+  galleryFocusId?: string;
+  /** The naming step handed its carousel over — open at depth, don't dive. */
+  galleryCarried?: boolean;
   onGalleryExit?: () => void;
+  onToggleGrid?: () => void;
 }) {
   if (shaderVariant === "ripple2d" && isRipple2dSupported()) {
     return (
@@ -56,11 +64,20 @@ export function MemoryField({
         hideAnnotations={hideAnnotations}
         diveGalleryEnabled={diveGalleryEnabled}
         galleryOpen={galleryOpen}
+        galleryFocusId={galleryFocusId}
+        galleryCarried={galleryCarried}
         onGalleryExit={onGalleryExit}
+        onToggleGrid={onToggleGrid}
       />
     );
   }
-  return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
+  return (
+    <BlobScene
+      onNewMemory={onNewMemory}
+      hideAnnotations={hideAnnotations}
+      onToggleGrid={onToggleGrid}
+    />
+  );
 }
 
 /** The homescreen the user is on — also decides which recording screen opens. */
@@ -82,11 +99,34 @@ function writeVariant(next: ShaderVariant): void {
   }
 }
 
+/** What the create flow asks for when it lands here: the gallery already open,
+    on the memory just saved, continuing the carousel the naming step showed. */
+interface GalleryEntry {
+  galleryOpen?: boolean;
+  galleryFocusId?: string;
+  galleryCarried?: boolean;
+}
+
 export function HomePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [variant, setVariant] = useState<ShaderVariant>(readVariant);
+  const entryFromNav = () => {
+    const state = location.state as GalleryEntry | null;
+    return state?.galleryOpen ? state : null;
+  };
   /** G shortcut: open the memory artifact gallery; Esc restores the active test homescreen. */
-  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(() => !!entryFromNav());
+  /** Set only for the hand-off from the naming step; cleared once the gallery
+      closes, so a later G press dives the ordinary way. */
+  const [entry, setEntry] = useState<GalleryEntry | null>(entryFromNav);
+
+  useEffect(() => {
+    const state = location.state as GalleryEntry | null;
+    if (!state?.galleryOpen) return;
+    setGalleryOpen(true);
+    setEntry(state);
+  }, [location.state]);
   /** V shortcut: A/B flag — 'morph' (existing BlobScene gallery) vs 'dive' (through the puddle). */
   const [galleryVariant, setGalleryVariant] = useState<GalleryVariant>(readGalleryVariant);
   /** Transient confirmation after pressing V — otherwise the flag is invisible. */
@@ -115,6 +155,7 @@ export function HomePage() {
 
       const key = e.key.toLowerCase();
       if (key === "g") {
+        setEntry(null); // a keyed open always dives
         setGalleryOpen((open) => !open);
         return;
       }
@@ -123,6 +164,7 @@ export function HomePage() {
         // handler never reads a stale flag; state updaters stay pure.
         const next: GalleryVariant = readGalleryVariant() === "dive" ? "morph" : "dive";
         writeGalleryVariant(next);
+        setEntry(null);
         setGalleryOpen(false);
         setGalleryVariant(next);
         // quiet confirmation — and a nudge when the flag can't take effect here
@@ -140,6 +182,7 @@ export function HomePage() {
       else if (key === "z") next = "ripple2d";
       if (!next) return;
 
+      setEntry(null);
       setGalleryOpen(false);
       writeVariant(next);
       setVariant(next);
@@ -158,12 +201,20 @@ export function HomePage() {
   // Morph gallery (the existing A side): swaps the whole scene for BlobScene.
   // The dive gallery instead stays inside PuddleScene so the sim's accumulated
   // dye/height state survives the descent and the return.
+  const openGrid = () => navigate("/memory/scroll");
+
+  const closeGallery = () => {
+    setEntry(null);
+    setGalleryOpen(false);
+  };
+
   const scene =
     galleryOpen && !diveCapable ? (
       <BlobScene
         openGallery
         onNewMemory={() => navigate("/record/start")}
-        onGalleryExit={() => setGalleryOpen(false)}
+        onGalleryExit={closeGallery}
+        onToggleGrid={openGrid}
       />
     ) : (
       <MemoryField
@@ -172,7 +223,10 @@ export function HomePage() {
         onNewMemory={(focus) => navigate("/record/start", { state: focus ? { focus } : undefined })}
         diveGalleryEnabled={diveCapable}
         galleryOpen={galleryOpen && diveCapable}
-        onGalleryExit={() => setGalleryOpen(false)}
+        galleryFocusId={entry?.galleryFocusId}
+        galleryCarried={!!entry?.galleryCarried}
+        onGalleryExit={closeGallery}
+        onToggleGrid={openGrid}
       />
     );
 

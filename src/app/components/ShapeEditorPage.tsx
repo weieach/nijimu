@@ -31,7 +31,7 @@ export function ShapeEditorPage() {
   }, []);
 
   const handleContinue = () => {
-    navigate("/record/connect", {
+    navigate("/record/name", {
       state: {
         ...location.state,
         shape: { evolve, bumpAmount, fluidity },

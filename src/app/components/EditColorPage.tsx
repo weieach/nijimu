@@ -55,7 +55,7 @@ export function EditColorPage() {
   };
 
   if (!memory) {
-    navigate("/profile");
+    navigate("/memory/scroll");
     return null;
   }
 

@@ -229,7 +229,7 @@ export function RecordingProcessPage() {
         >
           <p
             style={{
-              fontFamily: "'Playfair Display', Georgia, serif",
+              fontFamily: "Rowan, Georgia, serif",
               fontStyle: "italic",
               color: "#515151",
               fontSize: 18,

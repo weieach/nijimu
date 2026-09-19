@@ -113,7 +113,7 @@ export function ShapeTexturePage() {
   });
 
   const handleContinue = () => {
-    navigate("/record/connect", {
+    navigate("/record/name", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         shape: {

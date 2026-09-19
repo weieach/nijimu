@@ -106,6 +106,10 @@ interface ModelProps {
       renders the same image. For artifacts parked on screen — without it a
       canvas that only renders now and then animates in visible jerks. */
   still?: boolean;
+  /** Start the pose clock at the page's own elapsed time instead of zero, so
+      the same artifact mounted on a second screen carries on turning and
+      drifting from where the first one left it rather than snapping to rest. */
+  sharedClock?: boolean;
   /**
    * Manual morph weight: 0 = sphere rest pose, 1 = form rest pose.
    * Ignored while `introMorph` is animating internally.
@@ -255,6 +259,7 @@ function Model({
   fitTargetSize = 2.5,
   oscillatingEvolve = false,
   still = false,
+  sharedClock = false,
   morphProgress = 1,
   introMorph = false,
   introMorphDuration = 5.5,
@@ -294,7 +299,9 @@ function Model({
   );
   const { scene: threeScene } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
-  const clock = useRef(0);
+  // Seeded from the page clock when the pose has to continue across a route
+  // change; the artifact then starts mid-motion rather than at rest.
+  const clock = useRef(sharedClock ? performance.now() / 1000 : 0);
   const originalPositions = useRef<Float32Array | null>(null);
   const spherePositions = useRef<Float32Array | null>(null);
   const originalNormals = useRef<Float32Array | null>(null);
@@ -538,8 +545,9 @@ function Model({
 
     // Float, auto-rotate, subtle tilt (tilt follows float — still when amplitude is 0)
     groupRef.current.position.y = Math.sin(t * 1) * floatAmplitude;
-    if (autoRotate && !stillRef.current)
-      groupRef.current.rotation.y += delta * 0.16;
+    // read off the clock rather than accumulated, so a seeded clock hands the
+    // turn over mid-rotation (see `sharedClock`)
+    if (autoRotate && !stillRef.current) groupRef.current.rotation.y = t * 0.16;
     groupRef.current.rotation.z =
       floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
 
@@ -767,6 +775,10 @@ interface SceneViewerProps {
       a canvas that draws intermittently would otherwise show its motion in
       lurches. */
   still?: boolean;
+  /** Carry the pose across a route change: the clock starts at the page's own
+      elapsed time, so an artifact remounted on the next screen keeps turning
+      from where it was instead of snapping back to rest. */
+  sharedClock?: boolean;
   /** Legacy: colour passed as raw hex for the glass tint + rect area lights */
   rectAreaLightColors?: {
     color1?: string;
@@ -811,6 +823,7 @@ export function SceneViewer({
   frameMargin,
   frameloop = "always",
   still = false,
+  sharedClock = false,
   rectAreaLightColors,
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
@@ -829,8 +842,13 @@ export function SceneViewer({
   const orbitMax = constrainedViewport ? 12 : 12;
 
   const [autoRotateInternal, setAutoRotateInternal] = useState(true);
+  /* Once the artifact has been turned by hand it belongs to the hand: the idle
+     spin stops for good rather than dragging the view back out from under it.
+     This is tracked separately from `autoRotate` because most callers pass that
+     in as a prop, and a state setter can't talk them out of it. */
+  const [grabbed, setGrabbed] = useState(false);
   const autoRotate =
-    autoRotateProp !== undefined ? autoRotateProp : autoRotateInternal;
+    (autoRotateProp !== undefined ? autoRotateProp : autoRotateInternal) && !grabbed;
   const setAutoRotate = onAutoRotateChange ?? setAutoRotateInternal;
 
   const [isDragging, setIsDragging] = useState(false);
@@ -903,6 +921,13 @@ export function SceneViewer({
     zIndex: 1,
     cursor: isDragging ? "grabbing" : "grab",
     ...style,
+    /* Nothing is shown until the camera has been fitted to the form. The first
+       frames are drawn at the default distance, and since the fit only arrives
+       from the model's own effect, letting them paint pops the artifact a step
+       larger or smaller. Parked (demand) canvases show it worst: they redraw on
+       a schedule that straddles the fit, so the jump lands well into whatever
+       entrance was playing. */
+    visibility: fitCam ? undefined : "hidden",
   };
 
   // Don't mount the Canvas until the parent signals ready (avoids iframe conflicts)
@@ -977,6 +1002,7 @@ export function SceneViewer({
                   evolve={safeEvolve}
                   oscillatingEvolve={shapeBuildOscillatingEvolve}
                   still={still}
+                  sharedClock={sharedClock}
                   bumpAmount={safeBumpAmount}
                   bumpSpike={safeBumpSpike}
                   density={safeDensity}
@@ -1003,6 +1029,7 @@ export function SceneViewer({
               evolve={safeEvolve}
               oscillatingEvolve={shapeBuildOscillatingEvolve}
               still={still}
+              sharedClock={sharedClock}
               bumpAmount={safeBumpAmount}
               bumpSpike={safeBumpSpike}
               density={safeDensity}
@@ -1023,7 +1050,10 @@ export function SceneViewer({
           minDistance={orbitMin}
           maxDistance={orbitMax}
           autoRotate={false}
-          onStart={() => setAutoRotate(false)}
+          onStart={() => {
+            setGrabbed(true);
+            setAutoRotate(false);
+          }}
         />
       </Canvas>
 

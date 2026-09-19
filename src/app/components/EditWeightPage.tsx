@@ -68,7 +68,7 @@ export function EditWeightPage() {
   };
 
   if (!memory) {
-    navigate("/profile");
+    navigate("/memory/scroll");
     return null;
   }
 
