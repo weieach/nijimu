@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { BlobScene } from "./BlobScene";
 import { MemoryCarouselPage } from "./MemoryCarouselPage";
-import { INK_ENTRY, type InkArrival } from "../lib/landingTransition";
+import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
+import { buildArchive } from "../lib/archive";
 import { CAROUSEL_PATH } from "../lib/routes";
 
 /**
@@ -14,13 +15,14 @@ export function LandingPage() {
   const { pathname } = useLocation();
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [arrival, setArrival] = useState<InkArrival | null>(null);
+  const [entryFocus, setEntryFocus] = useState<{ id: string; slot: number } | null>(null);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [seenPath, setSeenPath] = useState(pathname);
   const galleryRef = useRef<HTMLDivElement>(null);
   const inGallery = pathname === CAROUSEL_PATH;
   if (seenPath !== pathname) {
     setSeenPath(pathname);
-    if (!inGallery) { setStartedAt(null); setArrival(null); }
+    if (!inGallery) { setStartedAt(null); setArrival(null); setEntryFocus(null); }
   }
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -45,7 +47,7 @@ export function LandingPage() {
     raf = requestAnimationFrame(tick);
     const cancel = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      cancelAnimationFrame(raf); setStartedAt(null); setArrival(null);
+      cancelAnimationFrame(raf); setStartedAt(null); setArrival(null); setEntryFocus(null);
     };
     window.addEventListener("keydown", cancel);
     return () => { cancelAnimationFrame(raf); window.removeEventListener("keydown", cancel); };
@@ -53,6 +55,9 @@ export function LandingPage() {
   useEffect(() => { if (inGallery && arrival) galleryRef.current?.focus(); }, [inGallery]);
   const enter = () => {
     if (startedAt !== null) return;
+    const archive = buildArchive();
+    const slot = pickLandingGalleryIndex(archive.length);
+    setEntryFocus({ id: archive[slot]?.id ?? "", slot });
     setArrival({ elapsed: 0, reducedMotion });
     setStartedAt(performance.now());
   };
@@ -61,13 +66,14 @@ export function LandingPage() {
       {(inGallery || arrival) && (
         <div ref={galleryRef} tabIndex={-1} aria-label="memory gallery" inert={!inGallery}
           style={{ position: "absolute", inset: 0, zIndex: 0, outline: "none" }}>
-          <MemoryCarouselPage inkArrival={arrival ?? undefined} />
+          <MemoryCarouselPage inkArrival={arrival ?? undefined} galleryFocusId={entryFocus?.id} />
         </div>
       )}
       {!inGallery && (
         <div style={{ position: "absolute", inset: 0, zIndex: 40 }}>
           <BlobScene classicChrome ctaLabel="Enter" showPlus={false}
-            onNewMemory={enter} landingArrival={arrival} />
+            onNewMemory={enter} landingArrival={arrival}
+            landingFocusSlot={entryFocus?.slot ?? 0} />
         </div>
       )}
       <span className="sr-only" role="status">{arrival && !inGallery ? "opening memories" : ""}</span>

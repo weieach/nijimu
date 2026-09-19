@@ -4,10 +4,10 @@ import { SceneViewer } from "./SceneViewer";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
-import { SERIF, SERIF_CJK } from "../lib/theme";
+import { SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
-import { inkGrowth, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
+import { inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
 
 /*
  * PuddleDiveGallery — the gallery presentation of the "dive" variant.
@@ -44,9 +44,9 @@ const ARC_DOWN_VH = 0.08;
 const ARTIFACT_VW = 0.3;
 const ARTIFACT_MIN_PX = 240;
 const ARTIFACT_MAX_PX = 420;
-/** The focused artifact hangs this much below its place on the rim (fraction
-    of viewport height). Only the apex slot is moved — the rim itself, and
-    every neighbour on it, stays exactly where it was. */
+/** Whole-rim sit, as a fraction of viewport height. Applied to every seat
+    equally so a step around the rim never drops one memory relative to the
+    others. */
 const ARC_FOCUS_DROP_VH = 0.04;
 /** How long a memory takes to travel one step around the rim. */
 const ARC_TRAVEL_MS = 900;
@@ -65,6 +65,9 @@ const NEIGHBOR_OUT_STAGGER_MS = 80;
 /** Caption block centre-ish, as a fraction of viewport height from the top —
     scales with the window instead of sitting a fixed px above the timescale. */
 const CAPTION_TOP_VH = 0.62;
+/** Extra downward sit of the title + year. Shared by the carousel and the
+    naming step — both draw this caption from the same seat. */
+export const CAPTION_DOWN_VH = 0.07;
 /** Height of the timescale above the bottom of the viewport. */
 const TS_BOTTOM_PX = 78;
 /** Outermost artifact centre lands this many times TS_BOTTOM_PX from the
@@ -79,7 +82,14 @@ const SLOT_BLUR_PX = [0, 2, 5, 9];
 
 function slotDepth(offset: number) {
   const d = Math.min(Math.abs(offset), SLOT_SCALE.length - 1);
-  return { scale: SLOT_SCALE[d], opacity: SLOT_OPACITY[d], blurPx: SLOT_BLUR_PX[d] };
+  const i = Math.floor(d);
+  const f = d - i;
+  const j = Math.min(i + 1, SLOT_SCALE.length - 1);
+  return {
+    scale: SLOT_SCALE[i] + (SLOT_SCALE[j] - SLOT_SCALE[i]) * f,
+    opacity: SLOT_OPACITY[i] + (SLOT_OPACITY[j] - SLOT_OPACITY[i]) * f,
+    blurPx: SLOT_BLUR_PX[i] + (SLOT_BLUR_PX[j] - SLOT_BLUR_PX[i]) * f,
+  };
 }
 
 interface DomeGeometry {
@@ -119,7 +129,7 @@ export function inkGallerySeat(w: number, h: number, offset: number) {
   const geo = domeGeometry(w, h);
   const at = domePoint(geo, geo.r, Math.min(offset, 10) * ARC_STEP_DEG);
   const depth = slotDepth(offset);
-  return { x: at.x, y: at.y + (offset === 0 ? ARC_FOCUS_DROP_VH * h : 0),
+  return { x: at.x, y: at.y + ARC_FOCUS_DROP_VH * h,
     size: geo.size * depth.scale, opacity: depth.opacity };
 }
 
@@ -185,6 +195,7 @@ export const CAPTION_TITLE_STYLE: CSSProperties = {
   fontStyle: "italic",
   fontWeight: 400,
   fontSize: "clamp(13px, 1.05vw, 16px)",
+  letterSpacing: SERIF_ITALIC_TRACKING,
   lineHeight: 1.35,
   textAlign: "center",
 };
@@ -262,12 +273,52 @@ export function PuddleDiveGallery({
   /** A mounted ink field hands its six-pixel pointers to these same artifacts. */
   inkArrival?: InkArrival;
 }) {
-  const item = items[activeIdx];
   const hasOlder = activeIdx > 0;
   const hasNewer = activeIdx < items.length - 1;
   const viewport = useViewport();
   const geo = domeGeometry(viewport.w, viewport.h);
   const growth = inkArrival ? inkGrowth(inkArrival) : 1;
+  const washIn = inkArrival ? inkWash(inkArrival) : 1;
+
+  /* The rim rides a float, not a CSS lerp of x/y. A straight-line transition
+     between seats cuts the chord under the arc — the dip you see when several
+     memories move at once. */
+  const [rimIdx, setRimIdx] = useState(activeIdx);
+  const rimIdxRef = useRef(activeIdx);
+  const activeIdxRef = useRef(activeIdx);
+  activeIdxRef.current = activeIdx;
+  useEffect(() => {
+    if (reducedMotion) {
+      rimIdxRef.current = activeIdx;
+      setRimIdx(activeIdx);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const target = activeIdxRef.current;
+      const next = rimIdxRef.current + (target - rimIdxRef.current) * (1 - Math.exp(-5.2 * dt));
+      if (Math.abs(target - next) < 0.001) {
+        rimIdxRef.current = target;
+        setRimIdx(target);
+        return;
+      }
+      rimIdxRef.current = next;
+      setRimIdx(next);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [activeIdx, reducedMotion]);
+
+  const focusIdx = Math.round(rimIdx);
+  const item = items[focusIdx] ?? items[activeIdx];
+  const captionItem = items[activeIdx] ?? item;
+  const rimSettled = Math.abs(rimIdx - activeIdx) < 0.04;
+  const rimSettledRef = useRef(rimSettled);
+  rimSettledRef.current = rimSettled;
 
   /* arrows — keyboard */
   useEffect(() => {
@@ -301,11 +352,15 @@ export function PuddleDiveGallery({
       leftover += primary;
       if (Math.abs(leftover) < 72) return;
       const dir = leftover > 0 ? 1 : -1;
-      leftover = 0;
-      lockedUntil = now + (reducedMotion ? 180 : 480);
-      if (dir < 0 && !hasOlder) leave();
-      else if (dir > 0 && !hasNewer) leave();
-      else onNavigate(dir);
+      leftover -= dir * 72;
+      lockedUntil = now + (reducedMotion ? 80 : 140);
+      if (dir < 0 && !hasOlder) {
+        if (rimSettledRef.current) leave();
+        leftover = 0;
+      } else if (dir > 0 && !hasNewer) {
+        if (rimSettledRef.current) leave();
+        leftover = 0;
+      } else onNavigate(dir);
     };
     window.addEventListener("wheel", handler, { passive: false });
     return () => window.removeEventListener("wheel", handler);
@@ -382,6 +437,22 @@ export function PuddleDiveGallery({
     return () => cancelAnimationFrame(raf);
   }, [washSettled]);
 
+  /* After the opening rise, a step around the rim must not replay it — a newly
+     mounted neighbour would start 30px low and pop up. */
+  const [rimReady, setRimReady] = useState(false);
+  useEffect(() => {
+    if (phase !== "gallery") {
+      setRimReady(false);
+      return;
+    }
+    if (inkArrival && growth < 1) return;
+    const t = setTimeout(
+      () => setRimReady(true),
+      reducedMotion ? 0 : DIVE_TUNING.artifactResolveMs,
+    );
+    return () => clearTimeout(t);
+  }, [phase, reducedMotion, !!inkArrival, growth < 1]);
+
   if (!item) return null;
 
   /* Reveal choreography: an artifact begins resolving the moment it exists on
@@ -399,9 +470,11 @@ export function PuddleDiveGallery({
       ? "none"
       : phase === "surfacing"
         ? `${reducedMotion ? "diveDissolveReduced" : "diveDissolve"} ${dissolveMs}ms ease forwards`
-        : `${
-            reducedMotion ? "diveResolveReduced" : "diveResolve"
-          } ${Math.round(resolveMs)}ms cubic-bezier(0.22, 1, 0.36, 1) backwards`;
+        : rimReady
+          ? "none"
+          : `${
+              reducedMotion ? "diveResolveReduced" : "diveResolve"
+            } ${Math.round(resolveMs)}ms cubic-bezier(0.22, 1, 0.36, 1) backwards`;
 
   /* Chrome the carried arrival brings with it — the foot ruler, the arrows, the
      view switch. These really are new, so they are the ones that fade in. */
@@ -432,11 +505,13 @@ export function PuddleDiveGallery({
   /* The rim, apex outward. Only the focused memory exists while the dolly is
      still running; everything on the dome leaves together when it reverses. */
   const slots: { offset: number; item: DiveGalleryItem }[] = [];
-  for (let k = -ARC_NEIGHBOURS; k <= ARC_NEIGHBOURS; k++) {
-    if (phase === "diving" && k !== 0) continue;
-    if (!neighborsMounted && k !== 0) continue;
-    const slotItem = items[activeIdx + k];
-    if (slotItem) slots.push({ offset: k, item: slotItem });
+  for (let i = 0; i < items.length; i++) {
+    const offset = i - rimIdx;
+    if (phase === "diving" && Math.abs(offset) > 0.01) continue;
+    if (!neighborsMounted && Math.abs(offset) > 0.01) continue;
+    if (Math.abs(offset) > ARC_NEIGHBOURS + 0.05) continue;
+    const slotItem = items[i];
+    if (slotItem) slots.push({ offset, item: slotItem });
   }
 
   /** The rim is letting go: still on screen, but on its way back down. */
@@ -506,18 +581,22 @@ export function PuddleDiveGallery({
           borderRadius: "50%",
           backgroundColor: washColor(palette.color),
           opacity:
-            (chromeVisible || !waterEffect)
-              ? waterEffect && washSettled
-                ? DIVE_TUNING.artifactWashOpacity
-                : Math.min(1, DIVE_TUNING.artifactWashOpacity / 0.62)
-              : 0,
+            inkArrival
+              ? DIVE_TUNING.artifactWashOpacity * washIn
+              : (chromeVisible || !waterEffect)
+                ? waterEffect && washSettled
+                  ? DIVE_TUNING.artifactWashOpacity
+                  : Math.min(1, DIVE_TUNING.artifactWashOpacity / 0.62)
+                : 0,
           maskImage:
             "radial-gradient(closest-side, #000 10%, rgba(0,0,0,0.5) 50%, transparent 82%)",
           WebkitMaskImage:
             "radial-gradient(closest-side, #000 10%, rgba(0,0,0,0.5) 50%, transparent 82%)",
-          transition: waterEffect
-            ? `background-color ${DIVE_TUNING.artifactWashFadeMs}ms ease, opacity ${washFadeMs}ms ease`
-            : "none",
+          transition: inkArrival
+            ? "none"
+            : waterEffect
+              ? `background-color ${DIVE_TUNING.artifactWashFadeMs}ms ease, opacity ${washFadeMs}ms ease`
+              : "none",
           willChange: waterEffect ? "background-color, opacity" : undefined,
         }}
       />
@@ -570,10 +649,10 @@ export function PuddleDiveGallery({
              instead of replacing them: the whole dome swings. ═══ */}
       <div className="absolute inset-0">
         {slots.map(({ offset, item: slotItem }) => {
-          const focused = offset === 0;
+          const focused = Math.abs(offset) < 0.5;
           const depth = slotDepth(offset);
           const at = domePoint(geo, geo.r, offset * ARC_STEP_DEG);
-          const dropY = focused ? ARC_FOCUS_DROP_VH * viewport.h : 0;
+          const dropY = ARC_FOCUS_DROP_VH * viewport.h;
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
           /* handed over rather than arriving: it is already exactly here */
@@ -588,7 +667,7 @@ export function PuddleDiveGallery({
               data-memory-id={slotItem.id}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!focused && chromeVisible) onNavigate(offset);
+                if (!focused && chromeVisible) onNavigate(Math.round(offset));
               }}
               style={{
                 position: "absolute",
@@ -596,11 +675,10 @@ export function PuddleDiveGallery({
                 top: 0,
                 width: geo.size,
                 height: geo.size,
-                transform: `translate(-50%, -50%) translate(${at.x.toFixed(1)}px, ${(
+                transform: `translate(-50%, -50%) translate(${at.x.toFixed(2)}px, ${(
                   at.y + dropY
-                ).toFixed(1)}px) scale(${depth.scale})`,
-                transition: `transform ${travelMs}ms ${travelEase}`,
-                zIndex: 10 - Math.abs(offset),
+                ).toFixed(2)}px) scale(${depth.scale})`,
+                zIndex: 10 - Math.round(Math.abs(offset)),
                 cursor: focused ? "default" : "pointer",
                 pointerEvents: chromeVisible ? "auto" : "none",
               }}
@@ -627,9 +705,9 @@ export function PuddleDiveGallery({
                   willChange: "filter, opacity, transform",
                 }}
               >
-                {/* depth: how far into the water this slot has fallen, plus
-                    the focused artifact's slow buoyant bob — nothing rests
-                    perfectly still underwater. The depth blur belongs to the
+                {/* depth: how far into the water this slot has fallen. The
+                    bob lives on the model so a step never cuts a CSS float
+                    short and drops the box. The depth blur belongs to the
                     dome, not the water, so both screens carry it. */}
                 <div
                   style={{
@@ -643,11 +721,7 @@ export function PuddleDiveGallery({
                       ]
                         .filter(Boolean)
                         .join(" ") || undefined,
-                    transition: `opacity ${travelMs}ms ${travelEase}, filter ${travelMs}ms ${travelEase}`,
-                    animation:
-                      waterEffect && focused && !reducedMotion && phase === "gallery" && !inkArrival
-                        ? `diveFloat 7s ease-in-out ${Math.round(resolveMs)}ms infinite alternate`
-                        : undefined,
+                    transition: "none",
                   }}
                 >
                   <SceneViewer
@@ -657,7 +731,7 @@ export function PuddleDiveGallery({
                     evolve={slotItem.shape.evolve}
                     bumpAmount={slotItem.shape.bumpAmount}
                     autoRotate={focused}
-                    floatAmplitude={focused ? 0.08 : 0}
+                    floatAmplitude={0.08}
                     ready
                     // tight framing — the artifact is the screen here, so it
                     // fills its box instead of floating in the middle of it
@@ -701,10 +775,10 @@ export function PuddleDiveGallery({
       {showTimeScale && (
         <TimeScale
           items={items}
-          activeIdx={activeIdx}
+          activeIdx={rimIdx}
           viewport={viewport}
           visible={chromeVisible}
-          travelMs={travelMs}
+          travelMs={0}
           travelEase={travelEase}
           enterAnimation={carriedChrome}
         />
@@ -714,7 +788,7 @@ export function PuddleDiveGallery({
       <div
         className="absolute left-0 right-0 text-center"
         style={{
-          top: CAPTION_TOP_VH * viewport.h,
+          top: (CAPTION_TOP_VH + CAPTION_DOWN_VH) * viewport.h,
           padding: "0 clamp(24px, 6vw, 80px)",
           fontFamily: SERIF,
           opacity: chromeVisible ? 1 : 0,
@@ -724,18 +798,18 @@ export function PuddleDiveGallery({
         }}
       >
         <div
-          key={item.id}
+          key={captionItem.id}
           style={{
-            /* a carried caption reads the same words the naming step was
-               already showing, so fading them would only look like a blink */
+            /* the opening fade waits for the memory; once the rim is in
+               motion the words stay put and simply change with the step */
             animation:
-              caption || reducedMotion || carriedIds.has(item.id)
+              caption || reducedMotion || rimReady || carriedIds.has(captionItem.id)
                 ? undefined
                 : `diveCaptionIn ${travelMs}ms ease`,
             pointerEvents: caption ? "auto" : "none",
           }}
         >
-          {caption ?? <StaticCaption title={item.event} year={item.year} />}
+          {caption ?? <StaticCaption title={captionItem.event} year={captionItem.year} />}
         </div>
       </div>
 
@@ -1017,6 +1091,13 @@ function TimeScale({
   const inner = Math.max(1, viewport.w - pad * 2);
   const y = viewport.h - TS_BOTTOM_PX;
   const x = (t: number) => pad + t * inner;
+  const markAt = (() => {
+    const a = Math.max(0, Math.min(positions.length - 1, activeIdx));
+    const i = Math.floor(a);
+    const t0 = positions[i] ?? 0;
+    const t1 = positions[Math.min(i + 1, positions.length - 1)] ?? t0;
+    return t0 + (t1 - t0) * (a - i);
+  })();
 
   return (
     <svg
@@ -1054,9 +1135,9 @@ function TimeScale({
         <line
           key={`m-${items[i].id}`}
           x1={x(t)}
-          y1={y}
+          y1={y - TS_MEMORY_TICK / 2}
           x2={x(t)}
-          y2={y + TS_MEMORY_TICK}
+          y2={y + TS_MEMORY_TICK / 2}
           stroke="#4a4a4a"
           strokeOpacity={0.28}
           strokeWidth={1}
@@ -1068,9 +1149,9 @@ function TimeScale({
         <g key={year}>
           <line
             x1={x(t)}
-            y1={y}
+            y1={y - TS_YEAR_TICK / 2}
             x2={x(t)}
-            y2={y + TS_YEAR_TICK}
+            y2={y + TS_YEAR_TICK / 2}
             stroke="#4a4a4a"
             strokeOpacity={0.38}
             strokeWidth={1}
@@ -1096,12 +1177,17 @@ function TimeScale({
       {/* where you are */}
       <g
         style={{
-          transform: `translate(${x(positions[activeIdx] ?? 0).toFixed(1)}px, ${y}px)`,
-          transition: `transform ${travelMs}ms ${travelEase}`,
+          transform: `translate(${x(markAt).toFixed(2)}px, ${y}px)`,
+          transition: travelMs ? `transform ${travelMs}ms ${travelEase}` : "none",
         }}
       >
-        <circle r={5.5} fill="#4a4a4a" fillOpacity={0.1} />
-        <circle r={2.4} fill="#4a4a4a" fillOpacity={0.75} />
+        <circle
+          r={TS_YEAR_TICK / 2}
+          fill="#f7f7f8"
+          stroke="#4a4a4a"
+          strokeWidth={0.3}
+          style={{ filter: "drop-shadow(0 1px 11px rgba(45, 45, 45, 0.38))" }}
+        />
       </g>
     </svg>
   );

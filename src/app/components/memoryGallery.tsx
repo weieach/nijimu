@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
 import { LIFE_EVENTS } from "../data/memoryData";
-import { SERIF, SANS } from "../lib/theme";
+import { SERIF, SERIF_ITALIC_TRACKING, SANS } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 import { loadMemories } from "../lib/memoryStore";
 import addEllipse from "../../assets/memory-grid/add-ellipse.svg";
@@ -175,6 +175,7 @@ export const galleryTitleStyle = {
   fontFamily: SERIF,
   fontStyle: "italic",
   fontSize: 14,
+  letterSpacing: SERIF_ITALIC_TRACKING,
   color: "#000",
   opacity: 0.7,
   whiteSpace: "nowrap",

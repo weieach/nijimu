@@ -13,7 +13,7 @@ import { BlobScene } from "./BlobScene";
 import { PageHeader } from "./PageHeader";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PuddleDiveGallery, type DiveGalleryItem, type DivePhase } from "./PuddleDiveGallery";
-import { inkGrowth } from "../lib/landingTransition";
+import { INK_ENTRY, inkGrowth } from "../lib/landingTransition";
 import { DiveGalleryHost, draftAsSaved, type NamingSession } from "./NamingRim";
 import { NameMemoryPage } from "./NameMemoryPage";
 import { buildArchive } from "../lib/archive";
@@ -1179,7 +1179,8 @@ export function PuddleScene({
   const chromeHidden = divePhase !== "idle" || descending;
   /** Wordmark stays once the dive gallery settles; it only leaves during transit. */
   const wordmarkHidden =
-    descending || divePhase === "diving" || divePhase === "surfacing" || (!!inkArrival && inkGrowth(inkArrival) < 1);
+    descending || divePhase === "diving" || divePhase === "surfacing"
+    || (!!inkArrival && inkArrival.elapsed < (inkArrival.reducedMotion ? INK_ENTRY.reducedEnd : INK_ENTRY.end));
 
   return (
     <div
@@ -1409,7 +1410,7 @@ export function PuddleScene({
           className="pointer-events-none"
           style={{
             opacity: wordmarkHidden ? 0 : 1,
-            transition: "opacity 0.6s ease",
+            transition: inkArrival ? "none" : "opacity 0.6s ease",
             zIndex: 31,
           }}
         >

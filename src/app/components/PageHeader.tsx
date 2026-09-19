@@ -3,6 +3,14 @@ import { useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
 import { SERIF_CJK } from "../lib/theme";
 
+/** Target seat the landing wordmark flies to. Keep the mark in sync. */
+export const PAGE_HEADER_MARK = {
+  top: 30,
+  fontSize: 12,
+  gap: 12,
+  letterSpacing: "0.16px",
+} as const;
+
 interface PageHeaderProps {
   /** absolute = pinned top-center (full-bleed pages); block = in-flow with bottom margin (light pages) */
   layout?: "absolute" | "block";
@@ -28,7 +36,7 @@ export function PageHeader({
           position: "absolute",
           left: "50%",
           transform: "translateX(-50%)",
-          top: 30,
+          top: PAGE_HEADER_MARK.top,
           margin: 0,
           zIndex: 100,
         }
@@ -43,8 +51,8 @@ export function PageHeader({
   const markStyle: CSSProperties = {
     fontFamily: SERIF_CJK,
     fontStyle: "normal",
-    fontSize: 12,
-    letterSpacing: "0.16px",
+    fontSize: PAGE_HEADER_MARK.fontSize,
+    letterSpacing: PAGE_HEADER_MARK.letterSpacing,
     lineHeight: 1.5,
     color: tone === "dark" ? "#d7d6d6" : CHROME_GRAY,
     whiteSpace: "nowrap",
@@ -52,7 +60,7 @@ export function PageHeader({
     textTransform: "lowercase",
     display: "flex",
     alignItems: "center",
-    gap: 12,
+    gap: PAGE_HEADER_MARK.gap,
     ...layoutStyle,
     ...style,
   };

@@ -4,9 +4,9 @@ import NewMomoryIdle from "../../imports/NewMomoryIdle";
 import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
-import { PageHeader } from "./PageHeader";
+import { PageHeader, PAGE_HEADER_MARK } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
-import { SANS, SERIF, SERIF_CJK } from "../lib/theme";
+import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, inkRingPoint, smoothProgress, type InkArrival } from "../lib/landingTransition";
 import { inkGallerySeat } from "./PuddleDiveGallery";
@@ -20,7 +20,9 @@ const HEADER_DESC_SIZE = 12;
 /** Blob year + title — restored clamp, a step above the header description. */
 const BLOB_CAPTION_SIZE =
   "clamp(13px, calc(13px + 2 * ((100vw - 390px) / (1024 - 390))), 15px)";
-const BLOB_DOT = 6;
+const BLOB_DOT = 8;
+/** Radiating ring — kept as a painted width so scale() cannot fatten it. */
+const BLOB_RING_STROKE = 0.6;
 
 
 /* ───────── types ───────── */
@@ -203,6 +205,19 @@ function useScaleFactor(): number {
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
+function parseHex(hex: string) {
+  const n = hex.replace("#", "");
+  return {
+    r: parseInt(n.slice(0, 2), 16),
+    g: parseInt(n.slice(2, 4), 16),
+    b: parseInt(n.slice(4, 6), 16),
+  };
+}
+function lerpHex(a: string, b: string, t: number) {
+  const pa = parseHex(a);
+  const pb = parseHex(b);
+  return `rgb(${Math.round(lerp(pa.r, pb.r, t))}, ${Math.round(lerp(pa.g, pb.g, t))}, ${Math.round(lerp(pa.b, pb.b, t))})`;
+}
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
@@ -224,21 +239,14 @@ function hexLuma(hex: string): number {
 
 const PAPER_LUMA = hexLuma(PAPER);
 
-type WipeDir = "left" | "right" | "top" | "bottom";
-
 interface CaptionFx {
+  /** How far the caption sits in the header keep-out — blur only. */
   progress: number;
-  dir: WipeDir;
+  /** Label-on-label coverage — blur only; the top of the stack stays sharp. */
+  overlap: number;
   onDark: boolean;
+  dotOnDark: boolean;
   stack: number;
-}
-
-function wipeInset(dir: WipeDir, p: number): string {
-  const t = `${(clamp(p, 0, 1) * 100).toFixed(1)}%`;
-  if (dir === "right") return `inset(0 ${t} 0 0)`;
-  if (dir === "left") return `inset(0 0 0 ${t})`;
-  if (dir === "top") return `inset(${t} 0 0 0)`;
-  return `inset(0 0 ${t} 0)`;
 }
 
 /* ──────── annotation ──────── */
@@ -274,6 +282,7 @@ export function BlobScene({
   ctaLabel = "New Memory",
   showPlus = true,
   landingArrival = null,
+  landingFocusSlot = 0,
 }: {
   onNewMemory?: () => void;
   hideAnnotations?: boolean;
@@ -291,6 +300,8 @@ export function BlobScene({
   /** Only the landing's Enter action uses this clock; the original field is
       unchanged until that action begins. */
   landingArrival?: InkArrival | null;
+  /** Chronological seat the ink unfolds onto — a middle memory, not an end. */
+  landingFocusSlot?: number;
 }) {
   // Curated life events plus whatever the user has saved, so their memories
   // blend into the same field.
@@ -341,6 +352,8 @@ export function BlobScene({
     galleryOnly ? (gallerySortOrder[0] ?? 0) : 0,
   );
   const [annotations, setAnnotations] = useState<AnnPos[]>([]);
+  const annotationsRef = useRef<AnnPos[]>([]);
+  annotationsRef.current = annotations;
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [panState, setPanState] = useState({ x: 0, y: 0 });
   const headerCopyRef = useRef<HTMLDivElement>(null);
@@ -348,7 +361,6 @@ export function BlobScene({
   const [headerOnDark, setHeaderOnDark] = useState(false);
   const captionEls = useRef<(HTMLDivElement | null)[]>([]);
   const captionFxRef = useRef<CaptionFx[]>([]);
-  const captionPosRef = useRef<{ x: number; y: number }[]>([]);
   const [captionFx, setCaptionFx] = useState<CaptionFx[]>([]);
   const entryRef = useRef(landingArrival);
   entryRef.current = landingArrival;
@@ -359,9 +371,57 @@ export function BlobScene({
   }[] | null>(null);
   const entryTime = landingArrival?.elapsed ?? 0;
   const entryReduced = landingArrival?.reducedMotion ?? false;
-  const entryHeader = landingArrival ? 1 - smoothProgress(entryTime, 0, entryReduced ? 180 : INK_ENTRY.headerEnd) : 1;
-  const entryLabels = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 180 : INK_ENTRY.headerEnd,
+  const entryDesc = landingArrival ? 1 - smoothProgress(entryTime, 0, entryReduced ? 80 : INK_ENTRY.descEnd) : 1;
+  const entryHeader = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 80 : INK_ENTRY.descEnd,
+    entryReduced ? 160 : INK_ENTRY.headerEnd) : 1;
+  const markFlightStart = entryReduced ? 160 : INK_ENTRY.headerEnd;
+  const markFlightEnd = entryReduced ? 320 : INK_ENTRY.markEnd;
+  const entryMark = landingArrival
+    ? smoothProgress(entryTime, markFlightStart, markFlightEnd)
+    : 0;
+  const entryMarkInk = landingArrival
+    ? smoothProgress(entryTime, lerp(markFlightStart, markFlightEnd, 0.35), lerp(markFlightStart, markFlightEnd, 0.65))
+    : 0;
+  const entryLabels = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 160 : INK_ENTRY.headerEnd,
     entryReduced ? 320 : INK_ENTRY.labelsEnd) : 1;
+  const headerGone = !!landingArrival && entryTime >= markFlightStart;
+  const markRef = useRef<HTMLSpanElement>(null);
+  const markFrom = useRef<{ top: number; left: number; fontSize: number; gap: number } | null>(null);
+  const markInkFrom = useRef<string | null>(null);
+  const [markHeld, setMarkHeld] = useState(false);
+  if (!landingArrival) markInkFrom.current = null;
+  else if (!markInkFrom.current) {
+    markInkFrom.current = headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark;
+  }
+  const markInk = markInkFrom.current
+    ? lerpHex(markInkFrom.current, CHROME_GRAY, entryMarkInk)
+    : headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark;
+  useLayoutEffect(() => {
+    if (!landingArrival) {
+      markFrom.current = null;
+      setMarkHeld(false);
+      return;
+    }
+    const readMark = () => {
+      const el = markRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      markFrom.current = {
+        top: r.top,
+        left: r.left + r.width / 2,
+        fontSize: parseFloat(cs.fontSize) || 16,
+        gap: parseFloat(cs.gap) || 8,
+      };
+    };
+    if (!headerGone) {
+      readMark();
+      if (markHeld) setMarkHeld(false);
+      return;
+    }
+    readMark();
+    setMarkHeld(true);
+  }, [landingArrival, headerGone, markHeld]);
   const entryShrink = landingArrival && !entryReduced ? smoothProgress(entryTime, INK_ENTRY.labelsEnd, INK_ENTRY.shrinkEnd) : 0;
   const entryPaper = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 320 : INK_ENTRY.ringHoldEnd,
     entryReduced ? INK_ENTRY.reducedEnd : INK_ENTRY.growEnd) : 1;
@@ -415,8 +475,9 @@ export function BlobScene({
       const el = blobEls.current[i];
       if (!el) return;
       const slot = gallerySlot[i];
-      const ring = inkRingPoint(vw, vh, slot, blobs.length);
-      const seat = inkGallerySeat(vw, vh, slot);
+      const offset = slot - landingFocusSlot;
+      const ring = inkRingPoint(vw, vh, (offset + blobs.length) % blobs.length, blobs.length);
+      const seat = inkGallerySeat(vw, vh, offset);
       const x = lerp(lerp(lerp(captured.x, captured.dotX, entryShrink), ring.x, gather), seat.x, unfold);
       const y = lerp(lerp(lerp(captured.y, captured.dotY, entryShrink), ring.y, gather), seat.y, unfold);
       const width = lerp(captured.width, INK_POINTER_SIZE, entryShrink);
@@ -428,10 +489,10 @@ export function BlobScene({
       el.style.transform = `matrix(${lerp(captured.a, 1, entryShrink)}, ${lerp(captured.b, 0, entryShrink)}, ${lerp(captured.c, 0, entryShrink)}, ${lerp(captured.d, 1, entryShrink)}, ${-width / 2}, ${-height / 2})`;
       el.style.borderRadius = entryShrink > 0.98 ? "50%" : captured.radius;
       el.style.filter = `blur(${captured.blur * (1 - entryShrink)}px)`;
-      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * (slot > 3 ? 1 - unfold : 1) * (1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24))}`;
+      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * (Math.abs(offset) > 3 ? 1 - unfold : 1) * (1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24))}`;
       if (entryShrink > 0.98) el.style.background = blobs[i].color.match(/#[0-9a-f]{6}/i)?.[0] ?? MEMORY_COLORS[0];
     });
-  }, [landingArrival, entryTime, entryShrink, entryReduced, gallerySlot, blobs, scale, vw, vh]);
+  }, [landingArrival, entryTime, entryShrink, entryReduced, gallerySlot, landingFocusSlot, blobs, scale, vw, vh]);
 
   /* ─── initial pan offset (center the canvas) ─── */
   useEffect(() => {
@@ -931,7 +992,7 @@ export function BlobScene({
   }, []);
 
   /* ─── landing header + captions: ink follows the field; captions
-        wipe out of the middle keep-out from the side they approach. ─── */
+        near the header or under another label blur in place. ─── */
   useEffect(() => {
     if (!classicChrome) return;
     let raf = 0;
@@ -1008,7 +1069,7 @@ export function BlobScene({
       const stackOf = new Array<number>(blobs.length).fill(0);
       ranked.forEach((row, rank) => { stackOf[row.i] = rank; });
 
-      const cover = blobs.map(() => ({ amount: 0, ax: 0, ay: 0 }));
+      const cover = new Array<number>(blobs.length).fill(0);
       for (const under of ranked) {
         for (const over of ranked) {
           if (over.z <= under.z) continue;
@@ -1016,21 +1077,27 @@ export function BlobScene({
           const oh = Math.min(under.cr.bottom, over.cr.bottom) - Math.max(under.cr.top, over.cr.top);
           if (ow <= 0 || oh <= 0) continue;
           const amount = (ow * oh) / (under.cr.width * under.cr.height);
-          if (amount > cover[under.i].amount) {
-            cover[under.i] = { amount, ax: over.cx - under.cx, ay: over.cy - under.cy };
-          }
+          if (amount > cover[under.i]) cover[under.i] = amount;
         }
       }
 
+      const field = containerRef.current?.getBoundingClientRect();
       const nextFx: CaptionFx[] = blobs.map((_, i) => {
         const prev = captionFxRef.current[i] ?? {
           progress: 0,
-          dir: "right" as WipeDir,
+          overlap: 0,
           onDark: false,
+          dotOnDark: false,
           stack: 0,
         };
         const row = laid[i];
-        if (!row) return { ...prev, progress: prev.progress + (0 - prev.progress) * follow };
+        if (!row) {
+          return {
+            ...prev,
+            progress: prev.progress + (0 - prev.progress) * follow,
+            overlap: prev.overlap + (0 - prev.overlap) * follow,
+          };
+        }
 
         const { cr, cx, cy } = row;
         const rx = hr.width / 2 + INNER_PAD + cr.width / 2;
@@ -1038,36 +1105,15 @@ export function BlobScene({
         const d = Math.hypot((cx - kx) / rx, (cy - ky) / ry);
         const outer = 1 + BAND / Math.max(rx, ry);
         const headerTarget = clamp((outer - d) / (outer - 1), 0, 1);
-        const collide = cover[i];
-        const target = Math.max(headerTarget, collide.amount);
 
-        const lastPos = captionPosRef.current[i];
-        const vx = lastPos ? cx - lastPos.x : 0;
-        const vy = lastPos ? cy - lastPos.y : 0;
-        captionPosRef.current[i] = { x: cx, y: cy };
-
-        const towardX = collide.amount >= headerTarget && collide.amount > 0.02
-          ? collide.ax
-          : kx - cx;
-        const towardY = collide.amount >= headerTarget && collide.amount > 0.02
-          ? collide.ay
-          : ky - cy;
-        let ax = towardX;
-        let ay = towardY;
-        if (lastPos && vx * towardX + vy * towardY > 0.2) {
-          ax = vx;
-          ay = vy;
-        }
-
-        let dir: WipeDir = prev.dir;
-        if (prev.progress < 0.08) {
-          if (Math.abs(ax) >= Math.abs(ay)) dir = ax >= 0 ? "right" : "left";
-          else dir = ay >= 0 ? "bottom" : "top";
-        }
-
-        const progress = prev.progress + (target - prev.progress) * follow;
+        const progress = prev.progress + (headerTarget - prev.progress) * follow;
+        const overlap = prev.overlap + (cover[i] - prev.overlap) * follow;
         const onDark = onDarkFrom(lumaAt(cx, cy), prev.onDark);
-        return { progress, dir, onDark, stack: stackOf[i] };
+        const ann = annotationsRef.current[i];
+        const dotOnDark = field && ann && (ann.dotX !== 0 || ann.dotY !== 0)
+          ? onDarkFrom(lumaAt(field.left + ann.dotX, field.top + ann.dotY), prev.dotOnDark)
+          : prev.dotOnDark;
+        return { progress, overlap, onDark, dotOnDark, stack: stackOf[i] };
       });
 
       const changed =
@@ -1077,8 +1123,9 @@ export function BlobScene({
           return (
             !prev ||
             Math.abs(prev.progress - fx.progress) > 0.01 ||
-            prev.dir !== fx.dir ||
+            Math.abs(prev.overlap - fx.overlap) > 0.01 ||
             prev.onDark !== fx.onDark ||
+            prev.dotOnDark !== fx.dotOnDark ||
             prev.stack !== fx.stack
           );
         });
@@ -1103,7 +1150,7 @@ export function BlobScene({
     <div
       ref={viewportRef}
       inert={!!landingArrival}
-      data-ink-stage={!landingArrival ? "field" : entryTime < INK_ENTRY.headerEnd ? "header" : entryTime < INK_ENTRY.labelsEnd ? "labels"
+      data-ink-stage={!landingArrival ? "field" : entryTime < INK_ENTRY.descEnd ? "desc" : entryTime < INK_ENTRY.headerEnd ? "header" : entryTime < INK_ENTRY.labelsEnd ? "labels"
         : entryTime < INK_ENTRY.shrinkEnd ? "shrink" : entryTime < INK_ENTRY.ringEnd ? "gather" : entryTime < INK_ENTRY.ringHoldEnd ? "ring"
         : entryTime < INK_ENTRY.unfoldEnd ? "unfold" : "artifacts"}
       className="relative w-full h-screen overflow-hidden cursor-pointer select-none"
@@ -1256,13 +1303,19 @@ export function BlobScene({
             const isConnectedToHovered = hoveredIdx !== null && hoveredConns.includes(i);
             const dimmed = hoveredIdx !== null && !isHovered && !isConnectedToHovered;
             const fx = classicChrome ? captionFx[i] : undefined;
-            const wipe = fx?.progress ?? 0;
+            const headerNear = fx?.progress ?? 0;
+            const overlap = fx?.overlap ?? 0;
             const stack = fx?.stack ?? i;
-            const erased = wipe > 0.55;
+            const buried = headerNear > 0.45 || overlap > 0.45;
             const captionColor = classicChrome
               ? (fx?.onDark ? HEADER_LIGHT.desc : BLOB_LABEL_INK)
               : BLOB_CAPTION_COLOR;
-            const visible = (1 - wipe) * (dimmed ? 0.2 : 1);
+            const dotColor = classicChrome
+              ? (fx?.dotOnDark ? HEADER_LIGHT.desc : BLOB_LABEL_INK)
+              : BLOB_CAPTION_COLOR;
+            const visible = dimmed ? 0.2 : 1;
+            const soften = Math.max(headerNear, overlap) * 6;
+            const softenFilter = soften > 0.1 ? `blur(${soften}px)` : "none";
 
             return (
               <div
@@ -1273,7 +1326,7 @@ export function BlobScene({
                   e.stopPropagation();
                   if (!classicChrome) morphToGalleryAt(i);
                 }}
-                style={{ pointerEvents: erased ? "none" : "auto" }}
+                style={{ pointerEvents: buried ? "none" : "auto" }}
               >
                 {/* Dot */}
                 <div
@@ -1284,10 +1337,11 @@ export function BlobScene({
                     width: BLOB_DOT,
                     height: BLOB_DOT,
                     borderRadius: "50%",
-                    backgroundColor: captionColor,
+                    backgroundColor: dotColor,
                     transform: "translate(-50%, -50%)",
                     zIndex: 22 + stack,
-                    opacity: (1 - wipe) * (dimmed ? 0.25 : 1),
+                    opacity: dimmed ? 0.25 : 1,
+                    filter: softenFilter,
                     transition: "background-color 0.35s ease",
                   }}
                 />
@@ -1301,18 +1355,21 @@ export function BlobScene({
                       width: BLOB_DOT,
                       height: BLOB_DOT,
                       borderRadius: "50%",
-                      border: `0.2px solid ${captionColor}`,
+                      border: `${BLOB_RING_STROKE}px solid ${dotColor}`,
                       backgroundColor: "transparent",
+                      boxSizing: "content-box",
                       transform: "translate(-50%, -50%)",
                       zIndex: 21 + stack,
-                      opacity: (1 - wipe) * (dimmed ? 0.15 : 1),
+                      opacity: dimmed ? 0.15 : 1,
+                      filter: softenFilter,
                       animation: "ringPulse 2.5s ease-in-out infinite",
                       transition: "border-color 0.35s ease",
+                      ["--ring-from" as string]: `${BLOB_DOT}px`,
+                      ["--ring-to" as string]: `${BLOB_DOT * 5.6}px`,
                     }}
                   />
                 )}
-                {/* Outer box is the hit + keep-out measure; inner clip is the erase.
-                    Measuring the clipped node made the rect collapse and flicker. */}
+                {/* Outer box is the hit + keep-out measure; inner text only blurs. */}
                 <div
                   ref={(el) => { captionEls.current[i] = el; }}
                   className="absolute"
@@ -1325,14 +1382,13 @@ export function BlobScene({
                     padding: "4px 8px",
                     margin: "-4px -8px",
                     color: captionColor,
-                    pointerEvents: erased ? "none" : "auto",
+                    pointerEvents: buried ? "none" : "auto",
                   }}
                 >
                   <div
                     style={{
                       opacity: visible,
-                      filter: wipe > 0.02 ? `blur(${wipe * 5}px)` : "none",
-                      clipPath: wipeInset(fx?.dir ?? "right", wipe),
+                      filter: softenFilter,
                     }}
                   >
                   {/* Year — GenRyuMin first, same rule as gallery / puddle captions */}
@@ -1354,12 +1410,13 @@ export function BlobScene({
                   <div
                     style={{
                       fontFamily: SERIF,
+                      fontStyle: "italic",
                       fontSize: BLOB_CAPTION_SIZE,
                       color: "inherit",
                       opacity: 0.9,
                       lineHeight: blob.event.includes("\n") ? 1.5 : "normal",
                       whiteSpace: blob.event.includes("\n") ? "pre-line" : "nowrap",
-                      letterSpacing: "0px",
+                      letterSpacing: SERIF_ITALIC_TRACKING,
                     }}
                   >
                     {blob.event}
@@ -1394,7 +1451,7 @@ export function BlobScene({
         style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.22}px` }}
       >
         <div className="text-center" style={{ fontFamily: SERIF }}>
-          <p style={{ color: CHROME_GRAY, marginBottom: 6, fontStyle: "italic" }}>{blobs[activeIdx]?.event}</p>
+          <p style={{ color: CHROME_GRAY, marginBottom: 6, fontStyle: "italic", letterSpacing: SERIF_ITALIC_TRACKING }}>{blobs[activeIdx]?.event}</p>
           <p style={{ color: "#999", fontStyle: "normal", fontFamily: SERIF_CJK }}>{blobs[activeIdx]?.year}</p>
         </div>
       </div>
@@ -1471,12 +1528,13 @@ export function BlobScene({
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
-            opacity: clamp(1 - morphVal * 4, 0, 1) * entryHeader,
+            opacity: landingArrival ? 1 : clamp(1 - morphVal * 4, 0, 1),
             zIndex: 25,
             transition: landingArrival ? "none" : "opacity 0.3s ease",
           }}
         >
           {classicChrome ? (
+            <>
             <div
               style={{
                 position: "absolute",
@@ -1512,6 +1570,7 @@ export function BlobScene({
                   width: 0,
                   minWidth: "100%",
                   boxSizing: "border-box",
+                  opacity: entryDesc,
                   transition: "color 0.35s ease",
                 }}
               >
@@ -1535,7 +1594,7 @@ export function BlobScene({
                   border: "none",
                   background: "transparent",
                   cursor: "pointer",
-                  pointerEvents: "auto",
+                  pointerEvents: landingArrival ? "none" : "auto",
                   color: headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark,
                   fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
                   lineHeight: 1.5,
@@ -1549,31 +1608,65 @@ export function BlobScene({
                     letterSpacing: "0.01em",
                     whiteSpace: "nowrap",
                     marginRight: -4,
+                    opacity: entryHeader,
                   }}
                 >
                   {ctaLabel}
                 </span>
+                {!markHeld && (
                 <span
+                  ref={markRef}
                   style={{
                     fontFamily: SERIF_CJK,
                     fontStyle: "normal",
-                    letterSpacing: "0.16px",
+                    letterSpacing: PAGE_HEADER_MARK.letterSpacing,
                     textTransform: "lowercase",
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
+                    color: markInk,
                   }}
                 >
                   <span>滲む</span>
                   <span>nijimu</span>
                 </span>
-                <span className="landing-enter-arrow" aria-hidden>
+                )}
+                <span className="landing-enter-arrow" aria-hidden style={{ opacity: entryHeader }}>
                   <span className="landing-enter-stem" />
                   <span className="landing-enter-caret" />
                 </span>
               </button>
               </div>
             </div>
+            {markHeld && markFrom.current && (
+              <span
+                style={{
+                  position: "fixed",
+                  left: lerp(markFrom.current.left, vw / 2, entryMark),
+                  top: lerp(markFrom.current.top, PAGE_HEADER_MARK.top, entryMark),
+                  transform: "translateX(-50%)",
+                  fontFamily: SERIF_CJK,
+                  fontStyle: "normal",
+                  fontSize: lerp(markFrom.current.fontSize, PAGE_HEADER_MARK.fontSize, entryMark),
+                  letterSpacing: PAGE_HEADER_MARK.letterSpacing,
+                  lineHeight: 1.5,
+                  textTransform: "lowercase",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: lerp(markFrom.current.gap, PAGE_HEADER_MARK.gap, entryMark),
+                  color: markInk,
+                  whiteSpace: "nowrap",
+                  margin: 0,
+                  padding: 0,
+                  zIndex: 50,
+                  pointerEvents: "none",
+                }}
+              >
+                <span>滲む</span>
+                <span>nijimu</span>
+              </span>
+            )}
+            </>
           ) : (
             <>
               {/* Bottom blur gradient */}
@@ -1683,8 +1776,8 @@ export function BlobScene({
           50% { transform: translate(-50%, -50%) scale(1.6); opacity: 0.6; }
         }
         @keyframes ringPulse {
-          0% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
-          100% { transform: translate(-50%, -50%) scale(5.6); opacity: 0; }
+          0% { width: var(--ring-from); height: var(--ring-from); opacity: 0.8; }
+          100% { width: var(--ring-to); height: var(--ring-to); opacity: 0; }
         }
         @keyframes connDash {
           to { stroke-dashoffset: -20; }
