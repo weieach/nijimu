@@ -16,6 +16,9 @@ const GRAIN_URL = `url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='h
 /** Long enough for the leave animation below to finish before unmounting. */
 const LEAVE_MS = 220;
 
+/** Shared with the sheen, whose rim light traces this same rounded rect. */
+const PANEL_RADIUS = 30;
+
 interface ProfilePanelProps {
   open: boolean;
   onClose: () => void;
@@ -108,11 +111,11 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
         alignItems: "center",
         justifyContent: "center",
         padding: "clamp(16px, 5vw, 40px)",
-        // No filter of its own: an ancestor with backdrop-filter becomes a
-        // backdrop root, and the pane below would then have nothing but this
-        // scrim to blur. The dim is all this layer does.
-        background:
-          "radial-gradient(circle at 50% 50%, rgba(122, 122, 134, 0.1), rgba(108, 108, 122, 0.22))",
+        // Dimming is all this layer does, and it fades via background-color
+        // rather than opacity: anything that makes an ancestor a backdrop root
+        // (opacity, filters, isolation) leaves the pane below with nothing but
+        // this scrim to blur.
+        backgroundColor: "rgba(108, 108, 122, 0.2)",
       }}
     >
       <div
@@ -126,11 +129,10 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "relative",
-          isolation: "isolate",
           outline: "none",
           width: "min(392px, 100%)",
           maxHeight: "min(82dvh, 620px)",
-          borderRadius: 30,
+          borderRadius: PANEL_RADIUS,
           overflow: "hidden",
           border: "1px solid rgba(255, 255, 255, 0.5)",
           background:
@@ -141,7 +143,7 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
             "0 28px 70px rgba(70, 70, 84, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.6)",
         }}
       >
-        <IridescentSheen />
+        <IridescentSheen radius={PANEL_RADIUS} />
 
         <div
           aria-hidden
@@ -349,6 +351,12 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
           from { opacity: 1; }
           to { opacity: 0; }
         }
+        @keyframes nijimuProfileDimIn {
+          from { background-color: rgba(108, 108, 122, 0); }
+        }
+        @keyframes nijimuProfileDimOut {
+          to { background-color: rgba(108, 108, 122, 0); }
+        }
         /* the pane surfaces rather than snaps — it comes up out of the page */
         @keyframes nijimuProfileCardIn {
           from { opacity: 0; transform: translateY(12px) scale(0.965); }
@@ -359,10 +367,10 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
           to { opacity: 0; transform: translateY(6px) scale(0.985); }
         }
         .nijimuProfileScrim {
-          animation: nijimuProfileFadeIn 240ms ease both;
+          animation: nijimuProfileDimIn 240ms ease both;
         }
         .nijimuProfileScrim[data-leaving="true"] {
-          animation: nijimuProfileFadeOut ${LEAVE_MS}ms ease both;
+          animation: nijimuProfileDimOut ${LEAVE_MS}ms ease both;
         }
         .nijimuProfileCard {
           animation: nijimuProfileCardIn 320ms cubic-bezier(0.22, 0.8, 0.28, 1) both;

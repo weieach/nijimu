@@ -1,12 +1,13 @@
 /**
- * Iridescent sheen — a thin-film rainbow that drifts over a glass surface and
- * every so often gleams across it, like light catching oil on water.
+ * Iridescent sheen — a thin-film rainbow held along the rim of a glass panel,
+ * with a gleam that every so often runs a lap around the border, like light
+ * catching the edge of wet glass.
  *
- * Drawn as a WebGL2 layer composited normally over the glass: the film is a
- * pale, low-alpha wash, which on a light surface keeps far more of its colour
- * than `overlay` or `screen` would (both collapse toward the backdrop when the
- * backdrop is already bright). Gleams run on a slow clock with a per-pass
- * random amplitude, so some passes are barely there.
+ * Confined to the border by a rounded-rect distance field, so the face of the
+ * panel stays clear and nothing washes over the words. Composited normally: the
+ * film is a pale, low-alpha wash, which on a light surface keeps far more of
+ * its colour than `overlay` or `screen` would (both collapse toward the
+ * backdrop when the backdrop is already bright).
  *
  * Renders nothing when WebGL2 is unavailable — the panel underneath keeps its
  * blur and grain.
@@ -30,8 +31,11 @@ in vec2 v_uv;
 out vec4 o;
 uniform vec2 u_res;
 uniform float u_time;
+/** Corner radius and rim depth, both in device pixels. */
+uniform float u_radius;
+uniform float u_band;
 
-/** Seconds between gleam passes. */
+/** Seconds per lap. */
 const float PERIOD = 10.0;
 
 float hash(vec2 p) {
@@ -68,41 +72,53 @@ vec3 spectrum(float t) {
 }
 
 void main() {
-  float aspect = u_res.x / max(u_res.y, 1.0);
-  vec2 p = v_uv;
+  vec2 halfSize = u_res * 0.5;
+  vec2 q = (v_uv - 0.5) * u_res;
 
-  // uneven film thickness, drifting slowly across the glass
-  float film = fbm(vec2(p.x * aspect, p.y) * 2.4 + vec2(u_time * 0.021, -u_time * 0.013));
+  // rounded-rect distance: 0 on the border, growing inward
+  vec2 corner = abs(q) - (halfSize - u_radius);
+  float sd = length(max(corner, vec2(0.0))) + min(max(corner.x, corner.y), 0.0) - u_radius;
+  float inward = -sd;
 
-  // the diagonal a gleam travels along, 0 at the near corner
-  float axis = dot(p, normalize(vec2(0.82, 0.57)));
+  // the light lives in the rim and lets go before it reaches the words
+  float rim = (1.0 - smoothstep(0.0, u_band, inward)) * smoothstep(-1.5, 1.0, inward);
+  rim *= rim;
+  if (rim <= 0.0) {
+    o = vec4(0.0);
+    return;
+  }
+
+  // where we are around the border, 0..1 — normalised so the lap keeps an even
+  // pace down the long sides rather than racing them
+  vec2 n = q / max(halfSize, vec2(1.0));
+  float ang = atan(n.y, n.x) / 6.28318 + 0.5;
+
+  // uneven film thickness, sampled in 2D so the border has no seam
+  float film = fbm(n * 2.2 + vec2(u_time * 0.02, -u_time * 0.013));
 
   float cycle = u_time / PERIOD;
   float passIdx = floor(cycle);
   float ph = fract(cycle);
-  // some passes barely register — the gleam is an event, not a metronome
+  // some laps barely register — the gleam is an event, not a metronome
   float amp = 0.18 + 0.82 * smoothstep(0.3, 0.95, hash(vec2(passIdx, 7.31)));
-  float width = 0.24 + 0.12 * hash(vec2(passIdx, 19.7));
-  float d = (axis - mix(-0.35, 1.5, ph)) / width;
-  float band = exp(-d * d);
-  // the envelope keeps it from popping in at the edge of the panel
-  float gleam = band * amp * sin(3.14159 * ph);
+  float width = 0.05 + 0.03 * hash(vec2(passIdx, 19.7));
+  // each lap sets off from a different point on the border
+  float travel = ang - (hash(vec2(passIdx, 3.17)) + ph);
+  travel -= floor(travel + 0.5);
+  // the envelope brings it up and lets it go, so no lap starts or ends abruptly
+  float gleam = exp(-(travel * travel) / (width * width)) * amp * sin(3.14159 * ph);
 
-  // a whisper of film at rest, so the glass is never quite flat
-  float rest = (0.22 + 0.5 * film) * (0.34 + 0.66 * (1.0 - smoothstep(0.15, 1.05, axis)));
+  // a whisper of film at rest, so the rim is never quite dead
+  float rest = 0.35 + 0.65 * film;
 
-  float hue = film * 1.15 + dot(p, vec2(0.75, -0.45)) * 0.9 + axis * 0.5
-            + u_time * 0.008 + gleam * 0.35;
+  // two full hue cycles around the border — an integer, so the seam is seamless
+  float hue = film * 1.1 + ang * 2.0 + u_time * 0.01 + gleam * 0.3;
   // pale at rest, and only a gleam brings the colour up — plus a little white
-  // in its core so the pass reads as light crossing the glass
-  vec3 col = mix(vec3(0.9, 0.9, 0.93), spectrum(hue), 0.4 + 0.4 * gleam);
-  col = mix(col, vec3(1.0), gleam * 0.16);
+  // in its core so the lap reads as light running the edge
+  vec3 col = mix(vec3(0.9, 0.9, 0.93), spectrum(hue), 0.3 + 0.3 * gleam);
+  col = mix(col, vec3(1.0), gleam * 0.12);
 
-  float a = rest * 0.16 + gleam * 0.42;
-  // release the outermost pixels so the sheen never outlines the panel
-  a *= smoothstep(0.0, 0.05, p.x) * (1.0 - smoothstep(0.95, 1.0, p.x))
-     * smoothstep(0.0, 0.05, p.y) * (1.0 - smoothstep(0.95, 1.0, p.y));
-
+  float a = (rest * 0.1 + gleam * 0.26) * rim;
   o = vec4(col, clamp(a, 0.0, 1.0));
 }`;
 
@@ -138,7 +154,19 @@ function link(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-export function IridescentSheen({ opacity = 0.9 }: { opacity?: number }) {
+interface IridescentSheenProps {
+  opacity?: number;
+  /** Corner radius of the surface, CSS px — match the panel's own. */
+  radius?: number;
+  /** How far the light reaches in from the border, CSS px. */
+  band?: number;
+}
+
+export function IridescentSheen({
+  opacity = 0.9,
+  radius = 30,
+  band = 18,
+}: IridescentSheenProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -164,6 +192,8 @@ export function IridescentSheen({ opacity = 0.9 }: { opacity?: number }) {
 
     const uRes = gl.getUniformLocation(program, "u_res");
     const uTime = gl.getUniformLocation(program, "u_time");
+    const uRadius = gl.getUniformLocation(program, "u_radius");
+    const uBand = gl.getUniformLocation(program, "u_band");
     gl.useProgram(program);
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
@@ -187,6 +217,8 @@ export function IridescentSheen({ opacity = 0.9 }: { opacity?: number }) {
     const draw = (timeSec: number) => {
       gl.uniform2f(uRes, width, height);
       gl.uniform1f(uTime, timeSec);
+      gl.uniform1f(uRadius, radius * dpr);
+      gl.uniform1f(uBand, Math.max(band * dpr, 1));
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
@@ -217,7 +249,7 @@ export function IridescentSheen({ opacity = 0.9 }: { opacity?: number }) {
       gl.deleteProgram(program);
       gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
-  }, []);
+  }, [radius, band]);
 
   return (
     <canvas

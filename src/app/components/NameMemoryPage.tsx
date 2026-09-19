@@ -3,9 +3,9 @@ import { useLocation, useNavigate } from "react-router";
 import { CSSProperties, KeyboardEvent, Ref, useEffect, useMemo, useRef, useState } from "react";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
-import { COLOR_PALETTE } from "../lib/colors";
+import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { saveMemory } from "../lib/memoryStore";
-import { SERIF } from "../lib/theme";
+import { SERIF, SERIF_CJK } from "../lib/theme";
 import { PAGE_BG } from "./PuddleBackdrop";
 import { MODEL_PATHS } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
@@ -24,7 +24,7 @@ interface NameFlowState {
 }
 
 const TITLE_STYLE: CSSProperties = {
-  color: "#2a2a2a",
+  color: CHROME_GRAY,
   margin: 0,
   fontFamily: SERIF,
   fontStyle: "italic",
@@ -36,7 +36,7 @@ const TITLE_STYLE: CSSProperties = {
 const YEAR_STYLE: CSSProperties = {
   color: "#999",
   margin: 0,
-  fontFamily: SERIF,
+  fontFamily: SERIF_CJK,
   fontStyle: "normal",
   fontSize: "clamp(11px, 0.9vw, 14px)",
   textAlign: "center",
@@ -48,7 +48,7 @@ const currentYear = new Date().getFullYear();
 const DRAFT_ID = "nijimu.draft";
 
 function FlickerCaret({
-  color = "#2a2a2a",
+  color = CHROME_GRAY,
   fontSize,
 }: {
   color?: string;
@@ -146,7 +146,7 @@ function CaptionField({
       </span>
       {showCaret && (
         <FlickerCaret
-          color={String(style.color ?? "#2a2a2a")}
+          color={String(style.color ?? CHROME_GRAY)}
           fontSize={style.fontSize}
         />
       )}
@@ -359,7 +359,7 @@ export function NameMemoryPage() {
         <CaptionField
           value={memoryName}
           onChange={setMemoryName}
-          placeholder="name this memory"
+          placeholder="name this memory..."
           ariaLabel="memory name"
           autoFocus={fieldsVisible}
           inputRef={nameInputRef}
@@ -483,7 +483,7 @@ export function NameMemoryPage() {
           font-style: inherit;
         }
         .nijimu-year-field::placeholder {
-          color: #2a2a2a;
+          color: ${CHROME_GRAY};
           opacity: 0.35;
         }
       `}</style>

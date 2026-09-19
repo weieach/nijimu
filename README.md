@@ -43,8 +43,8 @@ Stacks live in `src/app/lib/theme.ts`. Faces are loaded in `src/styles/fonts.css
 
 | Font | How it's loaded | Used as |
 |---|---|---|
-| **GenRyuMin2 TW** | CDN Fonts | Main serif — wordmark, titles, most body copy (`SERIF`) |
-| **Rowan** | Self-hosted woff2 (Light–Bold, roman + italic) | Serif fallback; also hardcoded on leftover `/record/orb` and `/record/process` |
+| **Rowan** | Self-hosted woff2 (Light–Bold, roman + italic) | Latin serif — English titles, body, leftover `/record/orb` and `/record/process` (`SERIF`) |
+| **GenRyuMin2 TW** | CDN Fonts | East Asian serif — the 滲む wordmark (`SERIF_CJK`); CJK fallback on `SERIF` |
 | **Exposure Trial** | Self-hosted `ExposureTrial-20.otf` (optical grade −20) | Recording / profile display (`SERIF_EXPOSURE`) |
 | **Exposure Trial Plus** | Self-hosted `ExposureTrial+10.otf` (optical grade +10) | Transcript / polish display (`SERIF_DISPLAY`) |
 | **Switzer** | Self-hosted woff2 (Thin–Black, roman + italic) | UI sans — labels, light / outline buttons, editor chrome (`SANS`) |
@@ -54,9 +54,10 @@ Named but not loaded: **SF Pro** (`SANS_UI` — Apple system font on dark button
 System / leftover fallbacks: **Georgia** (serif fallback; also hardcoded in a few pages), **Helvetica Neue / Helvetica / Arial** (`RecordingProcessPage`), and **SF Mono / Monaco / monospace** (timer on `/record/click` and shape-editor numeric readouts).
 
 ```
-SERIF          = 'GenRyuMin2 TW', Rowan, Georgia, serif
-SERIF_DISPLAY  = 'Exposure Trial Plus', Rowan, Georgia, serif
-SERIF_EXPOSURE = 'Exposure Trial', Rowan, Georgia, serif
+SERIF          = Rowan, 'GenRyuMin2 TW', Georgia, serif
+SERIF_CJK      = 'GenRyuMin2 TW', Rowan, Georgia, serif
+SERIF_DISPLAY  = 'Exposure Trial Plus', Rowan, 'GenRyuMin2 TW', Georgia, serif
+SERIF_EXPOSURE = 'Exposure Trial', Rowan, 'GenRyuMin2 TW', Georgia, serif
 SANS           = Switzer, sans-serif
 SANS_UI        = 'SF Pro', system-ui, sans-serif
 ```

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { CHROME_GRAY, COLOR_PALETTE, MEMORY_COLORS } from "../lib/colors";
-import { SERIF } from "../lib/theme";
+import { SERIF, SERIF_CJK } from "../lib/theme";
 import { createPuddleSimulation, PUDDLE_TUNING, PuddleSimulation } from "../lib/puddle/simulation";
 import { createRipple2dSimulation, RIPPLE2D_TUNING } from "../lib/puddle/ripple2d";
 import { DIVE_TUNING, RECORD_DIVE } from "../lib/puddle/dive";
@@ -1110,7 +1110,7 @@ export function PuddleScene({
               >
                 <div
                   style={{
-                    fontFamily: SERIF,
+                    fontFamily: SERIF_CJK,
                     fontSize: "clamp(8px, 0.9vw, 10px)",
                     opacity: 0.75,
                     letterSpacing: "0.06em",

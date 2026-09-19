@@ -1,7 +1,7 @@
 import { CSSProperties, ReactNode } from "react";
 import { CHROME_GRAY } from "../lib/colors";
 import { PAGE_BG } from "./PuddleBackdrop";
-import { SANS, SANS_UI, SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
+import { SANS, SANS_UI, SERIF, SERIF_CJK, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 
@@ -218,7 +218,7 @@ export function StyleGuidePage() {
                 gap: 12,
               }}
             >
-              <span>滲む</span>
+              <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
               <span>nijimu</span>
             </span>
           </Specimen>

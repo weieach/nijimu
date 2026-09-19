@@ -1,7 +1,7 @@
 import { CSSProperties } from "react";
 import { useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { SERIF } from "../lib/theme";
+import { SERIF, SERIF_CJK } from "../lib/theme";
 
 interface PageHeaderProps {
   /** absolute = pinned top-center (full-bleed pages); block = in-flow with bottom margin (light pages) */
@@ -58,7 +58,7 @@ export function PageHeader({
 
   const children = (
     <>
-      <span>滲む</span>
+      <span style={{ fontFamily: SERIF_CJK }}>滲む</span>
       <span>nijimu</span>
     </>
   );

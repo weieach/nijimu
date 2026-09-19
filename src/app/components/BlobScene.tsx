@@ -6,8 +6,8 @@ import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
 import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
-import { SANS, SERIF } from "../lib/theme";
-import { COLOR_PALETTE } from "../lib/colors";
+import { SANS, SERIF, SERIF_CJK } from "../lib/theme";
+import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 
 
 /* ───────── types ───────── */
@@ -1005,7 +1005,7 @@ export function BlobScene({
                   {/* Year */}
                   <div
                     style={{
-                      fontFamily: SERIF,
+                      fontFamily: SERIF_CJK,
                       fontSize: 12,
                       color: "#504A4A",
                       opacity: 0.8,
@@ -1058,8 +1058,8 @@ export function BlobScene({
         style={{ opacity: clamp((morphVal - 0.65) / 0.35, 0, 1), zIndex: 20, paddingBottom: `${vh * 0.22}px` }}
       >
         <div className="text-center" style={{ fontFamily: SERIF }}>
-          <p style={{ color: "#2a2a2a", marginBottom: 6, fontStyle: "italic" }}>{blobs[activeIdx]?.event}</p>
-          <p style={{ color: "#999", fontStyle: "normal" }}>{blobs[activeIdx]?.year}</p>
+          <p style={{ color: CHROME_GRAY, marginBottom: 6, fontStyle: "italic" }}>{blobs[activeIdx]?.event}</p>
+          <p style={{ color: "#999", fontStyle: "normal", fontFamily: SERIF_CJK }}>{blobs[activeIdx]?.year}</p>
         </div>
       </div>
 

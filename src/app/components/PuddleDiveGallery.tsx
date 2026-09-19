@@ -3,8 +3,8 @@ import { useGLTF } from "@react-three/drei";
 import { SceneViewer } from "./SceneViewer";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
-import { COLOR_PALETTE } from "../lib/colors";
-import { SERIF } from "../lib/theme";
+import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
+import { SERIF, SERIF_CJK } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
 
@@ -628,7 +628,7 @@ export function PuddleDiveGallery({
             <>
               <p
                 style={{
-                  color: "#2a2a2a",
+                  color: CHROME_GRAY,
                   margin: "0 0 0.8em",
                   whiteSpace: "pre-line",
                   fontStyle: "italic",
@@ -644,6 +644,7 @@ export function PuddleDiveGallery({
                   margin: 0,
                   fontStyle: "normal",
                   fontSize: "clamp(11px, 0.9vw, 14px)",
+                  fontFamily: SERIF_CJK,
                 }}
               >
                 {item.year}
@@ -998,7 +999,7 @@ function TimeScale({
             fill="#4a4a4a"
             fillOpacity={0.4}
             style={{
-              fontFamily: SERIF,
+              fontFamily: SERIF_CJK,
               fontSize: 10,
               letterSpacing: "0.06em",
             }}
