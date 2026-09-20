@@ -9,46 +9,78 @@ export interface PondTouch { x: number; y: number; serial: number }
 const waves = /* glsl */ `
   uniform float uTime;
   uniform vec4 uDrops[8];
-  // Height plus horizontal displacement, shared by the waves and reflections.
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x), mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
+  }
+  // A slow wandering of the whole surface. Deliberately cheap — it is sampled
+  // per pixel, and at this amplitude incommensurate drifts read as moving air
+  // rather than as a pattern.
+  vec2 breath(vec2 p) {
+    return vec2(
+      sin(p.x * .73 + uTime * .21) + sin(p.y * .52 - uTime * .17),
+      sin(p.y * .68 - uTime * .19) + sin(p.x * .44 + uTime * .23)
+    ) * .5;
+  }
+  // One dispersive wave train per touch: a leading crest, a trough behind it,
+  // then smaller crests falling back — rather than three separate rings that
+  // each have to be born and grow. Height plus the horizontal displacement
+  // that the waves and reflections share.
   vec3 rippleField(vec2 p) {
     vec3 field = vec3(0.0);
+    vec2 wob = breath(p);
     for (int i = 0; i < 8; i++) {
       if (uDrops[i].w < .001 || uTime < uDrops[i].z) continue;
-      vec2 delta = p - uDrops[i].xy;
+      float age = uTime - uDrops[i].z;
+      // Long spent: nothing left to add, and the slot is usually still filled.
+      if (age > 14.0) continue;
+      vec2 raw = p - uDrops[i].xy;
+      float rd = length(raw);
+      // Disturbance accumulates with the distance a ring has travelled, so it
+      // is crisp where it is born and increasingly bent by the chop it crosses.
+      vec2 delta = raw + wob * min(.07, .012 + rd * .022);
       float d = length(delta);
-      // Three softly separated crests leave the same point in succession.
-      // Each starts at zero radius rather than appearing behind an older ring.
-      for (int crest = 0; crest < 3; crest++) {
-      float age = uTime - uDrops[i].z - float(crest) * .52;
-      if (age < 0.0) continue;
-      float radius = age * 1.18;
+      vec2 dir = delta / max(d, .025);
+      // The front sprints away from the touch and then settles into a glide,
+      // so the ripple reads on the next frame instead of creeping out of a dot.
+      float radius = age * 1.02 + .42 * (1.0 - exp(-age * 6.5));
       float front = d - radius;
-      // Rounded crests stay broad enough to feel volumetric, with room for
-      // a quiet trough between them instead of closely etched lines.
-      float width = min(.24, .09 + age * .045);
-      float reached = 1.0 - smoothstep(max(0.0, radius - width * .5), radius + .025, d);
-      float birth = smoothstep(0.0, .08, age);
-      // As a ring spreads, its energy is shared across a larger circumference.
-      // Reduce the normal contrast as well as damping it over time, so the
-      // outer rings become lighter instead of retaining a dark etched edge.
-      float spread = 1.0 / (1.0 + d * .35);
-      float envelope = exp(-.5 * pow((front + width * .7) / width, 2.0)) * exp(-age * .23) * spread * reached * birth;
-      float strength = envelope * uDrops[i].w * exp(-float(crest) * .38);
-      field.x += strength * .07;
-      // Push the water's material coordinates outward with the crest. This
-      // bends existing currents and light ribbons instead of drawing atop them.
-      field.yz += delta / max(d, .025) * strength * .65;
-      }
+      float trail = max(0.0, -front);
+      // The train lengthens behind the front as the slower waves fall back,
+      // and fades quickly enough that three or four rings carry the whole
+      // event and the centre settles back to calm.
+      float wavelength = .30 + age * .10;
+      float train = cos(trail / wavelength * 6.2831853) * exp(-trail * 3.2 / (1.0 + age * .55));
+      // Still water ahead of the front.
+      float gate = exp(-pow(max(0.0, front) / (.045 + age * .015), 2.0));
+      float birth = smoothstep(0.0, .03, age);
+      // Energy shared over a growing circumference, and lost to the water.
+      float amp = train * gate * birth * exp(-age * .33) / (1.0 + d * .55);
+      // The touch itself: a dimple under the finger, present on the same frame
+      // and gone before the first ring has travelled far.
+      float dimple = -exp(-pow(d / .15, 2.0)) * exp(-age * 8.0) * birth;
+      field.x += (amp * .075 + dimple * .05) * uDrops[i].w;
+      // Push the water's material coordinates along with the wave. This bends
+      // existing currents and light ribbons instead of drawing atop them.
+      field.yz += dir * (amp * .62 + dimple * .3) * uDrops[i].w;
     }
     return field;
   }
+  // The slow swell, with the ripple crests left out. Split from waterHeight so
+  // a floating body can weigh the two apart; the water itself still takes both.
+  float swellFrom(vec3 ripple, vec2 p) {
+    vec2 flow = p - ripple.yz;
+    float h = sin(flow.x * 1.2 + flow.y * .55 + uTime * .48) * .013
+      + sin(flow.y * 1.9 - flow.x * .31 - uTime * .33) * .007;
+    // A light wandering chop. The pond is never glass, and this is the water a
+    // new ripple has to spread across.
+    h += (noise(flow * 3.1 + vec2(uTime * .08, uTime * .055)) - .5) * .0075;
+    return h;
+  }
   float waterHeight(vec2 p) {
     vec3 ripple = rippleField(p);
-    vec2 flow = p - ripple.yz;
-    float h = sin(flow.x * 1.2 + flow.y * .55 + uTime * .48) * .013;
-    h += sin(flow.y * 1.9 - flow.x * .31 - uTime * .33) * .007;
-    h += ripple.x;
-    return h;
+    return swellFrom(ripple, p) + ripple.x;
   }
 `;
 
@@ -66,11 +98,6 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   ${waves}
   varying vec3 vWorld;
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x), mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
-  }
   void main() {
     vec2 p = vWorld.xz;
     vec2 surface = p - rippleField(p).yz;
@@ -120,29 +147,48 @@ const smoothunit = (edge0: number, edge1: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
 };
-const RING_HEIGHT = 5.8;
+// The ring floats on the pond instead of being painted onto it: it rides the
+// slow swell, rests clear of the surface, and feels a ripple crest only as the
+// air that crest pushes ahead of itself. A touch is the one thing that brings
+// it down to the water.
+const RING_HEIGHT = 1.5;  // vertical scale applied to swell and crest together
+const RING_FLOAT = 0.084; // resting height above the water plane (~4px on screen)
+const RING_TOUCH = 0.005; // height while a touch holds it against the surface
+const RING_CREST = 0.65;  // how much of a crest's saturated lift reaches it
+const RING_TILT = 0.22;   // per-vertex sampling vs. one rigid body at the centre
+const RING_DRIFT = 0.12;  // how far the current carries it — as a whole, never a stretch
+// Quick down onto the water, a moment of contact, then a slower float back up.
+const TAP_DOWN = .07, TAP_HOLD = .025, TAP_UP = .34;
+// A hold only takes the ring over once it is genuinely under way — 120ms into
+// the 2s hold. A click shorter than that runs the envelope and bounces back on
+// its own. The threshold is low enough that the envelope is still 98% down when
+// the hold takes over, so the handoff cannot be seen.
+const HOLD_PIN = .06;
 const ringVertex = /* glsl */ `
   ${waves}
   uniform vec3 uCenter;
+  uniform float uTap;
   varying vec2 vLocal;
-  vec3 waterNormal(vec2 p) {
-    float h = waterHeight(p);
-    return normalize(vec3(
-      (h - waterHeight(p + vec2(.035, 0.0))) / .035,
-      1.0,
-      (h - waterHeight(p + vec2(0.0, .035))) / .035
-    ));
-  }
   void main() {
     vLocal = position.xy;
     vec2 raw = uCenter.xz + vec2(position.x, -position.y);
-    vec3 field = rippleField(raw);
-    vec2 xz = raw + field.yz * .55;
-    float h = waterHeight(xz);
-    vec3 n = waterNormal(xz);
-    // Sit on the same field the lighting implies, offset along the normal
-    // so a crest lifts the stroke instead of burying it.
-    vec3 world = vec3(xz.x, h * ${RING_HEIGHT} + .05, xz.y) + n * .02;
+    // Everything the water does to the ring is read once, under its centre, and
+    // applied to every vertex alike. Sampling the current per vertex would push
+    // each one radially away from a ripple's origin and swell the circle; the
+    // ring is a fixed size and only ever moves as one piece.
+    vec3 centre = rippleField(uCenter.xz);
+    vec2 xz = raw + centre.yz * ${RING_DRIFT};
+    vec3 field = rippleField(xz);
+    // Height still takes a little local sampling so it can tilt with the water.
+    float swell = mix(swellFrom(centre, uCenter.xz), swellFrom(field, xz), ${RING_TILT});
+    float crest = mix(centre.x, field.x, ${RING_TILT});
+    // A crest reaches the ring as the air it pushes ahead of itself rather than
+    // as buoyancy. The lift saturates, so resting at a ripple's centre raises
+    // the ring barely more than resting at its edge does.
+    float lift = crest / (1.0 + abs(crest) * 22.0) * ${RING_CREST};
+    // Resting clear of the water, brought down onto it by a touch.
+    float rest = mix(${RING_FLOAT}, ${RING_TOUCH}, uTap);
+    vec3 world = vec3(xz.x, rest + (swell + lift) * ${RING_HEIGHT}, xz.y);
     gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
   }
 `;
@@ -187,6 +233,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
   const seenTouch = useRef(-1);
   const ring = useRef<THREE.Mesh>(null);
   const cursorFade = useRef(0);
+  const tapAt = useRef(-99);
   const cursorLast = useMemo(() => new THREE.Vector3(0, .03, -4), []);
   const project = useMemo(() => new THREE.Vector3(), []);
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
@@ -204,6 +251,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     uTime: uniforms.uTime,
     uDrops: uniforms.uDrops,
     uCenter: { value: new THREE.Vector3() },
+    uTap: { value: 0 },
   }), [uniforms]);
 
   useEffect(() => {
@@ -229,6 +277,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
       reducedMotion ? -1.5 : time.current - cue.age, lifeReady ? cue.ripple : 0);
     if (touch && touch.serial !== seenTouch.current) {
       seenTouch.current = touch.serial;
+      tapAt.current = time.current;
       raycaster.setFromCamera(new THREE.Vector2(touch.x * 2 - 1, 1 - touch.y * 2), camera);
       if (raycaster.ray.intersectPlane(plane, point) && onPond(point)) {
         uniforms.uDrops.value[1 + (touchIndex.current++ % 7)].set(point.x, point.z, time.current, 1.5);
@@ -251,6 +300,16 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     const hint = hintRef?.current;
     const progress = holdRef?.current ?? 0;
     ringUniforms.uProgress.value = progress;
+    // A hold under way pins the ring against the water until it is released; a
+    // plain click never reaches the threshold and floats straight back up.
+    if (progress > HOLD_PIN) tapAt.current = time.current - TAP_DOWN;
+    const tapAge = time.current - tapAt.current;
+    let tap = 0;
+    if (tapAge >= 0 && tapAge < TAP_DOWN) { const t = tapAge / TAP_DOWN; tap = t * (2 - t); }
+    else if (tapAge >= TAP_DOWN && tapAge < TAP_DOWN + TAP_HOLD) tap = 1;
+    else if (tapAge >= 0) tap = 1 - smoothunit(TAP_DOWN + TAP_HOLD, TAP_DOWN + TAP_HOLD + TAP_UP, tapAge);
+    // The clock is frozen under reduced motion, so the envelope cannot run.
+    ringUniforms.uTap.value = reducedMotion ? (progress > HOLD_PIN ? 1 : 0) : tap;
     let target = 0;
     let nearness = 0;
     if (cursor) {
