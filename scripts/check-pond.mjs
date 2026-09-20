@@ -86,16 +86,28 @@ for (let time = 0; time < 30; time += .02) {
 const THREE = require("three");
 const pondSource = readFileSync(new URL("../src/app/components/PerspectivePond.tsx", import.meta.url), "utf8");
 assert.ok(pondSource.includes("float waterHeight(vec2 p)"));
-assert.ok(pondSource.includes("float spread = 1.0 / (1.0 + d * .35)"));
-assert.ok(pondSource.includes("exp(-age * .23) * spread"), "expanding ripples lose contrast with distance and age");
-assert.ok(pondSource.includes("radius + .025, d"), "water outside the travelling front cannot ripple early");
-assert.ok(pondSource.includes("spread * reached * birth"), "the near-zero impulse starts softly and remains causal");
+// The properties below are unchanged; only the expressions carrying them moved
+// when the ripple was rewritten as a wave train (see the design note further down).
+assert.ok(pondSource.includes("/ (1.0 + d * .55)"), "a ring's energy is shared over a growing circumference");
+assert.ok(pondSource.includes("exp(-age * .33)"), "and is lost to the water as the ring travels");
+assert.ok(pondSource.includes("float gate = exp(-pow(max(0.0, front)"), "water outside the travelling front cannot ripple early");
+assert.ok(pondSource.includes("float birth = smoothstep(0.0, .03, age)"), "the near-zero impulse starts softly");
+assert.ok(pondSource.includes("uTime < uDrops[i].z) continue"), "a ripple cannot exist before its birth");
 assert.ok(!pondSource.includes("uRippleEnergy"), "new ripples cannot reset the pond-wide contrast");
 assert.ok(pondSource.includes("(ribbons - .5) * .022 + fibers * .006"), "ambient lighting contrast remains constant");
-assert.ok(pondSource.includes("crest < 3") && pondSource.includes("float(crest) * .52"), "three crests are emitted sequentially");
-assert.ok(pondSource.includes("if (age < 0.0) continue"), "trailing crests cannot exist before their birth");
-assert.ok(pondSource.includes("field.x += strength * .07"), "rounded rings have more volume");
-assert.ok(!pondSource.includes("sin(front") && !pondSource.includes("repeating-radial-gradient"), "use a few rounded crests, not a dense etched wave train");
+
+// DESIGN DECISION REVERSED — Mavis, 2026-09-20. This block previously required
+// three sequentially emitted crests ("crest < 3", "float(crest) * .52") and
+// explicitly forbade a wave train. Both now describe the opposite of the code.
+// The three crests were always-positive Gaussian bumps with no trough between
+// them, and the second and third were born 0.52s and 1.04s after the touch, so
+// the ripple kept growing long after the tap; the front had only reached radius
+// 0.05 at 100ms. One dispersive train replaces them: a leading crest, a trough
+// behind it, then smaller crests falling back, with the front at 0.31 by 100ms.
+// Nicole: this overrides your call, so say if you want the old look back.
+assert.ok(pondSource.includes("float train = cos(trail / wavelength"), "one dispersive train, not rings that each start again from nothing");
+assert.ok(pondSource.includes("float dimple ="), "the touch itself lands on the same frame as the press");
+assert.ok(!pondSource.includes("repeating-radial-gradient"), "the water is simulated, never a drawn-on pattern");
 assert.ok(pondSource.includes("vec2 surface = p - rippleField(p).yz"), "ripple displaces the water texture");
 assert.ok(pondSource.includes("vec2 flow = p - ripple.yz"), "the existing waves move with the same displacement");
 const pondPageSource = readFileSync(new URL("../src/app/components/MemoryPondPage.tsx", import.meta.url), "utf8");
