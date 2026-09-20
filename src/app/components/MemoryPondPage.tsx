@@ -49,7 +49,7 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
       const appear = ease(Math.min(1, elapsed / appearMs));
       const rise = ease(Math.min(1, Math.max(0, (elapsed - appearMs) / riseMs)));
       line.style.opacity = String(appear);
-      line.style.transform = `translate(-50%, -50%) translateY(calc(${(1 - appear) * 18}px - ${rise * 15}vh))`;
+      line.style.transform = `translate(-50%, -50%) translateY(calc(${(1 - appear) * 18}px - ${rise * 20}vh))`;
       if (appear >= 1 && rise >= 1) {
         markPondInstructionSeen();
         seen.current = true;
@@ -157,7 +157,7 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
         left: "50%",
         top: "50%",
         transform: seen.current
-          ? "translate(-50%, -50%) translateY(-15vh)"
+          ? "translate(-50%, -50%) translateY(-20vh)"
           : "translate(-50%, -50%) translateY(18px)",
         margin: 0,
         width: "min(28em, 86vw)",
