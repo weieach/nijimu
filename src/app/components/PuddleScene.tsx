@@ -1389,7 +1389,7 @@ export function PuddleScene({
               }}
             >
               <ParticleText
-                text="hold to create memory"
+                text="Hold to create memory"
                 seed={97}
                 animate={!reducedMotionPref}
                 inline

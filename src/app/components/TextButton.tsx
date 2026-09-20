@@ -1,10 +1,11 @@
 import { CSSProperties } from "react";
-import { SANS } from "../lib/theme";
+import { BODY_SIZE, SANS } from "../lib/theme";
 
 interface TextButtonProps {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  trailing?: string;
   style?: CSSProperties;
 }
 
@@ -13,6 +14,7 @@ export function TextButton({
   label,
   onClick,
   disabled = false,
+  trailing,
   style,
 }: TextButtonProps) {
   return (
@@ -21,12 +23,15 @@ export function TextButton({
       onClick={onClick}
       disabled={disabled}
       style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
         border: "none",
         background: "transparent",
         cursor: disabled ? "default" : "pointer",
         padding: 0,
         fontFamily: SANS,
-        fontSize: 12,
+        fontSize: BODY_SIZE,
         fontWeight: 400,
         color: "#7b7b87",
         letterSpacing: 0,
@@ -36,6 +41,11 @@ export function TextButton({
       }}
     >
       {label}
+      {trailing && (
+        <span aria-hidden style={{ letterSpacing: "-0.12em", lineHeight: 1 }}>
+          {trailing}
+        </span>
+      )}
     </button>
   );
 }

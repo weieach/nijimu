@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
 import { RECORD_START_PATH, SHAPE_BUILD_PATH } from "../lib/routes";
-import { SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
+import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
-import { BackButton } from "./BackButton";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
-import { PAGE_BG, PuddleBackdrop } from "./PuddleBackdrop";
-import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+
+/** Soft wash over the pond so long transcripts fade instead of colliding with the button. */
+const POND_FADE = "rgba(226, 230, 226, 0.88)";
 
 const SAMPLE_TRANSCRIPT =
   "I keep coming back to that summer. Not to him, exactly — but to who I was when I was around him. Someone who still had time to notice things. The light on a wall. The sound of a city at 2am. He gave me a camera and said, just feel for the click. I think what he actually meant was — slow down. Pay attention. I didn't. And then he was gone. And I kept moving. But sometimes I wonder if that version of me is still somewhere, waiting on that island, wondering why I never came back.";
@@ -23,8 +23,8 @@ interface PuddleTranscriptState {
 }
 
 /**
- * The transcript screen for the puddle homescreen: same water as the recording
- * page, held at depth, with the words laid over it in the same quiet chrome.
+ * Transcript chrome over the pond — same words as the former transcript
+ * page, without leaving the water or painting a second puddle.
  */
 export function PuddleTranscriptPage() {
   const location = useLocation();
@@ -130,6 +130,15 @@ export function PuddleTranscriptPage() {
     };
   }, [words.length, awaitingTranscript, transcribeError, transcript]);
 
+  const goToRecord = () => {
+    navigate(RECORD_START_PATH, {
+      state: {
+        ...(focus ? { focus } : {}),
+        ...(state?.shape ? { shape: state.shape } : {}),
+      },
+    });
+  };
+
   const handleContinue = () => {
     if (!highlightMode) {
       setHighlightMode(true);
@@ -221,26 +230,16 @@ export function PuddleTranscriptPage() {
 
   return (
     <div
-      className="relative w-full h-screen overflow-hidden select-none"
+      className="absolute inset-0 select-none"
       style={{
-        background: PAGE_BG,
+        zIndex: 30,
         userSelect: highlightMode ? "none" : "auto",
+        opacity: fadeOutContent ? 0 : 1,
+        transition: "opacity 1s ease",
+        pointerEvents: "none",
       }}
     >
       <style>{PARTICLE_TEXT_KEYFRAMES}</style>
-      <PuddleBackdrop focus={focus} />
-
-      <div
-        className="absolute inset-0"
-        style={{
-          zIndex: 10,
-          opacity: fadeOutContent ? 0 : 1,
-          transition: "opacity 1s ease",
-          pointerEvents: fadeOutContent ? "none" : "auto",
-        }}
-      >
-        <PageHeader layout="absolute" style={{ pointerEvents: "auto" }} />
-        <BackButton />
 
         {!highlightMode ? (
           <div
@@ -255,14 +254,9 @@ export function PuddleTranscriptPage() {
           >
             <p
               style={{
+                ...TITLE,
                 margin: 0,
-                fontFamily: SERIF_EXPOSURE,
-                fontSize:
-                  "clamp(16px, calc(16px + (21 - 16) * ((100vw - 390px) / (1024 - 390))), 21px)",
-                fontWeight: 400,
-                fontSynthesis: "none",
                 color: CHROME_GRAY,
-                whiteSpace: "nowrap",
               }}
             >
               <ParticleText
@@ -271,6 +265,7 @@ export function PuddleTranscriptPage() {
                 animate={!reducedMotion}
                 delay={0.2}
                 sweep={0.5}
+                wrap
               />
             </p>
             {(awaitingTranscript || transcribeError || isTyping) && (
@@ -278,7 +273,7 @@ export function PuddleTranscriptPage() {
                 style={{
                   margin: "8px 0 0",
                   fontFamily: SERIF,
-                  fontSize: 12,
+                  fontSize: NOTE_SIZE,
                   lineHeight: 1.45,
                   color: CHROME_GRAY,
                 }}
@@ -299,7 +294,7 @@ export function PuddleTranscriptPage() {
               width: "min(90%, 420px)",
               textAlign: "center",
               fontFamily: SERIF,
-              fontSize: 14,
+              fontSize: BODY_SIZE,
               lineHeight: 1.5,
               color: CHROME_GRAY,
               textTransform: "lowercase",
@@ -340,6 +335,7 @@ export function PuddleTranscriptPage() {
             justifyContent: "center",
             paddingLeft: "clamp(20px, 5vw, 40px)",
             paddingRight: "clamp(20px, 5vw, 40px)",
+            pointerEvents: fadeOutContent ? "none" : "auto",
           }}
         >
           <div
@@ -354,7 +350,7 @@ export function PuddleTranscriptPage() {
               ref={transcriptRef}
               style={{
                 fontFamily: SERIF_DISPLAY,
-                fontSize: "clamp(13px, 1.6vw, 15px)",
+                fontSize: PROSE_SIZE,
                 fontWeight: 400,
                 lineHeight: 1.7,
                 letterSpacing: "0.02em",
@@ -412,7 +408,7 @@ export function PuddleTranscriptPage() {
                   left: 0,
                   right: 0,
                   height: "clamp(100px, 16vh, 160px)",
-                  background: `linear-gradient(to top, ${PAGE_BG} 20%, rgba(237, 237, 238, 0) 100%)`,
+                  background: `linear-gradient(to top, ${POND_FADE} 20%, rgba(226, 230, 226, 0) 100%)`,
                   pointerEvents: "none",
                   zIndex: 2,
                   transition: "opacity 0.3s ease",
@@ -422,8 +418,7 @@ export function PuddleTranscriptPage() {
           </div>
         </div>
 
-        {/* nothing was heard — the only way on is to speak again */}
-        {transcribeError && (
+        {(transcribeError || showContinue) && (
           <div
             style={{
               position: "absolute",
@@ -431,42 +426,28 @@ export function PuddleTranscriptPage() {
               transform: "translateX(-50%)",
               bottom: 80,
               zIndex: 20,
-            }}
-          >
-            <PillButton
-              label="record again"
-              onClick={() =>
-                navigate(RECORD_START_PATH, {
-                  state: {
-                    ...(focus ? { focus } : {}),
-                    ...(state?.shape ? { shape: state.shape } : {}),
-                  },
-                })
-              }
-            />
-          </div>
-        )}
-
-        {showContinue && !transcribeError && (
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              bottom: 80,
-              zIndex: 20,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              pointerEvents: fadeOutContent ? "none" : "auto",
               transition: "opacity 0.5s ease",
             }}
           >
             <PillButton
-              label="continue"
-              onClick={handleContinue}
-              disabled={highlightMode && !hasHighlights}
-              trailing="›"
+              label="record again"
+              variant={showContinue && !transcribeError ? "outline" : "light"}
+              onClick={goToRecord}
             />
+            {showContinue && !transcribeError && (
+              <PillButton
+                label="continue"
+                onClick={handleContinue}
+                disabled={highlightMode && !hasHighlights}
+                trailing="›"
+              />
+            )}
           </div>
         )}
-      </div>
     </div>
   );
 }

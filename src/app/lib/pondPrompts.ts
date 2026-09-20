@@ -6,9 +6,9 @@ export const hasSeenPondInstruction = () => pondInstructionSeen;
 export const markPondInstructionSeen = () => { pondInstructionSeen = true; };
 
 export const POND_THOUGHTS = [
-  { text: "when was the last time your heart felt heavy?", x: -2.4, z: -4 },
-  { text: "who made an ordinary day feel different?", x: 2.6, z: -7.2 },
-  { text: "what is a small moment you wish you could return to?", x: -1.6, z: -10.4 },
+  { text: "When was the last time your heart felt heavy?", x: -2.4, z: -4 },
+  { text: "Who made an ordinary day feel different?", x: 2.6, z: -7.2 },
+  { text: "What is a small moment you wish you could return to?", x: -1.6, z: -10.4 },
 ];
 
 /** One drop, then its words, then stillness before the next pair. Seconds. */

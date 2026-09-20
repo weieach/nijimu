@@ -7,7 +7,7 @@ import { PageHeader } from "./PageHeader";
 import { BackButton } from "./BackButton";
 import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
 import { buildArchive } from "../lib/archive";
-import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { POND_ENTRY, pondTransition, pondSurfaceMask } from "../lib/pondTransition";
 import type { NameFlowState, NamingSession } from "./NamingRim";
 
@@ -20,12 +20,14 @@ interface GalleryEntry {
 }
 
 /**
- * One layout owns /, /memory, /memory/pond, /record/start, and /record/name. The gallery starts loading
- * behind the ink when Enter is pressed, and the naming rim becomes that same
- * gallery when a memory is saved — both need the page (and its canvases) to
- * survive the URL change. The pond also mounts before the rim leaves, so its
- * perspective canvas is ready before it rises into view; scrolling back keeps
- * the gallery mounted and plays the same clock in reverse.
+ * One layout owns /, /memory, /memory/pond, /record/start, /record/transcript,
+ * and /record/name. The gallery starts loading behind the ink when Enter is
+ * pressed, and the naming rim becomes that same gallery when a memory is
+ * saved — both need the page (and its canvases) to survive the URL change.
+ * Recording and transcript keep the pond mounted as chrome over the water.
+ * The pond also mounts before the rim leaves, so its perspective canvas is
+ * ready before it rises into view; scrolling back keeps the gallery mounted
+ * and plays the same clock in reverse.
  */
 export function LandingPage() {
   const navigate = useNavigate();
@@ -44,7 +46,8 @@ export function LandingPage() {
   const inGallery = pathname === CAROUSEL_PATH;
   const inNaming = pathname === NAMING_PATH;
   const inRecording = pathname === RECORD_START_PATH;
-  const inPond = pathname === MEMORY_POND_PATH || inRecording;
+  const inTranscript = pathname === TRANSCRIPT_PATH;
+  const inPond = pathname === MEMORY_POND_PATH || inRecording || inTranscript;
   if (seenPath !== pathname) {
     setSeenPath(pathname);
     if (!inGallery && !inNaming && !inPond) {
@@ -185,7 +188,7 @@ export function LandingPage() {
             maskImage: reducedMotion ? undefined : pondSurfaceMask(pondArrival),
             WebkitMaskImage: reducedMotion ? undefined : pondSurfaceMask(pondArrival),
             opacity: pondArrival }}>
-          <MemoryPondPage active={inPond && !pondLeaving} arrival={pondArrival} reducedMotion={reducedMotion} recording={inRecording} onReady={markPondReady} onLeave={closePond} />
+          <MemoryPondPage active={inPond && !pondLeaving} arrival={pondArrival} reducedMotion={reducedMotion} recording={inRecording} transcript={inTranscript} onReady={markPondReady} onLeave={closePond} />
         </div>
       )}
       {pondOnStage && (
@@ -195,7 +198,8 @@ export function LandingPage() {
             else closePond();
           }} />
           <BackButton onClick={() => {
-            if (inRecording) navigate(MEMORY_POND_PATH);
+            if (inTranscript) navigate(RECORD_START_PATH, { state: location.state });
+            else if (inRecording) navigate(MEMORY_POND_PATH);
             else if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
             else closePond();
           }} />

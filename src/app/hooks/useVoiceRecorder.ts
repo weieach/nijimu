@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createVoicePeakDetector } from "../lib/voicePeaks";
 
 const MAX_RECORDING_SECONDS = 60;
-/** Floor between voice pulses, so a sentence is a few rings, not a shiver. */
-const VOICE_PULSE_MIN_MS = 380;
-/** Above this, the microphone is hearing a voice rather than a room. */
-const VOICE_PULSE_LEVEL = 0.08;
 /** The meter feeds React at a walking pace — the water animates on its own clock. */
 const LEVEL_UPDATE_MS = 100;
 const LEVEL_UPDATE_STEP = 0.04;
@@ -40,9 +37,12 @@ export type VoiceRecorderError = "unsupported" | "not-allowed" | "failed";
  */
 export function useVoiceRecorder({
   onStop,
+  onVoicePeak,
 }: {
   /** Called once the recording has flushed. `null` when nothing was captured. */
   onStop?: (audio: Blob | null) => void;
+  /** One event per local loudness peak, while capture is active. */
+  onVoicePeak?: (level: number) => void;
 } = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -62,6 +62,8 @@ export function useVoiceRecorder({
 
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
+  const onVoicePeakRef = useRef(onVoicePeak);
+  onVoicePeakRef.current = onVoicePeak;
 
   /** stop() has to be callable from the interval it clears, so it lives behind a ref. */
   const stopRef = useRef<() => void>(() => {});
@@ -91,15 +93,17 @@ export function useVoiceRecorder({
 
     const context = new Ctx();
     audioContextRef.current = context;
+    void context.resume().catch(() => {});
     const analyser = context.createAnalyser();
     analyser.fftSize = 512;
     context.createMediaStreamSource(stream).connect(analyser);
 
     const samples = new Float32Array(analyser.fftSize);
     let smoothed = 0;
+    const detectPeak = createVoicePeakDetector();
     let reported = 0;
     let lastLevelAt = 0;
-    let lastPulseAt = 0;
+    let lastSampleAt = performance.now();
 
     const tick = () => {
       frameRef.current = requestAnimationFrame(tick);
@@ -108,17 +112,20 @@ export function useVoiceRecorder({
       let sum = 0;
       for (const sample of samples) sum += sample * sample;
       const rms = Math.sqrt(sum / samples.length);
-      smoothed = smoothed * 0.8 + Math.min(1, rms * 4) * 0.2;
-
       const now = performance.now();
+      // Same envelope at 30/60/120 fps, even while the water is rendering.
+      const blend = 1 - Math.exp(-Math.min(250, now - lastSampleAt) / 55);
+      lastSampleAt = now;
+      smoothed += (Math.min(1, rms * 4) - smoothed) * blend;
       if (now - lastLevelAt > LEVEL_UPDATE_MS && Math.abs(smoothed - reported) > LEVEL_UPDATE_STEP) {
         lastLevelAt = now;
         reported = smoothed;
         setLevel(smoothed);
       }
-      if (smoothed > VOICE_PULSE_LEVEL && now - lastPulseAt > VOICE_PULSE_MIN_MS) {
-        lastPulseAt = now;
+      const peak = detectPeak(smoothed, now);
+      if (peak !== null && recorderRef.current?.state === "recording") {
         setVoicePulse((pulse) => pulse + 1);
+        onVoicePeakRef.current?.(peak);
       }
     };
     tick();

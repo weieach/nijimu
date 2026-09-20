@@ -1,5 +1,5 @@
 import { CSSProperties, ReactNode } from "react";
-import { SANS, SANS_UI } from "../lib/theme";
+import { BUTTON_SIZE, BUTTON_SIZE_SM, NOTE_SIZE, SANS, SANS_UI } from "../lib/theme";
 
 interface PillButtonProps {
   label: string;
@@ -14,6 +14,8 @@ interface PillButtonProps {
   /** positioning only — visuals live here */
   style?: CSSProperties;
   className?: string;
+  /** Instructional dialogs keep sentence case; the rest of the chrome stays lowercase. */
+  transform?: "lowercase" | "none";
 }
 
 const DIMMED = "rgba(140, 140, 140, 0.5)";
@@ -32,6 +34,7 @@ export function PillButton({
   icon,
   style,
   className,
+  transform = "lowercase",
 }: PillButtonProps) {
   const isDark = variant === "dark";
   const isOutline = variant === "outline";
@@ -73,13 +76,13 @@ export function PillButton({
       <span
         style={{
           fontFamily: isDark ? SANS_UI : SANS,
-          fontSize: isOutline ? 14 : 16,
+          fontSize: isOutline ? BUTTON_SIZE_SM : BUTTON_SIZE,
           fontWeight: isDark ? 300 : 400,
           lineHeight: 1.5,
           letterSpacing: 0,
           color: textColor,
           textShadow: isDark ? "0px 4px 100px black" : "none",
-          textTransform: "lowercase",
+          textTransform: transform,
         }}
       >
         {label}
@@ -88,7 +91,7 @@ export function PillButton({
         <span
           style={{
             fontFamily: SANS_UI,
-            fontSize: isOutline ? 12 : 14,
+            fontSize: isOutline ? NOTE_SIZE : BUTTON_SIZE_SM,
             lineHeight: 0,
             letterSpacing: 0,
             color: textColor,

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, SHAPE_BUILD_PATH } from "./lib/routes";
+import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, SHAPE_BUILD_PATH, TRANSCRIPT_PATH } from "./lib/routes";
 import {
   LANDING_PAPER,
   LANDING_RETURN,
@@ -11,7 +11,6 @@ import {
   useLandingReturn,
   type LandingReturnPhase,
 } from "./lib/landingReturn";
-import { PuddleTranscriptPage } from "./components/PuddleTranscriptPage";
 import { BuildObjectPage } from "./components/BuildObjectPage";
 import { ShapeGrowPage } from "./components/ShapeGrowPage";
 import { ShapeColorPage } from "./components/ShapeColorPage";
@@ -102,22 +101,22 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       {
-        /* Landing, the dive carousel, the pond, recording, and naming share one
-           layout: Enter preloads the gallery behind the ink, recording keeps the
-           pond mounted, and saving a memory turns the naming rim into that same
-           gallery in place. The children render nothing themselves; LandingPage
-           reads the path. */
+        /* Landing, the dive carousel, the pond, recording, transcript, and
+           naming share one layout: Enter preloads the gallery behind the ink,
+           recording and transcript keep the pond mounted, and saving a memory
+           turns the naming rim into that same gallery in place. The children
+           render nothing themselves; LandingPage reads the path. */
         Component: LandingPage,
         children: [
           { path: "/", element: null },
           { path: CAROUSEL_PATH, element: null },
           { path: MEMORY_POND_PATH, element: null },
           { path: RECORD_START_PATH, element: null },
+          { path: TRANSCRIPT_PATH, element: null },
           { path: NAMING_PATH, element: null },
         ],
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
-      { path: "/record/transcript", Component: PuddleTranscriptPage },
       { path: SHAPE_BUILD_PATH, Component: BuildObjectPage },
       { path: "/record/shape/grow", Component: ShapeGrowPage },
       { path: "/record/shape/color", Component: ShapeColorPage },

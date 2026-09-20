@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useHoldToCreate } from "../hooks/useHoldToCreate";
 import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH } from "../lib/routes";
 import { CHROME_GRAY } from "../lib/colors";
@@ -7,11 +7,14 @@ import { INSTRUCTION_SIZE, SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 import { POND_THOUGHTS, hasSeenPondInstruction, markPondInstructionSeen, pondPromptCue } from "../lib/pondPrompts";
 import { PerspectivePond, type PondTouch } from "./PerspectivePond";
 import { PondRecordingOverlay } from "./PondRecordingOverlay";
+import { PuddleTranscriptPage } from "./PuddleTranscriptPage";
 
-export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, onReady, onLeave }: {
-  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; onReady?: () => void; onLeave?: () => void;
+export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, transcript = false, onReady, onLeave }: {
+  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; transcript?: boolean; onReady?: () => void; onLeave?: () => void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const overlaid = recording || transcript;
   const [touch, setTouch] = useState<PondTouch | null>(null);
   const promptRefs = useRef<Array<HTMLDivElement | null>>([]);
   const cueRef = useRef(pondPromptCue(0));
@@ -23,8 +26,8 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
   const hintReveal = useRef(0);
   const holdProgress = useRef(0);
   const seen = useRef(hasSeenPondInstruction());
-  const [lifeReady, setLifeReady] = useState(() => recording || hasSeenPondInstruction());
-  const enabled = active && arrival === 1 && !recording;
+  const [lifeReady, setLifeReady] = useState(() => overlaid || hasSeenPondInstruction());
+  const enabled = active && arrival === 1 && !overlaid;
   const ready = useCallback(() => onReady?.(), [onReady]);
   const touchRef = useRef(touch);
   touchRef.current = touch;
@@ -112,18 +115,19 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     return () => cancelAnimationFrame(raf);
   }, [enabled, lifeReady, reducedMotion]);
   useEffect(() => {
-    if (!recording) hold.reset();
-  }, [recording, hold.reset]);
+    if (!overlaid) hold.reset();
+  }, [overlaid, hold.reset]);
   useEffect(() => {
     if (!active) return;
     const keys = (e: KeyboardEvent) => {
       if (e.key !== "Escape" && e.key !== "ArrowUp") return;
-      if (recording) navigate(MEMORY_POND_PATH);
+      if (transcript) navigate(RECORD_START_PATH, { state: location.state });
+      else if (recording) navigate(MEMORY_POND_PATH);
       else back();
     };
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
-  }, [active, recording, back, navigate]);
+  }, [active, recording, transcript, back, navigate, location.state]);
   useEffect(() => {
     if (!enabled) return;
     buttonRef.current?.focus({ preventScroll: true });
@@ -148,13 +152,13 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     window.addEventListener("wheel", wheel, { passive: false });
     return () => window.removeEventListener("wheel", wheel);
   }, [enabled, reducedMotion, back]);
-  const pulseWater = useCallback(() => {
-    setTouch({ x: 0.5, y: 0.65, serial: performance.now() });
+  const pulseWater = useCallback((at: { x: number; y: number; strength: number }) => {
+    setTouch({ ...at, serial: performance.now() });
   }, []);
 
-  return <section aria-label={recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
+  return <section aria-label={transcript ? "your spoken memory" : recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
     style={{ position: "absolute", inset: 0, overflow: "hidden", background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}>
-    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} />
+    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} promptRipples={!overlaid} />
     <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)" }} />
     {POND_THOUGHTS.map((thought, i) => <div key={thought.text} ref={el => { promptRefs.current[i] = el; }} data-pond-prompt={i} aria-hidden="true"
       style={{ position: "absolute", top: 0, left: 0, width: "min(148px, 42vw)", textAlign: "center", pointerEvents: "none", opacity: 0, transform: "translate(-50%, -100%) translate(50vw, 58vh)", transformOrigin: "center bottom", color: CHROME_GRAY, fontFamily: SERIF_EXPOSURE, fontWeight: 400, fontSynthesis: "none", fontSize: INSTRUCTION_SIZE, lineHeight: 1.45, textShadow: "0 1px 16px #f3f4ece6", paddingBottom: 52 }}>
@@ -181,12 +185,12 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
         fontSynthesis: "none",
         fontSize: INSTRUCTION_SIZE,
         lineHeight: 1.45,
-        opacity: recording ? 0 : seen.current ? arrival : 0,
-        transition: recording ? "opacity 400ms ease" : undefined,
+        opacity: overlaid ? 0 : seen.current ? arrival : 0,
+        transition: overlaid ? "opacity 400ms ease" : undefined,
       }}
     >To create a new memory artifact, record yourself talking about a particular memory.
     </p>
-    {!recording && <button ref={buttonRef} aria-label="hold to begin" aria-describedby="pond-hold-help" disabled={!enabled}
+    {!overlaid && <button ref={buttonRef} aria-label="Hold to begin" aria-describedby="pond-hold-help" disabled={!enabled}
       onPointerDown={e => {
         if (e.button !== 0) return;
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -216,13 +220,14 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
       onKeyDown={e => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); hold.start(); } }}
       onKeyUp={e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); hold.cancel(); } }}
       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", outline: "none", background: "transparent", touchAction: "none", cursor: "default", zIndex: 10 }}>
-      <span className="sr-only">hold for two seconds, or hold space or enter. release to cancel.</span>
+      <span className="sr-only">Hold for two seconds, or hold Space or Enter. Release to cancel.</span>
     </button>}
     <div ref={hintRef} id="pond-hold-help" aria-hidden
       style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", zIndex: 20, opacity: 0, filter: "blur(6px)", whiteSpace: "nowrap", fontFamily: SANS, fontSize: INSTRUCTION_SIZE, letterSpacing: "0.01em", color: CHROME_GRAY, transformOrigin: "left top" }}>
-      hold to begin
+      Hold to begin
     </div>
     {recording && <PondRecordingOverlay reducedMotion={reducedMotion} onVoicePulse={pulseWater} />}
+    {transcript && <PuddleTranscriptPage />}
     <span className="sr-only" role="status">{recording ? "ready to record" : ""}</span>
   </section>;
 }

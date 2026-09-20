@@ -1,7 +1,7 @@
 import { CSSProperties, ReactNode } from "react";
 import { CHROME_GRAY } from "../lib/colors";
 import { PAGE_BG } from "./PuddleBackdrop";
-import { SANS, SANS_UI, SERIF, SERIF_CJK, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
+import { BODY_SIZE, BUTTON_SIZE, META, NOTE_SIZE, PROSE_SIZE, SANS, SANS_UI, SERIF, SERIF_CJK, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 import { TextButton } from "./TextButton";
@@ -13,11 +13,7 @@ const SECTION: CSSProperties = {
 };
 
 const CAPTION: CSSProperties = {
-  fontFamily: SANS,
-  fontSize: 11,
-  letterSpacing: "0.08em",
-  color: "#a8a8b0",
-  textTransform: "lowercase",
+  ...META,
   margin: "0 0 10px",
 };
 
@@ -83,7 +79,7 @@ export function StyleGuidePage() {
         <p
           style={{
             fontFamily: SERIF,
-            fontSize: 14,
+            fontSize: BODY_SIZE,
             color: CHROME_GRAY,
             margin: "0 0 48px",
             textTransform: "lowercase",
@@ -96,7 +92,7 @@ export function StyleGuidePage() {
           <h2
             style={{
               fontFamily: SERIF,
-              fontSize: 12,
+              fontSize: NOTE_SIZE,
               fontWeight: 400,
               color: "#acacac",
               letterSpacing: "0.04em",
@@ -201,7 +197,7 @@ export function StyleGuidePage() {
           <h2
             style={{
               fontFamily: SERIF,
-              fontSize: 12,
+              fontSize: NOTE_SIZE,
               fontWeight: 400,
               color: "#acacac",
               letterSpacing: "0.04em",
@@ -255,63 +251,15 @@ export function StyleGuidePage() {
             </span>
           </Specimen>
 
-          <Specimen name="choice" note="your words / polished">
+          <Specimen name="meta" note="uppercase META">
+            <span style={META}>Member Since</span>
+          </Specimen>
+
+          <Specimen name="hint" note="NOTE_SIZE">
             <span
               style={{
                 fontFamily: SERIF,
-                fontSize: 12,
-                color: "#7b7b87",
-                textTransform: "lowercase",
-              }}
-            >
-              your words
-            </span>
-            <span
-              style={{
-                fontFamily: SERIF,
-                fontSize: 12,
-                color: "#acacac",
-                textTransform: "lowercase",
-              }}
-            >
-              polished
-            </span>
-          </Specimen>
-
-          <Specimen name="profile" note="uppercase meta">
-            <span
-              style={{
-                fontFamily: SANS,
-                fontSize: 12,
-                fontWeight: 500,
-                letterSpacing: "0.5px",
-                color: "#9b9ba3",
-                textTransform: "uppercase",
-              }}
-            >
-              Member Since
-            </span>
-          </Specimen>
-
-          <Specimen name="eyebrow" note="instructional meta">
-            <span
-              style={{
-                fontFamily: SANS,
-                fontSize: 11,
-                color: "#a8a8b0",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
-              }}
-            >
-              click to select · hover to preview
-            </span>
-          </Specimen>
-
-          <Specimen name="hint" note="caption / status">
-            <span
-              style={{
-                fontFamily: SERIF,
-                fontSize: 12,
+                fontSize: NOTE_SIZE,
                 lineHeight: 1.45,
                 color: CHROME_GRAY,
               }}
@@ -320,11 +268,11 @@ export function StyleGuidePage() {
             </span>
           </Specimen>
 
-          <Specimen name="instruction">
+          <Specimen name="instruction" note="BODY_SIZE">
             <span
               style={{
                 fontFamily: SERIF,
-                fontSize: 14,
+                fontSize: BODY_SIZE,
                 lineHeight: 1.5,
                 color: CHROME_GRAY,
                 textTransform: "lowercase",
@@ -334,13 +282,10 @@ export function StyleGuidePage() {
             </span>
           </Specimen>
 
-          <Specimen name="prompt" note="SERIF_EXPOSURE">
+          <Specimen name="title" note="TITLE">
             <span
               style={{
-                fontFamily: SERIF_EXPOSURE,
-                fontSize: 18,
-                fontWeight: 400,
-                fontSynthesis: "none",
+                ...TITLE,
                 color: CHROME_GRAY,
               }}
             >
@@ -348,11 +293,11 @@ export function StyleGuidePage() {
             </span>
           </Specimen>
 
-          <Specimen name="display" note="SERIF_DISPLAY">
+          <Specimen name="display" note="PROSE_SIZE">
             <span
               style={{
                 fontFamily: SERIF_DISPLAY,
-                fontSize: 16,
+                fontSize: PROSE_SIZE,
                 fontWeight: 400,
                 lineHeight: 1.6,
                 letterSpacing: "0.02em",
@@ -363,11 +308,11 @@ export function StyleGuidePage() {
             </span>
           </Specimen>
 
-          <Specimen name="button label" note="SANS / SANS_UI">
+          <Specimen name="button label" note="BUTTON_SIZE">
             <span
               style={{
                 fontFamily: SANS,
-                fontSize: 16,
+                fontSize: BUTTON_SIZE,
                 letterSpacing: "0.01em",
                 color: "#7b7b87",
                 textTransform: "lowercase",
@@ -378,7 +323,7 @@ export function StyleGuidePage() {
             <span
               style={{
                 fontFamily: SANS_UI,
-                fontSize: 16,
+                fontSize: BUTTON_SIZE,
                 fontWeight: 300,
                 letterSpacing: "0.03em",
                 color: "#7b7b87",

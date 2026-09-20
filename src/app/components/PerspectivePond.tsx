@@ -3,12 +3,17 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { CHROME_GRAY } from "../lib/colors";
 import { POND_THOUGHTS, type PondPromptCue } from "../lib/pondPrompts";
+import { POND_TRAIL_SLOTS, POND_TRAIL_LIFETIME, samplePondTrail, type TrailPoint, type TrailAnchor } from "../lib/pondTrail";
+import { POND_DROP_SLOTS } from "../lib/voicePeaks";
 
-export interface PondTouch { x: number; y: number; serial: number }
+export interface PondTouch { x: number; y: number; serial: number; strength?: number }
 
 const waves = /* glsl */ `
   uniform float uTime;
-  uniform vec4 uDrops[8];
+  uniform vec4 uDrops[${POND_DROP_SLOTS}];
+  uniform vec4 uTrails[${POND_TRAIL_SLOTS}];
+  uniform vec4 uTrailControls[${POND_TRAIL_SLOTS}];
+  uniform vec2 uTrailTimes[${POND_TRAIL_SLOTS}];
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float noise(vec2 p) {
     vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -30,7 +35,7 @@ const waves = /* glsl */ `
   vec3 rippleField(vec2 p) {
     vec3 field = vec3(0.0);
     vec2 wob = breath(p);
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < ${POND_DROP_SLOTS}; i++) {
       if (uDrops[i].w < .001 || uTime < uDrops[i].z) continue;
       float age = uTime - uDrops[i].z;
       // Long spent: nothing left to add, and the slot is usually still filled.
@@ -64,6 +69,47 @@ const waves = /* glsl */ `
       // Push the water's material coordinates along with the wave. This bends
       // existing currents and light ribbons instead of drawing atop them.
       field.yz += dir * (amp * .62 + dimple * .3) * uDrops[i].w;
+    }
+    // Treat the joined curves as ONE wake. Summing individual strokes made
+    // their end caps brighten into short mechanical streaks.
+    vec2 wakePoint = p + wob * .085;
+    float wakeDistance = 10000.0;
+    float wakeAge = 0.0;
+    vec2 wakeDelta = vec2(0.0);
+    for (int i = 0; i < ${POND_TRAIL_SLOTS}; i++) {
+      float age = uTime - uTrailControls[i].w;
+      if (uTrailTimes[i].y < .001 || age < 0.0 || age > ${POND_TRAIL_LIFETIME.toFixed(2)}) continue;
+      vec2 a = uTrails[i].xy;
+      vec2 b = uTrailControls[i].xy;
+      vec2 c = uTrails[i].zw;
+      vec2 chord = c - a;
+      vec2 bend = a - 2.0 * b + c;
+      float along = clamp(dot(wakePoint - a, chord) / max(dot(chord, chord), .0001), 0.0, 1.0);
+      // Closest point on the quadratic, not a polygonal approximation.
+      for (int step = 0; step < 3; step++) {
+        vec2 q = a + 2.0 * along * (b - a) + along * along * bend;
+        vec2 tangent = 2.0 * (b - a) + 2.0 * along * bend;
+        float denominator = dot(tangent, tangent) + dot(q - wakePoint, 2.0 * bend);
+        along = clamp(along - dot(q - wakePoint, tangent) / max(denominator, .0001), 0.0, 1.0);
+      }
+      vec2 delta = wakePoint - (a + 2.0 * along * (b - a) + along * along * bend);
+      float d = length(delta);
+      if (d < wakeDistance) {
+        wakeDistance = d;
+        wakeDelta = delta;
+        // Age varies continuously along the path, including across joins.
+        wakeAge = uTime - mix(uTrailControls[i].z, uTrailControls[i].w, along);
+      }
+    }
+    if (wakeDistance < 1000.0 && wakeAge < ${POND_TRAIL_LIFETIME.toFixed(2)}) {
+      float d = wakeDistance;
+      float radius = .035 + wakeAge * .32;
+      float crest = exp(-pow((d - radius) / (.06 + wakeAge * .05), 2.0));
+      float trough = exp(-pow(d / max(radius * .7, .025), 2.0));
+      float life = max(0.0, 1.0 - wakeAge / ${POND_TRAIL_LIFETIME.toFixed(2)});
+      float energy = life * life * smoothstep(0.0, .035, wakeAge) * .8;
+      field.x += (crest * .014 - trough * .008) * energy;
+      field.yz += wakeDelta / max(d, .025) * crest * .12 * energy;
     }
     return field;
   }
@@ -223,13 +269,16 @@ interface PondProps {
   onReady: () => void;
   /** Prompt ripples and the cursor ring wait until the invitation has settled. */
   lifeReady?: boolean;
+  promptRipples?: boolean;
 }
 
-function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true }: PondProps) {
+function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true, promptRipples = true }: PondProps) {
   const { camera, size, gl } = useThree();
   const time = useRef(0);
   const ready = useRef(false);
   const touchIndex = useRef(0);
+  const trailIndex = useRef(0);
+  const trailAnchor = useRef<TrailAnchor | null>(null);
   const seenTouch = useRef(-1);
   const ring = useRef<THREE.Mesh>(null);
   const cursorFade = useRef(0);
@@ -242,7 +291,10 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
   const point = useMemo(() => new THREE.Vector3(), []);
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
-    uDrops: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0)) },
+    uDrops: { value: Array.from({ length: POND_DROP_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) },
+    uTrails: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
+    uTrailControls: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
+    uTrailTimes: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector2(-99, 0)) },
   }), []);
   const ringUniforms = useMemo(() => ({
     uProgress: { value: 0 },
@@ -250,6 +302,9 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     uColor: { value: new THREE.Color(CHROME_GRAY) },
     uTime: uniforms.uTime,
     uDrops: uniforms.uDrops,
+    uTrails: uniforms.uTrails,
+    uTrailControls: uniforms.uTrailControls,
+    uTrailTimes: uniforms.uTrailTimes,
     uCenter: { value: new THREE.Vector3() },
     uTap: { value: 0 },
   }), [uniforms]);
@@ -274,13 +329,13 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     // Slot zero belongs to the only visible prompt. Old prompt ripples cannot
     // accumulate; the other slots are reserved for the user's own touches.
     uniforms.uDrops.value[0].set(size.width < 600 ? 0 : thought.x, thought.z,
-      reducedMotion ? -1.5 : time.current - cue.age, lifeReady ? cue.ripple : 0);
+      reducedMotion ? -1.5 : time.current - cue.age, lifeReady && promptRipples ? cue.ripple : 0);
     if (touch && touch.serial !== seenTouch.current) {
       seenTouch.current = touch.serial;
       tapAt.current = time.current;
       raycaster.setFromCamera(new THREE.Vector2(touch.x * 2 - 1, 1 - touch.y * 2), camera);
       if (raycaster.ray.intersectPlane(plane, point) && onPond(point)) {
-        uniforms.uDrops.value[1 + (touchIndex.current++ % 7)].set(point.x, point.z, time.current, 1.5);
+        uniforms.uDrops.value[1 + (touchIndex.current++ % (POND_DROP_SLOTS - 1))].set(point.x, point.z, time.current, touch.strength ?? 1.5);
       }
     }
     const nearX = size.width < 600 ? 0 : POND_THOUGHTS[0].x;
@@ -312,6 +367,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     ringUniforms.uTap.value = reducedMotion ? (progress > HOLD_PIN ? 1 : 0) : tap;
     let target = 0;
     let nearness = 0;
+    let trailPoint: TrailPoint | null = null;
     if (cursor) {
       ndc.set(cursor.x * 2 - 1, 1 - cursor.y * 2);
       raycaster.setFromCamera(ndc, camera);
@@ -320,7 +376,19 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
         const dist = Math.hypot(camera.position.x - point.x, camera.position.y - .03, camera.position.z - point.z);
         nearness = Math.min(1, nearDist / dist);
         target = lifeReady ? smoothunit(RING_FADE_IN, RING_FADE_FULL, nearness) : 0;
+        if (!reducedMotion && arrival === 1 && target > .05) {
+          trailPoint = { x: point.x, z: point.z, time: time.current };
+        }
       }
+    }
+    const trail = samplePondTrail(trailAnchor.current, trailPoint);
+    trailAnchor.current = trail.anchor;
+    if (trail.segment) {
+      const slot = trailIndex.current++ % POND_TRAIL_SLOTS;
+      const { from, control, to, strength } = trail.segment;
+      uniforms.uTrails.value[slot].set(from.x, from.z, to.x, to.z);
+      uniforms.uTrailControls.value[slot].set(control.x, control.z, from.time, to.time);
+      uniforms.uTrailTimes.value[slot].set(time.current, strength);
     }
     cursorFade.current += (target - cursorFade.current) * (1 - Math.exp(-(reducedMotion ? 18 : 7) * Math.min(delta, .05)));
     const fade = cursorFade.current;
