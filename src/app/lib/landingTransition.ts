@@ -8,8 +8,8 @@ export const INK_ENTRY = {
   /** Landing 滲む nijimu row settles into the PageHeader seat. */
   markEnd: 1900,
   shrinkEnd: 1900,
-  ringEnd: 3200,
-  ringHoldEnd: 3650,
+  pathEnd: 3200,
+  pathHoldEnd: 3650,
   unfoldEnd: 4550,
   growEnd: 5800,
   end: 6250,
@@ -18,22 +18,12 @@ export const INK_ENTRY = {
 
 export const INK_POINTER_SIZE = 12;
 
-/** Chronological seat for the landing → carousel hand-off: not the first
- * three, not the last three — any one of the middle memories. */
+/** Leave room for the longer, receding tail and two foreground memories. */
 export function pickLandingGalleryIndex(count: number): number {
-  const margin = 3;
-  if (count <= margin * 2) return Math.max(0, Math.floor((count - 1) / 2));
-  const lo = margin;
-  const hi = count - margin - 1;
+  if (count < 8) return Math.max(0, count - 3);
+  const lo = 5;
+  const hi = count - 3;
   return lo + Math.floor(Math.random() * (hi - lo + 1));
-}
-
-/** Oldest at twelve o'clock, newer memories following clockwise, just as
- * the archive's right-hand neighbours do. Equal dates keep archive order. */
-export function inkRingPoint(width: number, height: number, index: number, count: number) {
-  const radius = Math.max(60, Math.min(width * 0.34, height * 0.3));
-  const angle = index / Math.max(1, count) * Math.PI * 2;
-  return { x: width / 2 + Math.sin(angle) * radius, y: height * 0.47 - Math.cos(angle) * radius };
 }
 
 export function smoothProgress(time: number, start: number, end: number): number {

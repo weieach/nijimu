@@ -4,15 +4,16 @@ import { isPuddleSupported } from "../lib/puddle/simulation";
 import { PuddleScene } from "./PuddleScene";
 import { PageHeader } from "./PageHeader";
 import { buildArchive } from "../lib/archive";
-import { MEMORY_POND_PATH } from "../lib/routes";
+import { MEMORY_POND_PATH, RECORD_START_PATH } from "../lib/routes";
 import { INK_ENTRY, type InkArrival } from "../lib/landingTransition";
+import { defaultCarouselIndex } from "../lib/carouselLayout";
 import { DiveGalleryHost, type NamingSession } from "./NamingRim";
 
 /** Dedicated 3D carousel at /memory — the dive gallery, not the blob overlay.
     Also hosts the naming rim, so saving only changes props on this scene. */
 export function MemoryCarouselPage({
   inkArrival,
-  galleryFocusId,
+  galleryFocusId: requestedFocusId,
   galleryCarried = false,
   naming = null,
   onPondEnter,
@@ -31,6 +32,7 @@ export function MemoryCarouselPage({
 }) {
   const navigate = useNavigate();
   const items = useMemo(() => buildArchive(), [naming]);
+  const galleryFocusId = requestedFocusId ?? items[defaultCarouselIndex(items.length)]?.id;
   const [activeIdx, setActiveIdx] = useState(() => {
     if (!galleryFocusId) return 0;
     const i = items.findIndex((a) => a.id === galleryFocusId);
@@ -60,7 +62,7 @@ export function MemoryCarouselPage({
       }
     }
   }
-  const goRecord = () => navigate("/record/start");
+  const goRecord = () => navigate(RECORD_START_PATH);
   const goHome = () => navigate("/");
   const goPond = onPondEnter ?? (() => navigate(MEMORY_POND_PATH));
   const goGrid = () => navigate("/memory/scroll");

@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH } from "./lib/routes";
-import { PuddleRecordingPage } from "./components/PuddleRecordingPage";
+import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "./lib/routes";
 import { PuddleTranscriptPage } from "./components/PuddleTranscriptPage";
 import { MemorySavedPage } from "./components/MemorySavedPage";
 import { ProfilePanel } from "./components/ProfilePanel";
@@ -39,20 +38,21 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       {
-        /* Landing, the dive carousel, the pond, and naming share one layout:
-           Enter preloads the gallery behind the ink, and saving a memory turns
-           the naming rim into that same gallery in place. The children render
-           nothing themselves; LandingPage reads the path. */
+        /* Landing, the dive carousel, the pond, recording, and naming share one
+           layout: Enter preloads the gallery behind the ink, recording keeps the
+           pond mounted, and saving a memory turns the naming rim into that same
+           gallery in place. The children render nothing themselves; LandingPage
+           reads the path. */
         Component: LandingPage,
         children: [
           { path: "/", element: null },
           { path: CAROUSEL_PATH, element: null },
           { path: MEMORY_POND_PATH, element: null },
+          { path: RECORD_START_PATH, element: null },
           { path: NAMING_PATH, element: null },
         ],
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
-      { path: "/record/start", Component: PuddleRecordingPage },
       { path: "/record/transcript", Component: PuddleTranscriptPage },
       { path: "/record/saved", Component: MemorySavedPage },
       { path: "/memory/scroll", Component: MemoryScrollPage },

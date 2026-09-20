@@ -13,6 +13,10 @@ export function useHoldToCreate(onComplete: () => void, enabled: boolean) {
     cancelAnimationFrame(raf.current);
     setProgress(0);
   }, []);
+  const reset = useCallback(() => {
+    committed.current = false;
+    cancel();
+  }, [cancel]);
   const start = useCallback(() => {
     if (!enabled || holding.current || committed.current) return;
     holding.current = true;
@@ -42,5 +46,5 @@ export function useHoldToCreate(onComplete: () => void, enabled: boolean) {
       document.removeEventListener("visibilitychange", hide);
     };
   }, [cancel]);
-  return { progress, start, cancel };
+  return { progress, start, cancel, reset };
 }

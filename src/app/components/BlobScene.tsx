@@ -8,8 +8,8 @@ import { PageHeader, PAGE_HEADER_MARK } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
-import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, inkRingPoint, smoothProgress, type InkArrival } from "../lib/landingTransition";
-import { inkGallerySeat } from "./PuddleDiveGallery";
+import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, smoothProgress, type InkArrival } from "../lib/landingTransition";
+import { carouselSeat, carouselContainsOffset, inkUnfoldSeat } from "../lib/carouselLayout";
 
 /** Caption + annotation dot — shared so the marks match the words. */
 const BLOB_CAPTION_COLOR = "#D6DADB";
@@ -431,7 +431,7 @@ export function BlobScene({
     setMarkHeld(true);
   }, [landingArrival, headerGone, markHeld]);
   const entryShrink = landingArrival && !entryReduced ? smoothProgress(entryTime, INK_ENTRY.labelsEnd, INK_ENTRY.shrinkEnd) : 0;
-  const entryPaper = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 320 : INK_ENTRY.ringHoldEnd,
+  const entryPaper = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 320 : INK_ENTRY.pathHoldEnd,
     entryReduced ? INK_ENTRY.reducedEnd : INK_ENTRY.growEnd) : 1;
 
   /* ─── sizing ─── */
@@ -476,20 +476,25 @@ export function BlobScene({
           radius: style.borderRadius, blur: blobs[i].blur * scale, opacity: blobs[i].opacity };
       });
     }
-    const gather = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.shrinkEnd, INK_ENTRY.ringEnd);
-    const unfold = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.ringHoldEnd, INK_ENTRY.unfoldEnd);
+    const gather = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.shrinkEnd, INK_ENTRY.pathEnd);
+    const unfold = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.pathHoldEnd, INK_ENTRY.unfoldEnd);
     const growth = inkGrowth(landingArrival);
     entryCapture.current.forEach((captured, i) => {
       const el = blobEls.current[i];
       if (!el) return;
       const slot = gallerySlot[i];
       const offset = slot - landingFocusSlot;
-      const ring = inkRingPoint(vw, vh, (offset + blobs.length) % blobs.length, blobs.length);
-      const seat = inkGallerySeat(vw, vh, offset);
-      const x = lerp(lerp(lerp(captured.x, captured.dotX, entryShrink), ring.x, gather), seat.x, unfold);
-      const y = lerp(lerp(lerp(captured.y, captured.dotY, entryShrink), ring.y, gather), seat.y, unfold);
-      const width = lerp(captured.width, INK_POINTER_SIZE, entryShrink);
-      const height = lerp(captured.height, INK_POINTER_SIZE, entryShrink);
+      const path = inkUnfoldSeat(vw, vh, slot, blobs.length, landingFocusSlot, unfold);
+      const seat = carouselSeat(vw, vh, offset);
+      // Out-of-range pointers keep travelling along the extended projection.
+      // Only visible seats crossfade into artifacts; the rest leave the frame
+      // physically, without fading away when the gallery's render range ends.
+      const becomesArtifact = carouselContainsOffset(offset) && seat.opacity > 0;
+      const x = lerp(lerp(captured.x, captured.dotX, entryShrink), path.x, gather);
+      const y = lerp(lerp(captured.y, captured.dotY, entryShrink), path.y, gather);
+      const pointerScale = lerp(1, path.scale, gather);
+      const width = lerp(captured.width, INK_POINTER_SIZE * pointerScale, entryShrink);
+      const height = lerp(captured.height, INK_POINTER_SIZE * pointerScale, entryShrink);
       el.style.animation = "none";
       el.style.scale = "1";
       el.style.left = `${x - cr.left}px`; el.style.top = `${y - cr.top}px`;
@@ -497,7 +502,7 @@ export function BlobScene({
       el.style.transform = `matrix(${lerp(captured.a, 1, entryShrink)}, ${lerp(captured.b, 0, entryShrink)}, ${lerp(captured.c, 0, entryShrink)}, ${lerp(captured.d, 1, entryShrink)}, ${-width / 2}, ${-height / 2})`;
       el.style.borderRadius = entryShrink > 0.98 ? "50%" : captured.radius;
       el.style.filter = `blur(${captured.blur * (1 - entryShrink)}px)`;
-      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * (Math.abs(offset) > 3 ? 1 - unfold : 1) * (1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24))}`;
+      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * lerp(1, becomesArtifact ? seat.opacity : 1, unfold) * (becomesArtifact || entryReduced ? 1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24) : 1)}`;
       if (entryShrink > 0.98) el.style.background = blobs[i].color.match(/#[0-9a-f]{6}/i)?.[0] ?? MEMORY_COLORS[0];
     });
   }, [landingArrival, entryTime, entryShrink, entryReduced, gallerySlot, landingFocusSlot, blobs, scale, vw, vh]);
@@ -546,11 +551,12 @@ export function BlobScene({
     if (!ctx) return;
     let painted = false;
     const paint = () => {
-      // The old 512px texture stretched each grain into a block on desktop.
-      // Match the landing's display pixels so the texture stays fine at any size.
+      // Slightly larger grains, still sized relative to the display rather
+      // than stretching a fixed texture across different viewport sizes.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = classicChrome ? Math.max(1, Math.round(c.clientWidth * dpr)) : 512;
-      const height = classicChrome ? Math.max(1, Math.round(c.clientHeight * dpr)) : 512;
+      const grainSize = 1.25;
+      const width = classicChrome ? Math.max(1, Math.round(c.clientWidth * dpr / grainSize)) : 512;
+      const height = classicChrome ? Math.max(1, Math.round(c.clientHeight * dpr / grainSize)) : 512;
       if (painted && c.width === width && c.height === height) return;
       c.width = width;
       c.height = height;
@@ -1301,7 +1307,7 @@ export function BlobScene({
       ref={viewportRef}
       inert={!!landingArrival}
       data-ink-stage={!landingArrival ? "field" : entryTime < INK_ENTRY.descEnd ? "desc" : entryTime < INK_ENTRY.headerEnd ? "header" : entryTime < INK_ENTRY.labelsEnd ? "labels"
-        : entryTime < INK_ENTRY.shrinkEnd ? "shrink" : entryTime < INK_ENTRY.ringEnd ? "gather" : entryTime < INK_ENTRY.ringHoldEnd ? "ring"
+        : entryTime < INK_ENTRY.shrinkEnd ? "shrink" : entryTime < INK_ENTRY.pathEnd ? "gather" : entryTime < INK_ENTRY.pathHoldEnd ? "curve"
         : entryTime < INK_ENTRY.unfoldEnd ? "unfold" : "artifacts"}
       className="relative w-full h-screen overflow-hidden cursor-pointer select-none"
       style={{

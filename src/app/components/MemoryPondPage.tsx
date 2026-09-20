@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useHoldToCreate } from "../hooks/useHoldToCreate";
-import { CAROUSEL_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH } from "../lib/routes";
 import { CHROME_GRAY } from "../lib/colors";
 import { INSTRUCTION_SIZE, SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 import { POND_THOUGHTS, hasSeenPondInstruction, markPondInstructionSeen, pondPromptCue } from "../lib/pondPrompts";
 import { PerspectivePond, type PondTouch } from "./PerspectivePond";
+import { PondRecordingOverlay } from "./PondRecordingOverlay";
 
-export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, onReady, onLeave }: {
-  arrival?: number; active?: boolean; reducedMotion?: boolean; onReady?: () => void; onLeave?: () => void;
+export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, onReady, onLeave }: {
+  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; onReady?: () => void; onLeave?: () => void;
 }) {
   const navigate = useNavigate();
-  const [leaving, setLeaving] = useState(false);
   const [touch, setTouch] = useState<PondTouch | null>(null);
   const promptRefs = useRef<Array<HTMLDivElement | null>>([]);
   const cueRef = useRef(pondPromptCue(0));
@@ -23,10 +23,15 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
   const hintReveal = useRef(0);
   const holdProgress = useRef(0);
   const seen = useRef(hasSeenPondInstruction());
-  const [lifeReady, setLifeReady] = useState(() => hasSeenPondInstruction());
-  const enabled = active && arrival === 1 && !leaving;
+  const [lifeReady, setLifeReady] = useState(() => recording || hasSeenPondInstruction());
+  const enabled = active && arrival === 1 && !recording;
   const ready = useCallback(() => onReady?.(), [onReady]);
-  const hold = useHoldToCreate(() => setLeaving(true), enabled);
+  const touchRef = useRef(touch);
+  touchRef.current = touch;
+  const hold = useHoldToCreate(() => {
+    const at = touchRef.current;
+    navigate(RECORD_START_PATH, { state: { focus: [at?.x ?? .5, at?.y ?? .65] } });
+  }, enabled);
   holdProgress.current = hold.progress;
   const back = useCallback(() => (onLeave ?? (() => navigate(CAROUSEL_PATH)))(), [navigate, onLeave]);
   const setCursor = (e: { currentTarget: HTMLElement; clientX: number; clientY: number }) => {
@@ -107,14 +112,22 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     return () => cancelAnimationFrame(raf);
   }, [enabled, lifeReady, reducedMotion]);
   useEffect(() => {
-    if (!enabled) return;
-    buttonRef.current?.focus({ preventScroll: true });
+    if (!recording) hold.reset();
+  }, [recording, hold.reset]);
+  useEffect(() => {
+    if (!active) return;
     const keys = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "ArrowUp") back();
+      if (e.key !== "Escape" && e.key !== "ArrowUp") return;
+      if (recording) navigate(MEMORY_POND_PATH);
+      else back();
     };
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
-  }, [enabled, back]);
+  }, [active, recording, back, navigate]);
+  useEffect(() => {
+    if (!enabled) return;
+    buttonRef.current?.focus({ preventScroll: true });
+  }, [enabled]);
   useEffect(() => {
     if (!enabled) return;
     let leftover = 0;
@@ -135,14 +148,12 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     window.addEventListener("wheel", wheel, { passive: false });
     return () => window.removeEventListener("wheel", wheel);
   }, [enabled, reducedMotion, back]);
-  useEffect(() => {
-    if (!leaving) return;
-    const timer = setTimeout(() => navigate("/record/start", { state: { focus: [touch?.x ?? .5, touch?.y ?? .65] } }), reducedMotion ? 80 : 480);
-    return () => clearTimeout(timer);
-  }, [leaving, navigate, reducedMotion, touch]);
+  const pulseWater = useCallback(() => {
+    setTouch({ x: 0.5, y: 0.65, serial: performance.now() });
+  }, []);
 
-  return <section aria-label="a pond for a new memory" data-pond-ready={enabled}
-    style={{ position: "absolute", inset: 0, overflow: "hidden", background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)", opacity: leaving ? 0 : 1, transition: "opacity 480ms ease" }}>
+  return <section aria-label={recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
+    style={{ position: "absolute", inset: 0, overflow: "hidden", background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}>
     <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} />
     <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)" }} />
     {POND_THOUGHTS.map((thought, i) => <div key={thought.text} ref={el => { promptRefs.current[i] = el; }} data-pond-prompt={i} aria-hidden="true"
@@ -170,12 +181,13 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
         fontSynthesis: "none",
         fontSize: INSTRUCTION_SIZE,
         lineHeight: 1.45,
-        opacity: seen.current ? arrival : 0,
+        opacity: recording ? 0 : seen.current ? arrival : 0,
+        transition: recording ? "opacity 400ms ease" : undefined,
       }}
     >
-      Let's put a memory to shape.
+      record yourself talking about a particular memory.
     </p>
-    <button ref={buttonRef} aria-label="hold to create a memory" aria-describedby="pond-hold-help" disabled={!enabled}
+    {!recording && <button ref={buttonRef} aria-label="hold to begin" aria-describedby="pond-hold-help" disabled={!enabled}
       onPointerDown={e => {
         if (e.button !== 0) return;
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -206,11 +218,12 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
       onKeyUp={e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); hold.cancel(); } }}
       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", outline: "none", background: "transparent", touchAction: "none", cursor: "default", zIndex: 10 }}>
       <span className="sr-only">hold for two seconds, or hold space or enter. release to cancel.</span>
-    </button>
+    </button>}
     <div ref={hintRef} id="pond-hold-help" aria-hidden
       style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", zIndex: 20, opacity: 0, filter: "blur(6px)", whiteSpace: "nowrap", fontFamily: SANS, fontSize: INSTRUCTION_SIZE, letterSpacing: "0.01em", color: CHROME_GRAY, transformOrigin: "left top" }}>
-      hold to record a memory
+      hold to begin
     </div>
-    <span className="sr-only" role="status">{leaving ? "opening a new memory" : ""}</span>
+    {recording && <PondRecordingOverlay reducedMotion={reducedMotion} onVoicePulse={pulseWater} />}
+    <span className="sr-only" role="status">{recording ? "ready to record" : ""}</span>
   </section>;
 }

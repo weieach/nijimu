@@ -92,6 +92,8 @@ interface ModelProps {
   matSheenColor: string;
   autoRotate: boolean;
   floatAmplitude?: number;
+  /** Carousel: settle the bob at center while navigating; undefined keeps legacy motion. */
+  recenterFloat?: boolean;
   fluidity?: number;
   evolve?: number;
   bumpAmount?: number;
@@ -250,6 +252,7 @@ function Model({
   matSheenColor,
   autoRotate,
   floatAmplitude = 0.08,
+  recenterFloat,
   fluidity = 0,
   evolve = 0,
   bumpAmount = 0,
@@ -302,6 +305,7 @@ function Model({
   // Seeded from the page clock when the pose has to continue across a route
   // change; the artifact then starts mid-motion rather than at rest.
   const clock = useRef(sharedClock ? performance.now() / 1000 : 0);
+  const floatClock = useRef(0);
   const originalPositions = useRef<Float32Array | null>(null);
   const spherePositions = useRef<Float32Array | null>(null);
   const originalNormals = useRef<Float32Array | null>(null);
@@ -544,12 +548,23 @@ function Model({
     }
 
     // Float, auto-rotate, subtle tilt (tilt follows float — still when amplitude is 0)
-    groupRef.current.position.y = Math.sin(t * 1) * floatAmplitude;
+    if (recenterFloat === undefined) {
+      groupRef.current.position.y = Math.sin(t) * floatAmplitude;
+      groupRef.current.rotation.z = floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
+    } else {
+      // Keep the rotation/morph clock intact. Only the levitation resets when
+      // the carousel moves, so revisiting a memory never resumes a frozen lift.
+      if (recenterFloat) floatClock.current = 0;
+      else if (!stillRef.current) floatClock.current += delta;
+      const blend = stillRef.current ? 1 : 1 - Math.exp(-14 * delta);
+      const y = recenterFloat ? 0 : Math.sin(floatClock.current) * floatAmplitude;
+      const tilt = recenterFloat || floatAmplitude === 0 ? 0 : Math.sin(floatClock.current * 0.3) * 0.015;
+      groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, y, blend);
+      groupRef.current.rotation.z = THREE.MathUtils.lerp(groupRef.current.rotation.z, tilt, blend);
+    }
     // read off the clock rather than accumulated, so a seeded clock hands the
     // turn over mid-rotation (see `sharedClock`)
     if (autoRotate && !stillRef.current) groupRef.current.rotation.y = t * 0.16;
-    groupRef.current.rotation.z =
-      floatAmplitude > 0 ? Math.sin(t * 0.3) * 0.015 : 0;
 
     // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in
     const photoParts = morphPartsRef.current;
@@ -793,6 +808,8 @@ interface SceneViewerProps {
   shapeBuildOscillatingEvolve?: boolean;
   /** Vertical bob amplitude; 0 = still. */
   floatAmplitude?: number;
+  /** Reset levitation while moving between carousel seats, without resetting rotation. */
+  recenterFloat?: boolean;
   /**
    * Morph weight 0–1 (sphere→form). Default 1 = settled form (other pages unchanged).
    * Prefer `introMorph` for one-shot archive entrance.
@@ -835,6 +852,7 @@ export function SceneViewer({
   matPresetIndex,
   shapeBuildOscillatingEvolve = false,
   floatAmplitude = 0.08,
+  recenterFloat,
   morphProgress = 1,
   introMorph = false,
   introMorphDuration = 5.5,
@@ -1008,6 +1026,7 @@ export function SceneViewer({
                   matSheenColor={matSheenColor}
                   autoRotate={autoRotate}
                   floatAmplitude={floatAmplitude}
+                  recenterFloat={recenterFloat}
                   fluidity={safeFluidity}
                   evolve={safeEvolve}
                   oscillatingEvolve={shapeBuildOscillatingEvolve}
@@ -1035,6 +1054,7 @@ export function SceneViewer({
               matSheenColor={matSheenColor}
               autoRotate={autoRotate}
               floatAmplitude={floatAmplitude}
+              recenterFloat={recenterFloat}
               fluidity={safeFluidity}
               evolve={safeEvolve}
               oscillatingEvolve={shapeBuildOscillatingEvolve}

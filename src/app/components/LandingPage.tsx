@@ -8,7 +8,7 @@ import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
 import { buildArchive } from "../lib/archive";
-import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "../lib/routes";
 import { POND_ENTRY, pondTransition, pondSurfaceMask } from "../lib/pondTransition";
 import type { NameFlowState, NamingSession } from "./NamingRim";
 
@@ -21,7 +21,7 @@ interface GalleryEntry {
 }
 
 /**
- * One layout owns /, /memory, /memory/pond, and /record/name. The gallery starts loading
+ * One layout owns /, /memory, /memory/pond, /record/start, and /record/name. The gallery starts loading
  * behind the ink when Enter is pressed, and the naming rim becomes that same
  * gallery when a memory is saved — both need the page (and its canvases) to
  * survive the URL change. The pond also mounts before the rim leaves, so its
@@ -44,7 +44,8 @@ export function LandingPage() {
   const galleryRef = useRef<HTMLDivElement>(null);
   const inGallery = pathname === CAROUSEL_PATH;
   const inNaming = pathname === NAMING_PATH;
-  const inPond = pathname === MEMORY_POND_PATH;
+  const inRecording = pathname === RECORD_START_PATH;
+  const inPond = pathname === MEMORY_POND_PATH || inRecording;
   if (seenPath !== pathname) {
     setSeenPath(pathname);
     if (!inGallery && !inNaming && !inPond) {
@@ -158,7 +159,7 @@ export function LandingPage() {
     setArrival({ elapsed: 0, reducedMotion });
     setStartedAt(performance.now());
   };
-  const showGallery = inGallery || inNaming || !!arrival || pondElapsed !== null;
+  const showGallery = inGallery || inNaming || inPond || !!arrival || pondElapsed !== null;
   const pond = pondTransition(pondElapsed ?? 0, reducedMotion);
   const pondArrival = inPond && pondElapsed === null ? 1 : pond.arrival;
   return (
@@ -173,7 +174,7 @@ export function LandingPage() {
             naming={naming}
             onPondEnter={openPond}
             pondDeparture={pondElapsed !== null ? Math.max(.00001, pond.departure) : 0}
-            hideHeader={pondElapsed !== null}
+            hideHeader={pondElapsed !== null || inPond}
           />
         </div>
       )}
@@ -185,14 +186,15 @@ export function LandingPage() {
             maskImage: reducedMotion ? undefined : pondSurfaceMask(pondArrival),
             WebkitMaskImage: reducedMotion ? undefined : pondSurfaceMask(pondArrival),
             opacity: pondArrival }}>
-          <MemoryPondPage active={inPond && !pondLeaving} arrival={pondArrival} reducedMotion={reducedMotion} onReady={markPondReady} onLeave={closePond} />
+          <MemoryPondPage active={inPond && !pondLeaving} arrival={pondArrival} reducedMotion={reducedMotion} recording={inRecording} onReady={markPondReady} onLeave={closePond} />
         </div>
       )}
       {pondOnStage && (
         <div data-pond-header style={{ position: "absolute", inset: "0 0 auto", height: 76, zIndex: 100 }}>
           <PageHeader layout="absolute" link={false} />
           <BackButton onClick={() => {
-            if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
+            if (inRecording) navigate(MEMORY_POND_PATH);
+            else if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
             else closePond();
           }} />
           <GalleryViewToggle

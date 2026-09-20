@@ -9,46 +9,22 @@ import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
 import { inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
 import { pondRimPose, pondRimSeat } from "../lib/pondTransition";
+import { carouselFrame, carouselSeat, carouselContainsOffset, CAROUSEL_OLDER_SEATS, CAROUSEL_NEWER_SEATS } from "../lib/carouselLayout";
 
 /*
  * PuddleDiveGallery — the gallery presentation of the "dive" variant.
  *
- * The memories hang on a dome over the defocused puddle that PuddleScene
- * keeps rendering (and simulating, slowed) underneath: the focused one at the
- * apex, its neighbours falling away to either side and deeper into the water.
- * Stepping through them swings the whole dome, so a memory is never cut to —
- * it travels. Underneath runs a timescale drawn on the *same* circle, a dial
- * of the years the memories fall in. No blobs, no homescreen chrome.
+ * Memories follow a perspective S-curve over the defocused puddle. Older
+ * memories recede into the upper left; newer ones grow toward the lower right.
+ * Stepping moves the whole chronological stream along that same path.
  *
  * The descent itself (dolly + defocus) lives in PuddleScene / the sim's dive
  * pass; this component only owns the overlay UI and its resolve/dissolve
  * timing, which is keyed to the same DIVE_TUNING.
  */
 
-/* ── the dome ─────────────────────────────────────────────────────────────
-   A shallow circular arc: the focused memory at the apex, neighbours falling
-   gently away. The radius is solved so the outermost slot's centre sits at
-   twice the timescale's height from the bottom — always clear of the line,
-   never dropping into the foot of the screen. Measured in px from the
-   viewport so the landing holds at any window size. */
-/** Memories shown either side of the focused one. Each is a WebGL canvas, so
-    this is the main cost dial for the whole screen. */
-const ARC_NEIGHBOURS = 3;
-/** Angle between neighbours on the rim — kept modest so the path stays gentle. */
-const ARC_STEP_DEG = 17;
-/** Where the apex sits, as a fraction of viewport height. */
-const ARC_APEX_VH = 0.34;
-/** Whole-arc vertical shift (fraction of viewport height). Added to every
-    slot equally so the curve's slope stays the same. */
-const ARC_DOWN_VH = 0.08;
-/** The focused artifact's box; neighbours are scaled down from it. */
-const ARTIFACT_VW = 0.3;
-const ARTIFACT_MIN_PX = 240;
-const ARTIFACT_MAX_PX = 420;
-/** Whole-rim sit, as a fraction of viewport height. Applied to every seat
-    equally so a step around the rim never drops one memory relative to the
-    others. */
-const ARC_FOCUS_DROP_VH = 0.04;
+/** Maximum gather stagger. Mounted seats use asymmetric perspective bounds. */
+const ARC_NEIGHBOURS = CAROUSEL_OLDER_SEATS;
 /** How long a memory takes to travel one step around the rim. */
 const ARC_TRAVEL_MS = 900;
 /* ── the neighbours arriving and leaving ──
@@ -71,68 +47,6 @@ const CAPTION_TOP_VH = 0.62;
 export const CAPTION_DOWN_VH = 0.07;
 /** Height of the timescale above the bottom of the viewport. */
 const TS_BOTTOM_PX = 78;
-/** Outermost artifact centre lands this many times TS_BOTTOM_PX from the
-    bottom — twice the timescale's own clearance. */
-const ARC_FLOOR_MULT = 2;
-
-/** Falling away from the apex: smaller, dimmer, losing focus to the water.
-    Indexed by distance from the apex. */
-const SLOT_SCALE = [1, 0.72, 0.56, 0.44];
-const SLOT_OPACITY = [1, 0.78, 0.58, 0.4];
-const SLOT_BLUR_PX = [0, 2, 5, 9];
-
-function slotDepth(offset: number) {
-  const d = Math.min(Math.abs(offset), SLOT_SCALE.length - 1);
-  const i = Math.floor(d);
-  const f = d - i;
-  const j = Math.min(i + 1, SLOT_SCALE.length - 1);
-  return {
-    scale: SLOT_SCALE[i] + (SLOT_SCALE[j] - SLOT_SCALE[i]) * f,
-    opacity: SLOT_OPACITY[i] + (SLOT_OPACITY[j] - SLOT_OPACITY[i]) * f,
-    blurPx: SLOT_BLUR_PX[i] + (SLOT_BLUR_PX[j] - SLOT_BLUR_PX[i]) * f,
-  };
-}
-
-interface DomeGeometry {
-  /** Centre of the circle everything is struck from. */
-  cx: number;
-  cy: number;
-  /** Radius the artifacts ride. */
-  r: number;
-  /** The focused artifact's box, in px. */
-  size: number;
-  /** Screen y of the apex. */
-  apexY: number;
-}
-
-function domeGeometry(w: number, h: number): DomeGeometry {
-  const size = Math.max(ARTIFACT_MIN_PX, Math.min(ARTIFACT_VW * w, ARTIFACT_MAX_PX));
-  // solve the slope first, then translate the whole arc down by the same
-  // amount — r and θ stay put, so the curve doesn't change
-  const apexY0 = ARC_APEX_VH * h;
-  const outerY0 = h - ARC_FLOOR_MULT * TS_BOTTOM_PX;
-  const thetaMax = ((ARC_NEIGHBOURS * ARC_STEP_DEG) * Math.PI) / 180;
-  const drop = Math.max(1, outerY0 - apexY0);
-  const r = drop / (1 - Math.cos(thetaMax));
-  const down = ARC_DOWN_VH * h;
-  const apexY = apexY0 + down;
-  return { cx: w / 2, cy: apexY + r, r, size, apexY };
-}
-
-/** A point on a circle around the dome's centre. 0° is the apex, + is right. */
-function domePoint(g: DomeGeometry, radius: number, deg: number) {
-  const a = (deg * Math.PI) / 180;
-  return { x: g.cx + radius * Math.sin(a), y: g.cy - radius * Math.cos(a) };
-}
-
-/** Shared with the ink field: its pointers finish at these exact seats. */
-export function inkGallerySeat(w: number, h: number, offset: number) {
-  const geo = domeGeometry(w, h);
-  const at = domePoint(geo, geo.r, Math.min(offset, 10) * ARC_STEP_DEG);
-  const depth = slotDepth(offset);
-  return { x: at.x, y: at.y + ARC_FOCUS_DROP_VH * h,
-    size: geo.size * depth.scale, opacity: depth.opacity };
-}
 
 function useViewport() {
   const [size, setSize] = useState(() => ({
@@ -286,13 +200,12 @@ export function PuddleDiveGallery({
   const hasOlder = activeIdx > 0;
   const hasNewer = activeIdx < items.length - 1;
   const viewport = useViewport();
-  const geo = domeGeometry(viewport.w, viewport.h);
+  const geo = carouselFrame(viewport.w, viewport.h);
   const growth = inkArrival ? inkGrowth(inkArrival) : 1;
   const washIn = inkArrival ? inkWash(inkArrival) : 1;
 
-  /* The rim rides a float, not a CSS lerp of x/y. A straight-line transition
-     between seats cuts the chord under the arc — the dip you see when several
-     memories move at once. */
+  /* Animate the chronological offset, then project it every frame. A CSS
+     x/y lerp would cut straight across the S instead of following its bends. */
   const [rimIdx, setRimIdx] = useState(activeIdx);
   const rimIdxRef = useRef(activeIdx);
   const activeIdxRef = useRef(activeIdx);
@@ -301,6 +214,11 @@ export function PuddleDiveGallery({
      apex: its index jumps, but it must not travel. Snap the rim by the same
      delta so its offset stays zero and only the neighbours gather. */
   const focusId = items[activeIdx]?.id;
+  const navigationPoseRef = useRef({ id: focusId, moved: false });
+  if (focusId !== navigationPoseRef.current.id) {
+    if (phase === "gallery" && waterEffect && growth >= 1) navigationPoseRef.current.moved = true;
+    navigationPoseRef.current.id = focusId;
+  }
   const seatRef = useRef({ id: focusId, idx: activeIdx });
   let rimAt = rimIdx;
   if (focusId && focusId === seatRef.current.id && activeIdx !== seatRef.current.idx) {
@@ -346,14 +264,9 @@ export function PuddleDiveGallery({
   const pendingPondRef = useRef(false);
   const pondTargetRef = useRef<number | null>(null);
 
-  const nearerArchiveEnd = () => {
-    const last = Math.max(0, items.length - 1);
-    return activeIdx <= last - activeIdx ? 0 : last;
-  };
-
   const openPondFromPlus = () => {
     if (pondDeparture > 0 || pendingPondRef.current) return;
-    const target = nearerArchiveEnd();
+    const target = Math.max(0, items.length - 1);
     if (target === activeIdx) {
       onOverscrollExit?.();
       return;
@@ -383,7 +296,7 @@ export function PuddleDiveGallery({
       if (phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "ArrowLeft") hasOlder ? onNavigate(-1) : onOverscrollExit?.();
+      if (e.key === "ArrowLeft") { if (hasOlder) onNavigate(-1); }
       else if (e.key === "ArrowRight") hasNewer ? onNavigate(1) : onOverscrollExit?.();
       else if (e.key === "Escape") onExit();
     };
@@ -391,7 +304,7 @@ export function PuddleDiveGallery({
     return () => window.removeEventListener("keydown", handler);
   }, [phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
 
-  /* scroll — one notch steps the rim; another notch past either end leaves.
+  /* scroll — stop at the oldest memory; past the newest opens the pond.
      The naming step has no arrows and must not steal the wheel. */
   useEffect(() => {
     if (!showArrows) return;
@@ -413,7 +326,6 @@ export function PuddleDiveGallery({
       leftover -= dir * 72;
       lockedUntil = now + (reducedMotion ? 80 : 140);
       if (dir < 0 && !hasOlder) {
-        if (rimSettledRef.current) leave();
         leftover = 0;
       } else if (dir > 0 && !hasNewer) {
         if (rimSettledRef.current) leave();
@@ -442,7 +354,8 @@ export function PuddleDiveGallery({
       const distance = Math.abs(dx) > Math.abs(dy) ? dx : dy;
       if (Math.abs(distance) < 70) return;
       const dir = distance > 0 ? 1 : -1;
-      if ((dir < 0 && !hasOlder) || (dir > 0 && !hasNewer)) {
+      if (dir < 0 && !hasOlder) return;
+      if (dir > 0 && !hasNewer) {
         if (rimSettledRef.current) (onOverscrollExit ?? onExit)();
       } else onNavigate(dir);
     };
@@ -460,7 +373,7 @@ export function PuddleDiveGallery({
   /* preload the artifacts just off the end of the rim, so the memory that
      swings in on an arrow press never stalls on a network fetch */
   useEffect(() => {
-    for (const k of [-ARC_NEIGHBOURS - 1, ARC_NEIGHBOURS + 1]) {
+    for (const k of [-CAROUSEL_OLDER_SEATS - 1, CAROUSEL_NEWER_SEATS + 1]) {
       const neighbour = items[activeIdx + k];
       if (neighbour) useGLTF.preload(neighbour.shape.modelPath);
     }
@@ -517,7 +430,7 @@ export function PuddleDiveGallery({
       const slotItem = items[i];
       if (!slotItem) continue;
       const off = Math.abs(i - rimAt);
-      if (off <= 0.5 || off > ARC_NEIGHBOURS + 0.05) continue;
+      if (off <= 0.5 || !carouselContainsOffset(i - rimAt)) continue;
       if (!risenRef.current.has(slotItem.id)) pending.push(slotItem.id);
     }
     if (!pending.length) return;
@@ -638,9 +551,9 @@ export function PuddleDiveGallery({
     const offset = i - rimAt;
     if (phase === "diving" && Math.abs(offset) > 0.01) continue;
     if (!neighborsMounted && Math.abs(offset) > 0.01) continue;
-    /* Keep one extra seat while the rim is travelling so a memory sliding
-       off the end is not unmounted mid-move (that reads as a vanish). */
-    if (Math.abs(offset) > ARC_NEIGHBOURS + (rimSettled ? 0.05 : 1.05)) continue;
+    /* Bounds include an invisible distant seat and an offscreen foreground
+       seat: scrolling never unmounts a visible model, even after settling. */
+    if (!carouselContainsOffset(offset)) continue;
     const slotItem = items[i];
     if (slotItem) slots.push({ offset, item: slotItem });
   }
@@ -776,24 +689,22 @@ export function PuddleDiveGallery({
         </svg>
       )}
 
-      {/* ═══ THE DOME — the memories on the rim, the focused one at the apex.
-             Slots are keyed by memory, so an arrow press moves the elements
-             instead of replacing them: the whole dome swings. ═══ */}
+      {/* The chronological stream. Stable memory keys let the entire path
+          advance without replacing its artifacts. Isolate its depth stack
+          so foreground memories cannot cover the caption or navigation. */}
       <div className="absolute inset-0" data-pond-departure={pondDeparture}
         data-pond-tilt={pondRimPose(pondDeparture, !!reducedMotion).tilt * 180 / Math.PI}
-        style={{ opacity: 1 }}>
+        style={{ opacity: 1, isolation: "isolate" }}>
         {slots.map(({ offset, item: slotItem }) => {
           const focused = Math.abs(offset) < 0.5;
-          const depth = slotDepth(offset);
-          const at = domePoint(geo, geo.r, offset * ARC_STEP_DEG);
-          const dropY = ARC_FOCUS_DROP_VH * viewport.h;
-          const seat = pondRimSeat(at.x, at.y + dropY, geo.cx, geo.apexY + dropY, viewport.h, pondDeparture, !!reducedMotion);
+          const depth = carouselSeat(viewport.w, viewport.h, offset);
+          const seat = pondRimSeat(depth.x, depth.y, geo.cx, geo.apexY, viewport.h, pondDeparture, !!reducedMotion);
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
           /* handed over rather than arriving: it is already exactly here */
           const carried = carriedIds.has(slotItem.id) && phase === "gallery";
           const entryScale = inkArrival && !inkArrival.reducedMotion
-            ? INK_POINTER_SIZE / (geo.size * depth.scale) + (1 - INK_POINTER_SIZE / (geo.size * depth.scale)) * growth
+            ? INK_POINTER_SIZE / geo.size + (1 - INK_POINTER_SIZE / geo.size) * growth
             : 1;
           /* Naming year: neighbours gather with a real CSS transition, not a
              keyframe that can miss the first paint and hard-cut the canvases in. */
@@ -809,6 +720,7 @@ export function PuddleDiveGallery({
               key={slotItem.id}
               className="dive-artifact"
               data-memory-id={slotItem.id}
+              data-carousel-offset={offset}
               onClick={(e) => {
                 e.stopPropagation();
                 if (!focused && chromeVisible) onNavigate(Math.round(offset));
@@ -820,7 +732,7 @@ export function PuddleDiveGallery({
                 width: geo.size,
                 height: geo.size,
                 transform: `translate(-50%, -50%) translate(${seat.x.toFixed(2)}px, ${seat.y.toFixed(2)}px) scale(${depth.scale * seat.scale})`,
-                zIndex: 100000 + Math.round(seat.z),
+                zIndex: 100000 + Math.round(offset * 100 + seat.z),
                 cursor: focused ? "default" : "pointer",
                 pointerEvents: chromeVisible ? "auto" : "none",
               }}
@@ -845,7 +757,7 @@ export function PuddleDiveGallery({
                      naming step gave it: unchanged, the browser lets it run on
                      to its end, so a rim still gathering when it was handed
                      over finishes gathering instead of snapping into place. */
-                  animation: pondDeparture > 0 || gather || inkArrival ? "none" : carried
+                  animation: pondDeparture > 0 || gather || inkArrival || (phase === "gallery" && waterEffect && navigationPoseRef.current.moved) ? "none" : carried
                     ? focused
                       ? "none"
                       : neighborAnimation(offset)
@@ -879,7 +791,9 @@ export function PuddleDiveGallery({
                     evolve={slotItem.shape.evolve}
                     bumpAmount={slotItem.shape.bumpAmount}
                     autoRotate={focused}
-                    floatAmplitude={0.08}
+                    // Limit vertical levitation to ±0.04 scene units.
+                    floatAmplitude={0.04}
+                    recenterFloat={!focused || !rimSettled || pondDeparture > 0}
                     ready
                     // tight framing — the artifact is the screen here, so it
                     // fills its box instead of floating in the middle of it

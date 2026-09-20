@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { NAMING_PATH } from "../lib/routes";
+import { NAMING_PATH, RECORD_START_PATH } from "../lib/routes";
 import { SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import { BackButton } from "./BackButton";
@@ -436,7 +436,7 @@ export function PuddleTranscriptPage() {
             <PillButton
               label="record again"
               onClick={() =>
-                navigate("/record/start", {
+                navigate(RECORD_START_PATH, {
                   state: {
                     ...(focus ? { focus } : {}),
                     ...(state?.shape ? { shape: state.shape } : {}),
