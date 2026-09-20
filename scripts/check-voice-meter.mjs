@@ -64,6 +64,7 @@ for (const fps of [24, 60, 120]) {
       `actual meter keeps emitting in seconds ${start}–${end} at ${fps}fps`);
   }
   assert.equal(heard.filter(p => p.time > 27000 && p.time < 29000).length, 0, "silence stays quiet");
+  assert.ok(heard[0].time - 250 <= 160, "first ripple follows the actual volume crest promptly");
   assert.equal(heard.filter(p => p.time > 60000).length, 0, "no peaks after auto-stop");
   assert.equal(stopped, 1);
   assert.equal(released, 1);

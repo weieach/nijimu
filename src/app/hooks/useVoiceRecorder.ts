@@ -114,7 +114,7 @@ export function useVoiceRecorder({
       const rms = Math.sqrt(sum / samples.length);
       const now = performance.now();
       // Same envelope at 30/60/120 fps, even while the water is rendering.
-      const blend = 1 - Math.exp(-Math.min(250, now - lastSampleAt) / 55);
+      const blend = 1 - Math.exp(-Math.min(250, now - lastSampleAt) / 30);
       lastSampleAt = now;
       smoothed += (Math.min(1, rms * 4) - smoothed) * blend;
       if (now - lastLevelAt > LEVEL_UPDATE_MS && Math.abs(smoothed - reported) > LEVEL_UPDATE_STEP) {

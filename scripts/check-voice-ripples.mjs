@@ -62,7 +62,7 @@ const plan = createVoiceRippleBurstPlanner();
 const burst = plan(.45, 0, () => 0);
 assert.equal(burst.length, 3, "strong accent can make three ripples");
 assert.equal(burst[0].delayMs, 0, "first ripple has no artificial delay");
-assert.ok(burst[1].delayMs >= 170 && burst[2].delayMs > burst[1].delayMs);
+assert.ok(burst[1].delayMs >= 80 && burst[1].delayMs <= 130 && burst[2].delayMs > burst[1].delayMs);
 assert.ok(burst[2].strength < burst[1].strength, "echoes are gentler than their source");
 assert.equal(plan(.45, 700, () => 0).length, 1, "nearby accents do not pile up bursts");
 assert.equal(plan(.45, 2600, () => 0).length, 3, "later accents can burst again");

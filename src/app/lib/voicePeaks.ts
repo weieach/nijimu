@@ -28,7 +28,7 @@ export function createVoicePeakDetector() {
     const prominence = peak - base;
     recentRange = Math.max(recentRange, prominence);
     // Confirm the local maximum on its falling edge, not on a single noisy frame.
-    if (peak - level < Math.max(.004, prominence * .18)) return null;
+    if (peak - level < Math.max(.003, prominence * .10)) return null;
     const crest = peak;
     rising = false;
     valley = level;
@@ -51,7 +51,7 @@ export function createVoiceRippleBurstPlanner() {
     const canBurst = now - lastBurstAt >= 2400 && accent > .78;
     const count = canBurst && random() < .72 ? (accent > .94 && random() < .45 ? 3 : 2) : 1;
     if (count > 1) lastBurstAt = now;
-    const spacing = 170 + random() * 90;
+    const spacing = 80 + random() * 50;
     return Array.from({ length: count }, (_, index) => ({
       delayMs: index * spacing,
       strength: ( .85 + accent * .2) * Math.pow(.78, index),
