@@ -1,7 +1,9 @@
 import { CSSProperties } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
+import { CAROUSEL_PATH, NAMING_PATH } from "../lib/routes";
 import { SERIF_CJK } from "../lib/theme";
+import { GalleryViewToggle } from "./GalleryViewToggle";
 
 /** Target seat the landing wordmark flies to. Keep the mark in sync. */
 export const PAGE_HEADER_MARK = {
@@ -18,6 +20,11 @@ interface PageHeaderProps {
   tone?: "light" | "dark";
   /** When false, render a non-link mark (homescreen chrome). Default true. */
   link?: boolean;
+  /** Three-circle gallery control. Hidden on landing and on the carousel itself
+      (that screen already keeps a plus in this corner). */
+  carousel?: boolean;
+  /** Replaces the default jump to /memory — the pond plays its return instead. */
+  onCarousel?: () => void;
   style?: CSSProperties;
 }
 
@@ -26,9 +33,12 @@ export function PageHeader({
   layout = "block",
   tone = "light",
   link = true,
+  carousel,
+  onCarousel,
   style,
 }: PageHeaderProps) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
 
   const layoutStyle: CSSProperties =
     layout === "absolute"
@@ -72,11 +82,11 @@ export function PageHeader({
     </>
   );
 
-  if (!link) {
-    return <p style={markStyle}>{children}</p>;
-  }
+  const showCarousel = carousel ?? (pathname !== "/" && pathname !== CAROUSEL_PATH && pathname !== NAMING_PATH);
 
-  return (
+  const mark = !link ? (
+    <p style={markStyle}>{children}</p>
+  ) : (
     <a
       href={import.meta.env.BASE_URL}
       onClick={(e) => {
@@ -87,5 +97,18 @@ export function PageHeader({
     >
       {children}
     </a>
+  );
+
+  return (
+    <>
+      {mark}
+      {showCarousel && (
+        <GalleryViewToggle
+          view="carousel"
+          label="gallery view"
+          onToggle={onCarousel ?? (() => navigate(CAROUSEL_PATH))}
+        />
+      )}
+    </>
   );
 }

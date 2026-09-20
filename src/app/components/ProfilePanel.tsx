@@ -5,16 +5,16 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
 import { IridescentSheen } from "./IridescentSheen";
 import { PillButton } from "./PillButton";
+import { LANDING_RETURN, useLandingReturn } from "../lib/landingReturn";
 import { SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 
 /** Paper grain — same recipe as SceneViewer / the dive gallery veil. */
 const GRAIN_URL = `url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix in='noise' type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
 
 /** Long enough for the leave animation below to finish before unmounting. */
-const LEAVE_MS = 220;
+const LEAVE_MS = LANDING_RETURN.profileLeaveMs;
 
 /** Shared with the sheen, whose rim light traces this same rounded rect. */
 const PANEL_RADIUS = 30;
@@ -55,7 +55,7 @@ const detailValueStyle = {
 };
 
 export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
-  const navigate = useNavigate();
+  const { beginReturn } = useLandingReturn();
   const [mounted, setMounted] = useState(open);
   const [leaving, setLeaving] = useState(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -331,11 +331,8 @@ export function ProfilePanel({ open, onClose }: ProfilePanelProps) {
           </div>
 
           <PillButton
-            label="view all memories"
-            onClick={() => {
-              onClose();
-              navigate("/memory/scroll");
-            }}
+            label="exit to landing page"
+            onClick={beginReturn}
             variant="outline"
             style={{ marginTop: 2, flexShrink: 0 }}
           />

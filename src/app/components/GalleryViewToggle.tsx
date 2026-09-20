@@ -2,7 +2,7 @@ import { CHROME_GRAY } from "../lib/colors";
 
 /** Top-right switch between the G-key carousel and the card grid.
  *  Sits left of the profile / music chrome (those are at right 68 and 22).
- *  The dedicated /memory carousel uses `icon="plus"` to open the pond. */
+ *  The dedicated /memory carousel uses `icon="plus"` to create a memory. */
 export function GalleryViewToggle({
   view,
   onToggle,
@@ -25,7 +25,7 @@ export function GalleryViewToggle({
 
   const toGrid = view === "carousel";
   const title = label ?? (icon === "plus"
-    ? "open the pond"
+    ? "create a new memory"
     : toGrid ? "grid view" : "gallery view");
 
   return (
@@ -52,6 +52,7 @@ export function GalleryViewToggle({
         justifyContent: "center",
         padding: 0,
         opacity: 0.85,
+        pointerEvents: "auto",
         animation: enterAnimation,
       }}
     >

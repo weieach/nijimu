@@ -5,7 +5,6 @@ import { MemoryCarouselPage } from "./MemoryCarouselPage";
 import { MemoryPondPage } from "./MemoryPondPage";
 import { PageHeader } from "./PageHeader";
 import { BackButton } from "./BackButton";
-import { GalleryViewToggle } from "./GalleryViewToggle";
 import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
 import { buildArchive } from "../lib/archive";
 import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "../lib/routes";
@@ -191,20 +190,15 @@ export function LandingPage() {
       )}
       {pondOnStage && (
         <div data-pond-header style={{ position: "absolute", inset: "0 0 auto", height: 76, zIndex: 100 }}>
-          <PageHeader layout="absolute" link={false} />
+          <PageHeader layout="absolute" link={false} onCarousel={() => {
+            if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
+            else closePond();
+          }} />
           <BackButton onClick={() => {
             if (inRecording) navigate(MEMORY_POND_PATH);
             else if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
             else closePond();
           }} />
-          <GalleryViewToggle
-            view="carousel"
-            label="return to carousel"
-            onToggle={() => {
-              if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
-              else closePond();
-            }}
-          />
         </div>
       )}
       {!inGallery && !inNaming && !inPond && (

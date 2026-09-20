@@ -184,8 +184,7 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
         opacity: recording ? 0 : seen.current ? arrival : 0,
         transition: recording ? "opacity 400ms ease" : undefined,
       }}
-    >
-      record yourself talking about a particular memory.
+    >To create a new memory artifact, record yourself talking about a particular memory.
     </p>
     {!recording && <button ref={buttonRef} aria-label="hold to begin" aria-describedby="pond-hold-help" disabled={!enabled}
       onPointerDown={e => {

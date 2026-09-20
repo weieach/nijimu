@@ -8,6 +8,8 @@ import svgPathsStop from "../../imports/svg-hpzn3032f5";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PillButton } from "./PillButton";
 import { pickArtifactModelPath } from "./ContourArtifact";
+import { RecordingInstructionsDialog } from "./RecordingInstructionsDialog";
+import { MEMORY_POND_PATH } from "../lib/routes";
 
 const QUESTION_DELAY_S = 0.35;
 const QUESTION_SWEEP_S = 0.5;
@@ -49,6 +51,7 @@ export function PondRecordingOverlay({
   const [buttonIn, setButtonIn] = useState(reducedMotion);
   const [leaving, setLeaving] = useState(false);
   const [captureFailed, setCaptureFailed] = useState(false);
+  const [openingMicrophone, setOpeningMicrophone] = useState(false);
   const [modelPath] = useState(() => arrival?.shape?.modelPath ?? pickArtifactModelPath());
 
   const recorder = useVoiceRecorder({
@@ -78,7 +81,7 @@ export function PondRecordingOverlay({
   const troubleMessage = captureFailed
     ? "The recording didn't come through — try again"
     : recorder.error === "not-allowed"
-      ? "Microphone access was denied — your words can't be heard"
+      ? "microphone access is off. allow it in your browser’s site settings, then try again—or explore with a sample memory."
       : recorder.error === "unsupported"
         ? "This browser can't record — try chrome"
         : recorder.error === "failed"
@@ -91,9 +94,13 @@ export function PondRecordingOverlay({
     return () => clearTimeout(button);
   }, [reducedMotion]);
 
-  const startRecording = () => {
+  const startRecording = async () => {
+    if (openingMicrophone || leaving) return;
     setCaptureFailed(false);
-    void recorder.start();
+    setOpeningMicrophone(true);
+    setButtonIn(true);
+    try { await recorder.start(); }
+    finally { setOpeningMicrophone(false); }
   };
 
   const goToSampleTranscript = () => {
@@ -119,6 +126,12 @@ export function PondRecordingOverlay({
     opacity: leaving ? 0 : 1,
     transition: `opacity ${CHROME_OUT_MS}ms ease`,
   } as const;
+
+  // No first-visit flag: every entry (and failed attempt) gets the same
+  // instructions. The microphone opens only after the primary action.
+  if (!recorder.isRecording && !leaving) return <RecordingInstructionsDialog
+    busy={openingMicrophone} error={troubleMessage} onStart={startRecording}
+    onSkip={goToSampleTranscript} onClose={() => navigate(MEMORY_POND_PATH)} />;
 
   return (
     <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 30 }}>

@@ -1,9 +1,16 @@
-import { createBrowserRouter, Outlet, RouterProvider, useLocation } from "react-router";
-import { useEffect, useRef, useState } from "react";
+import { createBrowserRouter, Outlet, RouterProvider, useLocation, useNavigate } from "react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
 import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "./lib/routes";
+import {
+  LANDING_PAPER,
+  LANDING_RETURN,
+  LandingReturnContext,
+  useLandingReturn,
+  type LandingReturnPhase,
+} from "./lib/landingReturn";
 import { PuddleTranscriptPage } from "./components/PuddleTranscriptPage";
 import { MemorySavedPage } from "./components/MemorySavedPage";
 import { ProfilePanel } from "./components/ProfilePanel";
@@ -24,11 +31,64 @@ const routerBasename =
     : import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
 
 function RootLayout() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [phase, setPhase] = useState<LandingReturnPhase>("idle");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const timersRef = useRef<number[]>([]);
+
+  const clearTimers = useCallback(() => {
+    for (const id of timersRef.current) window.clearTimeout(id);
+    timersRef.current = [];
+  }, []);
+
+  useEffect(() => () => clearTimers(), [clearTimers]);
+
+  const beginReturn = useCallback(() => {
+    if (pathname === "/" || phase !== "idle") return;
+    setProfileOpen(false);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      navigate("/");
+      return;
+    }
+    clearTimers();
+    const { profileLeaveMs, sceneFadeMs, holdMs, contentFadeMs, headerDelayMs, headerFadeMs } = LANDING_RETURN;
+    timersRef.current = [
+      window.setTimeout(() => setPhase("scene-out"), profileLeaveMs),
+      window.setTimeout(() => {
+        navigate("/");
+        setPhase("holding");
+      }, profileLeaveMs + sceneFadeMs),
+      window.setTimeout(() => setPhase("landing"), profileLeaveMs + sceneFadeMs + holdMs),
+      window.setTimeout(
+        () => setPhase("idle"),
+        profileLeaveMs + sceneFadeMs + holdMs + contentFadeMs + headerDelayMs + headerFadeMs,
+      ),
+    ];
+  }, [pathname, phase, navigate, clearTimers]);
+
+  const veiled = phase === "scene-out" || phase === "holding";
+
   return (
-    <>
-      <GlobalControls />
+    <LandingReturnContext.Provider value={{ phase, beginReturn }}>
+      <GlobalControls profileOpen={profileOpen} onProfileOpenChange={setProfileOpen} />
+      <div
+        aria-hidden
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 99980,
+          background: LANDING_PAPER,
+          opacity: veiled ? 1 : 0,
+          transition: phase === "scene-out"
+            ? `opacity ${LANDING_RETURN.sceneFadeMs}ms ease`
+            : "none",
+          pointerEvents: veiled ? "auto" : "none",
+        }}
+      />
       <Outlet />
-    </>
+    </LandingReturnContext.Provider>
   );
 }
 
@@ -64,11 +124,19 @@ const router = createBrowserRouter([
   },
 ], { basename: routerBasename });
 
-function GlobalControls() {
+function GlobalControls({
+  profileOpen,
+  onProfileOpenChange,
+}: {
+  profileOpen: boolean;
+  onProfileOpenChange: (open: boolean) => void;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(true);
-  const [profileOpen, setProfileOpen] = useState(false);
   const { pathname } = useLocation();
+  const { phase } = useLandingReturn();
+  const onLanding = pathname === "/";
+  const leavingScene = phase === "scene-out" || phase === "holding";
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);
@@ -102,8 +170,8 @@ function GlobalControls() {
 
   /** The pane belongs to the page it opened over — leaving that page closes it. */
   useEffect(() => {
-    setProfileOpen(false);
-  }, [pathname]);
+    onProfileOpenChange(false);
+  }, [pathname, onProfileOpenChange]);
 
   const iconButtonStyle = {
     position: "fixed" as const,
@@ -124,43 +192,48 @@ function GlobalControls() {
 
   return (
     <>
-      {/* Profile button */}
-      <button
-        onClick={() => setProfileOpen((open) => !open)}
-        title="Profile"
-        aria-expanded={profileOpen}
-        style={{ ...iconButtonStyle, top: 22, right: 68 }}
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke={iconStroke}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+      {!onLanding && (
+        <button
+          onClick={() => onProfileOpenChange(!profileOpen)}
+          title="Profile"
+          aria-expanded={profileOpen}
+          style={{
+            ...iconButtonStyle,
+            top: 22,
+            right: 68,
+            opacity: leavingScene ? 0 : 1,
+            transition: leavingScene ? `opacity ${LANDING_RETURN.sceneFadeMs}ms ease` : "none",
+            pointerEvents: phase === "idle" ? "auto" : "none",
+          }}
         >
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-          <circle cx="12" cy="7" r="4" />
-        </svg>
-      </button>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={iconStroke}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        </button>
+      )}
 
-      {/* Music button */}
       <button
         onClick={() => setMuted((m) => !m)}
         title={muted ? "Unmute" : "Mute"}
         style={{ ...iconButtonStyle, top: 22, right: 22 }}
       >
         {muted ? (
-          /* Muted — speaker with X */
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
             <line x1="23" y1="9" x2="17" y2="15" />
             <line x1="17" y1="9" x2="23" y2="15" />
           </svg>
         ) : (
-          /* Unmuted — speaker with waves */
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
             <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
@@ -169,7 +242,7 @@ function GlobalControls() {
         )}
       </button>
 
-      <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ProfilePanel open={profileOpen} onClose={() => onProfileOpenChange(false)} />
     </>
   );
 }

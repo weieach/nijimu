@@ -9,6 +9,7 @@ import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, smoothProgress, type InkArrival } from "../lib/landingTransition";
+import { LANDING_RETURN, useLandingReturn } from "../lib/landingReturn";
 import { carouselSeat, carouselContainsOffset, inkUnfoldSeat } from "../lib/carouselLayout";
 
 /** Caption + annotation dot — shared so the marks match the words. */
@@ -353,6 +354,40 @@ export function BlobScene({
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 });
   const panDragDist = useRef(0);
+
+  const { phase: returnPhase } = useLandingReturn();
+  const returnReveal = classicChrome && (returnPhase === "holding" || returnPhase === "landing");
+  const revealArmed = returnPhase === "landing";
+  const [fieldShown, setFieldShown] = useState(!returnReveal);
+  const [headerShown, setHeaderShown] = useState(!returnReveal);
+  useEffect(() => {
+    if (!returnReveal) {
+      setFieldShown(true);
+      setHeaderShown(true);
+      return;
+    }
+    setFieldShown(false);
+    setHeaderShown(false);
+    if (!revealArmed) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      setFieldShown(true);
+      setHeaderShown(true);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => setFieldShown(true));
+    const headerTimer = window.setTimeout(() => setHeaderShown(true), LANDING_RETURN.headerDelayMs);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(headerTimer);
+    };
+  }, [returnReveal, revealArmed]);
+  const fieldFadeStyle = returnReveal
+    ? { opacity: fieldShown ? 1 : 0, transition: revealArmed ? `opacity ${LANDING_RETURN.contentFadeMs}ms ease` : "none" }
+    : undefined;
+  const headerFadeStyle = returnReveal
+    ? { opacity: headerShown ? 1 : 0, transition: revealArmed ? `opacity ${LANDING_RETURN.headerFadeMs}ms ease` : "none" }
+    : undefined;
 
   /* ─── React state ─── */
   const [morphVal, setMorphVal] = useState(galleryOnly ? 1 : 0);
@@ -1338,6 +1373,7 @@ export function BlobScene({
         </defs>
       </svg>
 
+      <div style={{ position: "absolute", inset: 0, ...fieldFadeStyle }}>
       {/* ═══ PANNABLE INNER CANVAS ═══ */}
       <div
         ref={containerRef}
@@ -1645,6 +1681,7 @@ export function BlobScene({
           </div>
         </div>
       )}
+      </div>
 
       {classicChrome && onNewMemory && (
         <div
@@ -1655,6 +1692,7 @@ export function BlobScene({
               opacity: clamp(1 - morphVal * 4, 0, 1),
               transition: "opacity 0.3s ease",
             } : {}),
+            ...headerFadeStyle,
           }}
         >
           <div
@@ -1691,8 +1729,10 @@ export function BlobScene({
                   width: 0,
                   minWidth: "100%",
                   boxSizing: "border-box",
-                  opacity: entryDesc,
-                  transition: HEADER_COLOR_FADE,
+                  opacity: entryDesc * (returnReveal && !headerShown ? 0 : 1),
+                  transition: returnReveal && revealArmed
+                    ? `opacity ${LANDING_RETURN.headerFadeMs}ms ease, ${HEADER_COLOR_FADE}`
+                    : HEADER_COLOR_FADE,
                 }}
               >
                 An interactive memory sculpting tool to trace how memory evolves.
@@ -1717,7 +1757,7 @@ export function BlobScene({
                   appearance: "none",
                   WebkitAppearance: "none",
                   cursor: "pointer",
-                  pointerEvents: landingArrival ? "none" : "auto",
+                  pointerEvents: landingArrival || (returnReveal && !headerShown) ? "none" : "auto",
                   color: headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark,
                   fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
                   lineHeight: 1.5,
@@ -1731,7 +1771,10 @@ export function BlobScene({
                     letterSpacing: "0.01em",
                     whiteSpace: "nowrap",
                     marginRight: -4,
-                    opacity: entryHeader,
+                    opacity: entryHeader * (returnReveal && !headerShown ? 0 : 1),
+                    transition: returnReveal && revealArmed
+                      ? `opacity ${LANDING_RETURN.headerFadeMs}ms ease`
+                      : undefined,
                   }}
                 >
                   {ctaLabel}
