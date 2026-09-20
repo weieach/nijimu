@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { RECORD_START_PATH, SHAPE_BUILD_PATH } from "../lib/routes";
+import { RECORD_START_PATH, SHAPE_BUILD_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
@@ -76,7 +76,14 @@ export function PuddleTranscriptPage() {
   /** Keep settled words in location.state so a remount doesn't lose them. */
   const rememberTranscript = (text: string) => {
     if (!transcriptionId || state?.transcript === text) return;
-    navigate(".", { replace: true, state: { ...state, transcriptionId, transcript: text } });
+    // This overlay is rendered by LandingPage rather than as the matched route
+    // component. A route-relative "." therefore resolves to the shared landing
+    // route (`/`) and used to throw the user home as soon as transcription
+    // completed. Preserve the settled words on the explicit transcript URL.
+    navigate(TRANSCRIPT_PATH, {
+      replace: true,
+      state: { ...state, transcriptionId, transcript: text },
+    });
   };
 
   // The words arriving from the transcription service

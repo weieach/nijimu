@@ -589,7 +589,7 @@ export function BlobScene({
       // Slightly larger grains, still sized relative to the display rather
       // than stretching a fixed texture across different viewport sizes.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const grainSize = 1.25;
+      const grainSize = 1.5;
       const width = classicChrome ? Math.max(1, Math.round(c.clientWidth * dpr / grainSize)) : 512;
       const height = classicChrome ? Math.max(1, Math.round(c.clientHeight * dpr / grainSize)) : 512;
       if (painted && c.width === width && c.height === height) return;
@@ -601,7 +601,7 @@ export function BlobScene({
         img.data[i] = v;
         img.data[i + 1] = v;
         img.data[i + 2] = v;
-        img.data[i + 3] = 30;
+        img.data[i + 3] = 42;
       }
       ctx.putImageData(img, 0, 0);
       painted = true;
@@ -1497,14 +1497,14 @@ export function BlobScene({
       {/* Grain sits on the blobs, under the landing type so exclusion can read the field. */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none opacity-40"
-        style={{ mixBlendMode: "overlay", imageRendering: classicChrome ? "auto" : "pixelated", opacity: landingArrival ? 0.4 * entryPaper : undefined }}
+        className="absolute inset-0 w-full h-full pointer-events-none opacity-[0.48]"
+        style={{ mixBlendMode: "overlay", imageRendering: classicChrome ? "auto" : "pixelated", opacity: landingArrival ? 0.48 * entryPaper : undefined }}
       />
       <div className="absolute inset-0 pointer-events-none" style={{
         opacity: entryPaper,
         background: classicChrome
-          ? "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.12) 100%)"
-          : "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.08) 100%)",
+          ? "radial-gradient(ellipse at center, transparent 22%, rgba(0,0,0,0.2) 100%)"
+          : "radial-gradient(ellipse at center, transparent 32%, rgba(0,0,0,0.14) 100%)",
       }} />
 
       {/* ═══ GALLERY TEXT ═══ */}
