@@ -12,6 +12,7 @@ import {
   useHandTracking,
 } from "../hooks/useHandTracking";
 import { SANS, SERIF } from "../lib/theme";
+import { GestureHint } from "./GestureHint";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 import { LightGeometryView } from "./LightGeometryView";
@@ -492,7 +493,7 @@ export function ShapeGrowPage() {
         <p
           style={{
             position: "absolute",
-            top: 118,
+            top: variant === "bubble" ? 100 : 118,
             left: "50%",
             transform: "translateX(-50%)",
             fontFamily: SERIF,
@@ -512,7 +513,7 @@ export function ShapeGrowPage() {
         <div
           style={{
             position: "absolute",
-            top: 195,
+            top: variant === "bubble" ? 148 : 195,
             left: "50%",
             transform: "translateX(-50%)",
             fontFamily: SERIF,
@@ -551,6 +552,13 @@ export function ShapeGrowPage() {
             </>
           )}
         </div>
+
+        {variant === "bubble" && (
+          <GestureHint
+            kind={bubbleTab}
+            active={handsDetected >= (bubbleTab === "shape" ? 2 : 1)}
+          />
+        )}
 
         {variant === "bubble" ? (
           <div

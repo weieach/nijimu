@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH } from "./lib/routes";
+import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, SHAPE_BUILD_PATH } from "./lib/routes";
 import {
   LANDING_PAPER,
   LANDING_RETURN,
@@ -12,6 +12,10 @@ import {
   type LandingReturnPhase,
 } from "./lib/landingReturn";
 import { PuddleTranscriptPage } from "./components/PuddleTranscriptPage";
+import { BuildObjectPage } from "./components/BuildObjectPage";
+import { ShapeGrowPage } from "./components/ShapeGrowPage";
+import { ShapeColorPage } from "./components/ShapeColorPage";
+import { ShapeTexturePage } from "./components/ShapeTexturePage";
 import { MemorySavedPage } from "./components/MemorySavedPage";
 import { ProfilePanel } from "./components/ProfilePanel";
 import { MemoryScrollPage } from "./components/MemoryScrollPage";
@@ -114,6 +118,10 @@ const router = createBrowserRouter([
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
       { path: "/record/transcript", Component: PuddleTranscriptPage },
+      { path: SHAPE_BUILD_PATH, Component: BuildObjectPage },
+      { path: "/record/shape/grow", Component: ShapeGrowPage },
+      { path: "/record/shape/color", Component: ShapeColorPage },
+      { path: "/record/shape/texture", Component: ShapeTexturePage },
       { path: "/record/saved", Component: MemorySavedPage },
       { path: "/memory/scroll", Component: MemoryScrollPage },
       { path: "/memory/revisit", Component: RevisitMemoryPage },
