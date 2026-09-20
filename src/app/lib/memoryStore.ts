@@ -2,7 +2,7 @@ import { MemoryEvent } from "../data/memoryData";
 
 const KEY = "nijimu.memories.v1";
 
-/** A memory the user actually recorded, shaped, and saved. */
+/** A memory the user recorded in this visit. Never written to disk. */
 export interface SavedMemory {
   id: string;
   title: string;
@@ -22,25 +22,27 @@ export interface SavedMemory {
   createdAt: string;
 }
 
-export function loadMemories(): SavedMemory[] {
+/** This tab only. A reload starts from the curated archive again. */
+let session: SavedMemory[] = [];
+
+function forgetPersisted(): void {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    // Guard against hand-edited or older-shaped data
-    return Array.isArray(parsed) ? parsed.filter((m) => m?.id && m?.shape) : [];
+    localStorage.removeItem(KEY);
   } catch {
-    return [];
+    // private mode
   }
 }
 
+forgetPersisted();
+
+export function loadMemories(): SavedMemory[] {
+  forgetPersisted();
+  return session;
+}
+
 export function saveMemory(memory: SavedMemory): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify([...loadMemories(), memory]));
-  } catch {
-    // Quota exceeded or private mode — the memory stays session-only rather
-    // than breaking the save screen.
-  }
+  forgetPersisted();
+  session = [...session, memory];
 }
 
 /** Presents a saved memory in the same shape as the curated LIFE_EVENTS. */

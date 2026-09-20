@@ -1,22 +1,11 @@
 import { createBrowserRouter, Outlet, RouterProvider, useLocation } from "react-router";
 import { useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
-import { isPuddleSupported } from "./lib/puddle/simulation";
-import { HomePage, readVariant } from "./components/HomePage";
+import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { CAROUSEL_PATH, MEMORY_FIELD_PATH, NAMING_PATH } from "./lib/routes";
-import { RecordingStartRoute } from "./components/PuddleRecordingPage";
-import { RecordingProcessPage } from "./components/RecordingProcessPage";
-import { TranscriptRoute } from "./components/PuddleTranscriptPage";
-import { OrbPage } from "./components/OrbPage";
-import { ClickToRecordPage } from "./components/ClickToRecordPage";
-import { BuildObjectPage } from "./components/BuildObjectPage";
-import { ShapeEditorPage } from "./components/ShapeEditorPage";
-import { ShapeGrowPage } from "./components/ShapeGrowPage";
-import { ShapeWeightPage } from "./components/ShapeWeightPage";
-import { ShapeColorPage } from "./components/ShapeColorPage";
-import { ShapeTexturePage } from "./components/ShapeTexturePage";
-// import { ConnectMemoriesPage } from "./components/ConnectMemoriesPage";
+import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH } from "./lib/routes";
+import { PuddleRecordingPage } from "./components/PuddleRecordingPage";
+import { PuddleTranscriptPage } from "./components/PuddleTranscriptPage";
 import { MemorySavedPage } from "./components/MemorySavedPage";
 import { ProfilePanel } from "./components/ProfilePanel";
 import { MemoryScrollPage } from "./components/MemoryScrollPage";
@@ -50,7 +39,7 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       {
-        /* Landing, the dive carousel, and the naming step share one layout:
+        /* Landing, the dive carousel, the pond, and naming share one layout:
            Enter preloads the gallery behind the ink, and saving a memory turns
            the naming rim into that same gallery in place. The children render
            nothing themselves; LandingPage reads the path. */
@@ -58,23 +47,14 @@ const router = createBrowserRouter([
         children: [
           { path: "/", element: null },
           { path: CAROUSEL_PATH, element: null },
+          { path: MEMORY_POND_PATH, element: null },
           { path: NAMING_PATH, element: null },
         ],
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
-      { path: "/record/click", Component: ClickToRecordPage },
-      { path: "/record/start", Component: RecordingStartRoute },
-      { path: "/record/process", Component: RecordingProcessPage },
-      { path: "/record/transcript", Component: TranscriptRoute },
-      { path: "/record/build", Component: BuildObjectPage },
-      { path: "/record/shape", Component: ShapeEditorPage },
-      { path: "/record/shape/grow", Component: ShapeGrowPage },
-      { path: "/record/shape/weight", Component: ShapeWeightPage },
-      { path: "/record/shape/color", Component: ShapeColorPage },
-      { path: "/record/shape/texture", Component: ShapeTexturePage },
-      // { path: "/record/connect", Component: ConnectMemoriesPage },
+      { path: "/record/start", Component: PuddleRecordingPage },
+      { path: "/record/transcript", Component: PuddleTranscriptPage },
       { path: "/record/saved", Component: MemorySavedPage },
-      { path: "/record/orb", Component: OrbPage },
       { path: "/memory/scroll", Component: MemoryScrollPage },
       { path: "/memory/revisit", Component: RevisitMemoryPage },
       { path: "/memory/edit/weight", Component: EditWeightPage },
@@ -89,11 +69,6 @@ function GlobalControls() {
   const [muted, setMuted] = useState(true);
   const [profileOpen, setProfileOpen] = useState(false);
   const { pathname } = useLocation();
-  /** Light chrome (muted gray, no pill) on the light-ground pages. Only the
-      legacy dark blob recording screen keeps the frosted dark pills. */
-  const lightChrome =
-    pathname !== "/record/start" ||
-    (readVariant() === "puddle" && isPuddleSupported());
 
   useEffect(() => {
     const audio = new Audio(SOUNDTRACK_URL);
@@ -130,40 +105,22 @@ function GlobalControls() {
     setProfileOpen(false);
   }, [pathname]);
 
-  const iconButtonStyle = lightChrome
-    ? {
-        position: "fixed" as const,
-        zIndex: 99999,
-        width: 36,
-        height: 36,
-        borderRadius: "50%",
-        border: "none",
-        background: "transparent",
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 0,
-      }
-    : {
-        position: "fixed" as const,
-        zIndex: 99999,
-        width: 36,
-        height: 36,
-        borderRadius: "50%",
-        border: "1px solid rgba(255,255,255,0.28)",
-        background: "rgba(0,0,0,0.18)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "background 0.2s ease, border-color 0.2s ease",
-        padding: 0,
-      };
+  const iconButtonStyle = {
+    position: "fixed" as const,
+    zIndex: 99999,
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+  };
 
-  const iconStroke = lightChrome ? CHROME_GRAY : "rgba(255,255,255,0.75)";
+  const iconStroke = CHROME_GRAY;
 
   return (
     <>

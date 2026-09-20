@@ -15,5 +15,5 @@
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "vite.config.ts"],
-  "exclude": ["src/imports"]
+  "exclude": ["src/imports", "src/app/archive"]
 }

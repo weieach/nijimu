@@ -304,6 +304,8 @@ export function PuddleScene({
   galleryCarried = false,
   galleryOnly = false,
   inkArrival,
+  pondDeparture = 0,
+  hideGalleryHeader = false,
   naming = null,
   onGalleryExit,
   onOverscrollExit,
@@ -328,6 +330,8 @@ export function PuddleScene({
       homescreen surface underneath. */
   galleryOnly?: boolean;
   inkArrival?: import("../lib/landingTransition").InkArrival;
+  pondDeparture?: number;
+  hideGalleryHeader?: boolean;
   /** The naming step, hosted here. The scene mounts with it and shows the
       naming rim over hidden water; when it is saved (`naming` goes back to
       null, with `galleryOpen` + `galleryCarried`) the very same rim becomes the
@@ -336,7 +340,7 @@ export function PuddleScene({
   /** Fired when the gallery starts surfacing, so the G toggle stays in sync. */
   onGalleryExit?: () => void;
   /** Scroll past the first or last memory. The dedicated carousel uses this
-      to open the ripple field; unset, overscroll uses onGalleryExit. */
+      to open the perspective pond; unset, overscroll uses onGalleryExit. */
   onOverscrollExit?: () => void;
   /** Switch from the G-key carousel to the card grid. */
   onToggleGrid?: () => void;
@@ -1192,7 +1196,7 @@ export function PuddleScene({
   if (failed) {
     if (naming) return <NameMemoryPage />;
     if (galleryOnly) return <PuddleDiveGallery items={galleryItems} activeIdx={galleryAt}
-      phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival}
+      phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival} pondDeparture={pondDeparture} hideHeader={hideGalleryHeader}
       onNavigate={delta => setGalleryIdx(i => Math.max(0, Math.min(galleryItems.length - 1, i + delta)))}
       onExit={() => onGalleryExit?.()} onOverscrollExit={onOverscrollExit}
       onToggleGrid={onToggleGrid} />;
@@ -1429,7 +1433,7 @@ export function PuddleScene({
       `}</style>
 
       {/* Wordmark stays through the settled dive gallery. */}
-      {onNewMemory && (
+      {onNewMemory && !hideGalleryHeader && (
         <div
           className="pointer-events-none"
           style={{
@@ -1497,6 +1501,8 @@ export function PuddleScene({
           reducedMotion={reducedMotionPref}
           gallery={{
             inkArrival,
+            pondDeparture,
+            hideHeader: hideGalleryHeader,
             items: galleryItems,
             activeIdx: galleryAt,
             phase: divePhase,

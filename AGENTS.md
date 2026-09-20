@@ -65,8 +65,9 @@ nijimu/
 ├── src/
 │   ├── main.tsx                    # entry — mounts <App/>
 │   ├── app/
-│   │   ├── App.tsx                 # ROUTER: all 20 routes + GlobalControls (music/profile)
-│   │   ├── components/             # one file per screen, plus shared UI
+│   │   ├── App.tsx                 # ROUTER + GlobalControls (music/profile)
+│   │   ├── components/             # one file per live screen, plus shared UI
+│   │   ├── archive/                # unused former record-loop pages
 │   │   ├── hooks/                  # reusable behavior (see §7)
 │   │   ├── lib/                    # pure/shared modules (see §6)
 │   │   └── data/memoryData.ts      # the 16 curated demo memories + color indices
@@ -99,14 +100,13 @@ that renders `GlobalControls` (background music + profile button) once, so
 
 **A. Create a memory** (the main flow):
 ```
-/  (home blob field)
- └ /record/start      RecordingStartPage — records the voice, sends it to /api/transcribe
-   └ /record/transcript  TranscriptPage — shows transcript; optional AI "polish" → side-by-side choice; highlight words
-     └ /record/name    NameMemoryPage — title + year
-       └ /record/build BuildObjectPage — camera permission prompt; picks a random 3D model
-         └ /record/shape/weight → /color → /texture   the three ShapeXPage editors (hand gestures / sliders)
-           └ /record/connect  ConnectMemoriesPage — link to past memories
-             └ /record/saved  MemorySavedPage — PERSISTS the memory to localStorage
+/  (landing)
+ └ /memory            MemoryCarouselPage — dive gallery
+   └ /memory/pond     MemoryPondPage — hold to record
+     └ /record/start      PuddleRecordingPage — records the voice, sends it to /api/transcribe
+       └ /record/transcript  PuddleTranscriptPage — words + highlight
+         └ /record/name      naming rim on LandingPage — title + year; this visit only
+           └ /memory         same gallery, now including the new memory
 ```
 
 **B. Revisit memories:**
@@ -114,10 +114,11 @@ that renders `GlobalControls` (background music + profile button) once, so
 /memory/scroll   MemoryScrollPage — vertical dot list with a 3D preview
  └ /memory/revisit  RevisitMemoryPage
    └ /memory/edit/weight | /color | /texture   EditXPage editors
+     └ /record/saved  MemorySavedPage — writes the edited memory
 ```
 
-Other routes: `/record/orb` (OrbPage — **orphaned**, no UI links to it),
-`/record/click` and `/record/process` (early recording variants).
+The previous sculpt loop (`/record/build`, `/record/shape/*`, blob recording,
+gray transcript, orb / click / process) lives in `src/app/archive/record-loop/`.
 
 The profile is **not a route** — the profile button in `GlobalControls` opens
 `ProfilePanel`, a glass popup over the current page (iridescent WebGL sheen from
@@ -137,7 +138,7 @@ A `location.state` → context/store refactor is noted as future work but not do
 |---|---|
 | `theme.ts` | Font-stack constants (`SERIF`, `SANS`, `SANS_UI`, `SERIF_DISPLAY`, …). **Use these instead of inline font strings.** |
 | `colors.ts` | `COLOR_PALETTE` (the 9 blob tints w/ light variants) + `MEMORY_COLORS`. Single source — was duplicated in 4 files. |
-| `memoryStore.ts` | **localStorage persistence.** `loadMemories()`, `saveMemory()`, `toMemoryEvent()`. Key: `nijimu.memories.v1`. |
+| `memoryStore.ts` | Session-only user memories. `loadMemories()`, `saveMemory()`, `toMemoryEvent()`. Nothing is written to disk; a reload shows only the curated archive. |
 | `polish.ts` | Browser-side `requestPolish(transcript)` — POSTs to `/api/polish`, never throws (returns `{polished, error}`). |
 | `transcribe.ts` | Browser-side `requestTranscription(audio)` — POSTs the recording to `/api/transcribe`, never throws. Also holds the **recording→transcript hand-off**: `beginTranscription(audio)` starts the request and returns an id, `getTranscription(id)` picks it up on the next screen. |
 
@@ -162,7 +163,7 @@ lowercase "nijimu" wordmark link). Prefer these over hand-rolling.
 ### 8a. Transcription — the spoken memory becomes words
 
 ```
-Browser: RecordingStartPage / PuddleRecordingPage
+Browser: PuddleRecordingPage
    └ hooks/useVoiceRecorder  MediaRecorder ──► audio Blob
    └ lib/transcribe.ts  beginTranscription() ──POST /api/transcribe (raw audio body)──┐
                                                                                       │
@@ -225,9 +226,9 @@ environment variables for production.
 
 2. **pnpm only.** `npm install` fails on React 19 peer deps.
 
-3. **No persistence backend.** The only storage is `localStorage` via
-   `lib/memoryStore.ts`. The 16 curated memories in `data/memoryData.ts` are
-   demo data; saved memories are *appended* to them on home + scroll.
+3. **No persistence.** User-made memories stay in memory for this visit
+   (`lib/memoryStore.ts`) and are gone on reload. The 16 curated memories in
+   `data/memoryData.ts` are the archive the app always opens with.
 
 4. **`GlobalControls` must stay in the layout route**, not per-page — otherwise
    the background music restarts on every navigation.

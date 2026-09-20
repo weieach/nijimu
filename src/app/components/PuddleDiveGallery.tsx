@@ -8,6 +8,7 @@ import { SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
 import { inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
+import { pondRimPose, pondRimSeat } from "../lib/pondTransition";
 
 /*
  * PuddleDiveGallery — the gallery presentation of the "dive" variant.
@@ -245,6 +246,8 @@ export function PuddleDiveGallery({
   neighborsVisible = true,
   arrival = "resolve",
   inkArrival,
+  pondDeparture = 0,
+  hideHeader = false,
 }: {
   items: DiveGalleryItem[];
   activeIdx: number;
@@ -254,7 +257,7 @@ export function PuddleDiveGallery({
   onNavigate: (delta: number) => void;
   onExit: () => void;
   /** Leave past the first or last memory — the dedicated carousel uses this
-      to open the ripple field; the G-gallery falls back to onExit. */
+      to open the perspective pond; the G-gallery falls back to onExit. */
   onOverscrollExit?: () => void;
   /** Replace the default title / year caption (used by the naming step). */
   caption?: ReactNode;
@@ -272,6 +275,9 @@ export function PuddleDiveGallery({
   arrival?: DiveArrival;
   /** A mounted ink field hands its six-pixel pointers to these same artifacts. */
   inkArrival?: InkArrival;
+  /** Lift the intact dome out of view before the perspective pond arrives. */
+  pondDeparture?: number;
+  hideHeader?: boolean;
 }) {
   const hasOlder = activeIdx > 0;
   const hasNewer = activeIdx < items.length - 1;
@@ -337,16 +343,16 @@ export function PuddleDiveGallery({
   /* arrows — keyboard */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (phase !== "gallery" || growth < 1) return;
+      if (phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "ArrowLeft") onNavigate(-1);
-      else if (e.key === "ArrowRight") onNavigate(1);
+      if (e.key === "ArrowLeft") hasOlder ? onNavigate(-1) : onOverscrollExit?.();
+      else if (e.key === "ArrowRight") hasNewer ? onNavigate(1) : onOverscrollExit?.();
       else if (e.key === "Escape") onExit();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [phase, growth, onNavigate, onExit]);
+  }, [phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
 
   /* scroll — one notch steps the rim; another notch past either end leaves.
      The naming step has no arrows and must not steal the wheel. */
@@ -356,13 +362,14 @@ export function PuddleDiveGallery({
     let lockedUntil = 0;
     const leave = onOverscrollExit ?? onExit;
     const handler = (e: WheelEvent) => {
-      if (phase !== "gallery" || growth < 1) return;
+      if (phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
       const now = performance.now();
       if (now < lockedUntil) return;
-      const primary = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+      const primary = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
       leftover += primary;
       if (Math.abs(leftover) < 72) return;
       const dir = leftover > 0 ? 1 : -1;
@@ -378,7 +385,40 @@ export function PuddleDiveGallery({
     };
     window.addEventListener("wheel", handler, { passive: false });
     return () => window.removeEventListener("wheel", handler);
-  }, [showArrows, phase, growth, reducedMotion, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
+  }, [showArrows, phase, growth, pondDeparture, reducedMotion, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
+
+  // Touch has the same boundary behavior as a wheel, without interpreting a
+  // tap (or an OrbitControls drag on the focused artifact) as overscroll.
+  useEffect(() => {
+    if (!showArrows || phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
+    let start: { x: number; y: number } | null = null;
+    const down = (e: TouchEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.touches.length !== 1 || target.closest("button, input, textarea, canvas")) { start = null; return; }
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    };
+    const end = (e: TouchEvent) => {
+      if (!start) return;
+      const dx = start.x - e.changedTouches[0].clientX;
+      const dy = start.y - e.changedTouches[0].clientY;
+      start = null;
+      const distance = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+      if (Math.abs(distance) < 70) return;
+      const dir = distance > 0 ? 1 : -1;
+      if ((dir < 0 && !hasOlder) || (dir > 0 && !hasNewer)) {
+        if (rimSettledRef.current) (onOverscrollExit ?? onExit)();
+      } else onNavigate(dir);
+    };
+    const cancel = () => { start = null; };
+    window.addEventListener("touchstart", down, { passive: true });
+    window.addEventListener("touchend", end);
+    window.addEventListener("touchcancel", cancel);
+    return () => {
+      window.removeEventListener("touchstart", down);
+      window.removeEventListener("touchend", end);
+      window.removeEventListener("touchcancel", cancel);
+    };
+  }, [showArrows, phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onOverscrollExit, onExit]);
 
   /* preload the artifacts just off the end of the rim, so the memory that
      swings in on an arrow press never stalls on a network fetch */
@@ -543,7 +583,7 @@ export function PuddleDiveGallery({
       : // arriving: strongest at first sight, stilling as the shape settles
         { dur: Math.round(resolveMs), scale: "42;14;0" };
 
-  const chromeVisible = phase === "gallery" && growth >= 1;
+  const chromeVisible = phase === "gallery" && growth >= 1 && pondDeparture === 0;
   const palette = COLOR_PALETTE[item.colorIndex % COLOR_PALETTE.length];
   const travelMs = reducedMotion ? 0 : ARC_TRAVEL_MS;
   const travelEase = "cubic-bezier(0.33, 0.02, 0.2, 1)";
@@ -561,7 +601,9 @@ export function PuddleDiveGallery({
     const offset = i - rimAt;
     if (phase === "diving" && Math.abs(offset) > 0.01) continue;
     if (!neighborsMounted && Math.abs(offset) > 0.01) continue;
-    if (Math.abs(offset) > ARC_NEIGHBOURS + 0.05) continue;
+    /* Keep one extra seat while the rim is travelling so a memory sliding
+       off the end is not unmounted mid-move (that reads as a vanish). */
+    if (Math.abs(offset) > ARC_NEIGHBOURS + (rimSettled ? 0.05 : 1.05)) continue;
     const slotItem = items[i];
     if (slotItem) slots.push({ offset, item: slotItem });
   }
@@ -613,7 +655,8 @@ export function PuddleDiveGallery({
   return (
     <div
       className="absolute inset-0 select-none"
-      style={{ zIndex: 30, pointerEvents: growth < 1 ? "none" : undefined }}
+      inert={pondDeparture > 0}
+      style={{ zIndex: 30, pointerEvents: growth < 1 || pondDeparture > 0 ? "none" : undefined }}
       onClick={() => {
         if (chromeVisible && exitOnBackdropClick) onExit();
       }}
@@ -699,12 +742,15 @@ export function PuddleDiveGallery({
       {/* ═══ THE DOME — the memories on the rim, the focused one at the apex.
              Slots are keyed by memory, so an arrow press moves the elements
              instead of replacing them: the whole dome swings. ═══ */}
-      <div className="absolute inset-0">
+      <div className="absolute inset-0" data-pond-departure={pondDeparture}
+        data-pond-tilt={pondRimPose(pondDeparture, !!reducedMotion).tilt * 180 / Math.PI}
+        style={{ opacity: 1 }}>
         {slots.map(({ offset, item: slotItem }) => {
           const focused = Math.abs(offset) < 0.5;
           const depth = slotDepth(offset);
           const at = domePoint(geo, geo.r, offset * ARC_STEP_DEG);
           const dropY = ARC_FOCUS_DROP_VH * viewport.h;
+          const seat = pondRimSeat(at.x, at.y + dropY, geo.cx, geo.apexY + dropY, viewport.h, pondDeparture, !!reducedMotion);
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
           /* handed over rather than arriving: it is already exactly here */
@@ -736,10 +782,8 @@ export function PuddleDiveGallery({
                 top: 0,
                 width: geo.size,
                 height: geo.size,
-                transform: `translate(-50%, -50%) translate(${at.x.toFixed(2)}px, ${(
-                  at.y + dropY
-                ).toFixed(2)}px) scale(${depth.scale})`,
-                zIndex: 10 - Math.round(Math.abs(offset)),
+                transform: `translate(-50%, -50%) translate(${seat.x.toFixed(2)}px, ${seat.y.toFixed(2)}px) scale(${depth.scale * seat.scale})`,
+                zIndex: 100000 + Math.round(seat.z),
                 cursor: focused ? "default" : "pointer",
                 pointerEvents: chromeVisible ? "auto" : "none",
               }}
@@ -764,7 +808,7 @@ export function PuddleDiveGallery({
                      naming step gave it: unchanged, the browser lets it run on
                      to its end, so a rim still gathering when it was handed
                      over finishes gathering instead of snapping into place. */
-                  animation: gather || inkArrival ? "none" : carried
+                  animation: pondDeparture > 0 || gather || inkArrival ? "none" : carried
                     ? focused
                       ? "none"
                       : neighborAnimation(offset)
@@ -792,7 +836,7 @@ export function PuddleDiveGallery({
                   }}
                 >
                   <SceneViewer
-                    measureUnscaled={!!inkArrival}
+                    measureUnscaled
                     modelPath={slotItem.shape.modelPath}
                     fluidity={slotItem.shape.fluidity}
                     evolve={slotItem.shape.evolve}
@@ -803,12 +847,12 @@ export function PuddleDiveGallery({
                     // tight framing — the artifact is the screen here, so it
                     // fills its box instead of floating in the middle of it
                     frameMargin={1.12}
-                    // parked neighbours render once and then cost nothing.
-                    // `still` is what keeps that honest: a demand canvas that
-                    // kept animating would show its motion in lurches, so a
-                    // neighbour holds one pose until it reaches the apex.
-                    frameloop={focused ? "always" : "demand"}
-                    still={!focused}
+                    /* Park only once the rim has stopped. Mid-scroll the CSS
+                       scale is still changing; a demand canvas resizes, clears,
+                       and never redraws — the mesh just vanishes. offsetSize
+                       (measureUnscaled) also keeps the buffer off that scale. */
+                    frameloop={focused || !rimSettled || pondDeparture > 0 ? "always" : "demand"}
+                    still={!focused && rimSettled}
                     // the apex artifact turns on the page's clock rather than
                     // its canvas's, so the same memory on two screens reads as
                     // one continuous rotation instead of snapping back to rest
@@ -917,7 +961,7 @@ export function PuddleDiveGallery({
       )}
 
       {/* ═══ WAY BACK — same left arrow as the recording screen ═══ */}
-      <div
+      {!hideHeader && <div
         style={{
           opacity: chromeVisible ? 1 : 0,
           transition: "opacity 0.8s ease",
@@ -925,12 +969,12 @@ export function PuddleDiveGallery({
         }}
       >
         <BackButton onClick={onExit} />
-      </div>
+      </div>}
 
       <GalleryViewToggle
         view="carousel"
         onToggle={onToggleGrid ?? (() => {})}
-        visible={chromeVisible && !!onToggleGrid}
+        visible={!hideHeader && chromeVisible && !!onToggleGrid}
         enterAnimation={carriedChrome}
       />
 

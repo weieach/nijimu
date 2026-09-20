@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { isPuddleSupported } from "../lib/puddle/simulation";
+import { NAMING_PATH } from "../lib/routes";
 import { SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import { BackButton } from "./BackButton";
-import { readVariant } from "./HomePage";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PAGE_BG, PuddleBackdrop } from "./PuddleBackdrop";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
-import { TranscriptPage } from "./TranscriptPage";
 
 const SAMPLE_TRANSCRIPT =
   "I keep coming back to that summer. Not to him, exactly — but to who I was when I was around him. Someone who still had time to notice things. The light on a wall. The sound of a city at 2am. He gave me a camera and said, just feel for the click. I think what he actually meant was — slow down. Pay attention. I didn't. And then he was gone. And I kept moving. But sometimes I wonder if that version of me is still somewhere, waiting on that island, wondering why I never came back.";
@@ -21,6 +19,7 @@ interface PuddleTranscriptState {
   transcript?: string;
   transcriptionId?: string;
   focus?: [number, number];
+  shape?: { modelPath?: string };
 }
 
 /**
@@ -138,10 +137,11 @@ export function PuddleTranscriptPage() {
     } else {
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate("/record/build", {
+        navigate(NAMING_PATH, {
           state: {
             transcript,
             highlightedWords: Array.from(highlightedWords).map((i) => words[i]),
+            shape: state?.shape,
             focus,
           },
         });
@@ -436,7 +436,12 @@ export function PuddleTranscriptPage() {
             <PillButton
               label="record again"
               onClick={() =>
-                navigate("/record/start", { state: focus ? { focus } : undefined })
+                navigate("/record/start", {
+                  state: {
+                    ...(focus ? { focus } : {}),
+                    ...(state?.shape ? { shape: state.shape } : {}),
+                  },
+                })
               }
             />
           </div>
@@ -464,13 +469,4 @@ export function PuddleTranscriptPage() {
       </div>
     </div>
   );
-}
-
-/**
- * `/record/transcript` — puddle transcript when the puddle homescreen is active,
- * the original gray transcript otherwise.
- */
-export function TranscriptRoute() {
-  const [puddle] = useState(() => readVariant() === "puddle" && isPuddleSupported());
-  return puddle ? <PuddleTranscriptPage /> : <TranscriptPage />;
 }

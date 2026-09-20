@@ -10,22 +10,14 @@ Run `npm run dev` to start the development server.
 
 ## Pages
 
-- `/`: original blob landing — enter opens the 3D memory carousel
+- `/`: landing — enter opens the 3D memory carousel
 - `/memory`: 3D memory carousel
+- `/memory/pond`: hold to record a memory
 - `/ripple`: home canvas where memories sit as a watercolor puddle, blob field, or ripple field
-- `/record/start`: speak a memory aloud — the main recording step of the create flow
-- `/record/click`: early click-to-record screen over the blob field
-- `/record/process`: early recording screen that transcribes speech as you go
-- `/record/transcript`: shows the spoken words, optional AI polish, and word highlights
+- `/record/start`: speak a memory aloud — the recording step of the create flow
+- `/record/transcript`: shows the spoken words and word highlights
 - `/record/name`: give the memory a title and year
-- `/record/build`: camera-permission prompt before sculpting the 3D object
-- `/record/shape`: all-in-one 3D editor for evolve, bump, fluidity, and color
-- `/record/shape/grow`: grow and pick the 3D form with hand gestures
-- `/record/shape/weight`: sculpt the object's weight and fluidity with pinch or sliders
-- `/record/shape/color`: tint the object from the palette, by gesture or slider
-- `/record/shape/texture`: set the object's surface texture
-- `/record/saved`: confirmation that the memory was written to local storage
-- `/record/orb`: leftover pinch-to-scale orb experiment (not linked from the UI)
+- `/record/saved`: confirmation after editing a saved memory
 - `/memory/scroll`: vertical list of memories with a live 3D preview
 - `/memory/revisit`: open a saved memory and its 3D object
 - `/memory/edit/weight`: re-sculpt an existing memory's weight
@@ -45,7 +37,7 @@ Stacks live in `src/app/lib/theme.ts`. Faces are loaded in `src/styles/fonts.css
 
 | Font | How it's loaded | Used as |
 |---|---|---|
-| **Rowan** | Self-hosted woff2 (Light–Bold, roman + italic) | Latin serif — English titles, body, leftover `/record/orb` and `/record/process` (`SERIF`) |
+| **Rowan** | Self-hosted woff2 (Light–Bold, roman + italic) | Latin serif — English titles, body (`SERIF`) |
 | **GenRyuMin2 TW** | CDN Fonts | East Asian serif — the 滲む wordmark (`SERIF_CJK`); CJK fallback on `SERIF` |
 | **Exposure Trial** | Self-hosted `ExposureTrial-20.otf` (optical grade −20) | Recording / profile display (`SERIF_EXPOSURE`) |
 | **Exposure Trial Plus** | Self-hosted `ExposureTrial+10.otf` (optical grade +10) | Transcript / polish display (`SERIF_DISPLAY`) |

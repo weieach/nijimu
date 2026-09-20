@@ -540,6 +540,8 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
 
 /** The settled gallery's props, minus what the host supplies itself. */
 export interface DiveGalleryProps {
+  hideHeader?: boolean;
+  pondDeparture?: number;
   inkArrival?: import("../lib/landingTransition").InkArrival;
   items: DiveGalleryItem[];
   activeIdx: number;

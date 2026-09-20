@@ -81,7 +81,7 @@ export function MemoryField({
   );
 }
 
-/** The homescreen the user is on — also decides which recording screen opens. */
+/** The homescreen shader the /ripple field is showing. */
 export function readVariant(): ShaderVariant {
   try {
     const v = sessionStorage.getItem(VARIANT_KEY);

@@ -4,7 +4,7 @@ import { isPuddleSupported } from "../lib/puddle/simulation";
 import { PuddleScene } from "./PuddleScene";
 import { PageHeader } from "./PageHeader";
 import { buildArchive } from "../lib/archive";
-import { MEMORY_FIELD_PATH } from "../lib/routes";
+import { MEMORY_POND_PATH } from "../lib/routes";
 import { INK_ENTRY, type InkArrival } from "../lib/landingTransition";
 import { DiveGalleryHost, type NamingSession } from "./NamingRim";
 
@@ -15,6 +15,9 @@ export function MemoryCarouselPage({
   galleryFocusId,
   galleryCarried = false,
   naming = null,
+  onPondEnter,
+  pondDeparture = 0,
+  hideHeader = false,
 }: {
   inkArrival?: InkArrival;
   /** Chronological seat the landing ink unfolds onto, or the memory just named. */
@@ -22,6 +25,9 @@ export function MemoryCarouselPage({
   /** The naming step handed its rim over — open at depth, don't dive. */
   galleryCarried?: boolean;
   naming?: NamingSession | null;
+  onPondEnter?: () => void;
+  pondDeparture?: number;
+  hideHeader?: boolean;
 }) {
   const navigate = useNavigate();
   const items = useMemo(() => buildArchive(), [naming]);
@@ -56,7 +62,7 @@ export function MemoryCarouselPage({
   }
   const goRecord = () => navigate("/record/start");
   const goHome = () => navigate("/");
-  const goRipple = () => navigate(MEMORY_FIELD_PATH);
+  const goPond = onPondEnter ?? (() => navigate(MEMORY_POND_PATH));
   const goGrid = () => navigate("/memory/scroll");
 
   const markReady = !inkArrival || inkArrival.elapsed >= (inkArrival.reducedMotion ? INK_ENTRY.reducedEnd : INK_ENTRY.end);
@@ -64,18 +70,20 @@ export function MemoryCarouselPage({
   if (!isPuddleSupported()) {
     return (
       <>
-        {markReady && <PageHeader layout="absolute" link={false} />}
+        {markReady && !hideHeader && <PageHeader layout="absolute" link={false} />}
         <DiveGalleryHost
           naming={naming}
           reducedMotion={inkArrival?.reducedMotion ?? window.matchMedia("(prefers-reduced-motion: reduce)").matches}
           gallery={{
             inkArrival,
+            pondDeparture,
+            hideHeader,
             items,
             activeIdx: idx,
             phase: "gallery",
             onNavigate: (delta) => setActiveIdx((i) => Math.max(0, Math.min(items.length - 1, i + delta))),
             onExit: goHome,
-            onOverscrollExit: goRipple,
+            onOverscrollExit: goPond,
             onToggleGrid: goGrid,
             arrival: galleryCarried ? "carried" : "resolve",
           }}
@@ -91,13 +99,15 @@ export function MemoryCarouselPage({
       galleryOpen
       galleryOnly
       inkArrival={inkArrival}
+      pondDeparture={pondDeparture}
+      hideGalleryHeader={hideHeader}
       galleryFocusId={galleryFocusId}
       galleryCarried={galleryCarried}
       naming={naming}
       hideAnnotations
       onNewMemory={goRecord}
       onGalleryExit={goHome}
-      onOverscrollExit={goRipple}
+      onOverscrollExit={goPond}
       onToggleGrid={goGrid}
     />
   );

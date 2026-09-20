@@ -2,17 +2,14 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
 import { CHROME_GRAY } from "../lib/colors";
-import { isPuddleSupported } from "../lib/puddle/simulation";
 import { SERIF, SERIF_EXPOSURE } from "../lib/theme";
 import { beginTranscription } from "../lib/transcribe";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
 import { BackButton } from "./BackButton";
-import { readVariant } from "./HomePage";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PAGE_BG, PuddleBackdrop } from "./PuddleBackdrop";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
-import { RecordingStartPage } from "./RecordingStartPage";
 import { ContourArtifact, pickArtifactModelPath } from "./ContourArtifact";
 
 /* The arrival is staggered — the water's arrival rings settle first, then the
@@ -47,6 +44,7 @@ const noteStyle = {
 /** Where the homescreen's descent left the camera, if we arrived from it. */
 interface PuddleRecordingState {
   focus?: [number, number];
+  shape?: { modelPath?: string };
 }
 
 /**
@@ -58,7 +56,8 @@ interface PuddleRecordingState {
 export function PuddleRecordingPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const focus = (location.state as PuddleRecordingState | null)?.focus;
+  const arrival = (location.state as PuddleRecordingState | null) ?? null;
+  const focus = arrival?.focus;
 
   const [backIn, setBackIn] = useState(false);
   const [artifactIn, setArtifactIn] = useState(false);
@@ -68,8 +67,8 @@ export function PuddleRecordingPage() {
   const [reducedMotion] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
-  /** One form for this visit — plucked once so it doesn't reshuffle on re-render. */
-  const [modelPath] = useState(pickArtifactModelPath);
+  /** One form for this visit — kept if we came back from the transcript. */
+  const [modelPath] = useState(() => arrival?.shape?.modelPath ?? pickArtifactModelPath());
 
   const recorder = useVoiceRecorder({
     onStop: (audio) => {
@@ -83,7 +82,11 @@ export function PuddleRecordingPage() {
       setLeaving(true);
       setTimeout(() => {
         navigate("/record/transcript", {
-          state: { transcriptionId, ...(focus ? { focus } : {}) },
+          state: {
+            transcriptionId,
+            shape: { modelPath },
+            ...(focus ? { focus } : {}),
+          },
         });
       }, CHROME_OUT_MS);
     },
@@ -120,7 +123,10 @@ export function PuddleRecordingPage() {
     setLeaving(true);
     setTimeout(() => {
       navigate("/record/transcript", {
-        state: focus ? { focus } : undefined,
+        state: {
+          shape: { modelPath },
+          ...(focus ? { focus } : {}),
+        },
       });
     }, CHROME_OUT_MS);
   };
@@ -310,14 +316,4 @@ export function PuddleRecordingPage() {
       </div>
     </div>
   );
-}
-
-/**
- * `/record/start` — the puddle recording screen when the puddle homescreen is
- * the one you pressed from, the original otherwise. Same A/B convention as the
- * shader and gallery variants.
- */
-export function RecordingStartRoute() {
-  const [puddle] = useState(() => readVariant() === "puddle" && isPuddleSupported());
-  return puddle ? <PuddleRecordingPage /> : <RecordingStartPage />;
 }
