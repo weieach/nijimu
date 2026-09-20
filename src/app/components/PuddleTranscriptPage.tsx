@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { NAMING_PATH, RECORD_START_PATH } from "../lib/routes";
+import { RECORD_START_PATH, SHAPE_BUILD_PATH } from "../lib/routes";
 import { SERIF, SERIF_DISPLAY, SERIF_EXPOSURE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import { BackButton } from "./BackButton";
@@ -137,7 +137,7 @@ export function PuddleTranscriptPage() {
     } else {
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate(NAMING_PATH, {
+        navigate(SHAPE_BUILD_PATH, {
           state: {
             transcript,
             highlightedWords: Array.from(highlightedWords).map((i) => words[i]),

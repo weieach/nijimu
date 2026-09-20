@@ -15,6 +15,7 @@ import {
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
+import { NAMING_PATH } from "../lib/routes";
 
 export function ShapeTexturePage() {
   const location = useLocation();
@@ -113,7 +114,7 @@ export function ShapeTexturePage() {
   });
 
   const handleContinue = () => {
-    navigate("/record/name", {
+    navigate(NAMING_PATH, {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         shape: {
