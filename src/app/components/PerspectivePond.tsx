@@ -175,9 +175,11 @@ interface PondProps {
   promptRefs: RefObject<Array<HTMLDivElement | null>>;
   cueRef: RefObject<PondPromptCue>;
   onReady: () => void;
+  /** Prompt ripples and the cursor ring wait until the invitation has settled. */
+  lifeReady?: boolean;
 }
 
-function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady }: PondProps) {
+function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true }: PondProps) {
   const { camera, size, gl } = useThree();
   const time = useRef(0);
   const ready = useRef(false);
@@ -224,7 +226,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     // Slot zero belongs to the only visible prompt. Old prompt ripples cannot
     // accumulate; the other slots are reserved for the user's own touches.
     uniforms.uDrops.value[0].set(size.width < 600 ? 0 : thought.x, thought.z,
-      reducedMotion ? -1.5 : time.current - cue.age, cue.ripple);
+      reducedMotion ? -1.5 : time.current - cue.age, lifeReady ? cue.ripple : 0);
     if (touch && touch.serial !== seenTouch.current) {
       seenTouch.current = touch.serial;
       raycaster.setFromCamera(new THREE.Vector2(touch.x * 2 - 1, 1 - touch.y * 2), camera);
@@ -258,7 +260,7 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
         cursorLast.set(point.x, .03, point.z);
         const dist = Math.hypot(camera.position.x - point.x, camera.position.y - .03, camera.position.z - point.z);
         nearness = Math.min(1, nearDist / dist);
-        target = smoothunit(RING_FADE_IN, RING_FADE_FULL, nearness);
+        target = lifeReady ? smoothunit(RING_FADE_IN, RING_FADE_FULL, nearness) : 0;
       }
     }
     cursorFade.current += (target - cursorFade.current) * (1 - Math.exp(-(reducedMotion ? 18 : 7) * Math.min(delta, .05)));

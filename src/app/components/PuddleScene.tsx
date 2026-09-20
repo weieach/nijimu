@@ -310,6 +310,7 @@ export function PuddleScene({
   onGalleryExit,
   onOverscrollExit,
   onToggleGrid,
+  toggleIcon,
 }: {
   /** Receives the uv point the descent ended on, so the next screen can surface there. */
   onNewMemory?: (focus?: [number, number]) => void;
@@ -344,6 +345,7 @@ export function PuddleScene({
   onOverscrollExit?: () => void;
   /** Switch from the G-key carousel to the card grid. */
   onToggleGrid?: () => void;
+  toggleIcon?: "view" | "plus";
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [failed, setFailed] = useState(false);
@@ -1199,7 +1201,7 @@ export function PuddleScene({
       phase="gallery" reducedMotion={reducedMotionPref} inkArrival={inkArrival} pondDeparture={pondDeparture} hideHeader={hideGalleryHeader}
       onNavigate={delta => setGalleryIdx(i => Math.max(0, Math.min(galleryItems.length - 1, i + delta)))}
       onExit={() => onGalleryExit?.()} onOverscrollExit={onOverscrollExit}
-      onToggleGrid={onToggleGrid} />;
+      onToggleGrid={onToggleGrid} toggleIcon={toggleIcon} />;
     return <BlobScene onNewMemory={onNewMemory} hideAnnotations={hideAnnotations} />;
   }
 
@@ -1515,6 +1517,7 @@ export function PuddleScene({
             onExit: () => diveControlsRef.current?.close(),
             onOverscrollExit: onOverscrollExit ?? (() => diveControlsRef.current?.close()),
             onToggleGrid,
+            toggleIcon,
             arrival: galleryCarried ? "carried" : "resolve",
           }}
         />

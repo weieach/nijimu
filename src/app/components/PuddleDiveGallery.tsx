@@ -240,6 +240,7 @@ export function PuddleDiveGallery({
   caption,
   exitOnBackdropClick = true,
   onToggleGrid,
+  toggleIcon = "view",
   showTimeScale = true,
   showArrows = true,
   waterEffect = true,
@@ -264,6 +265,9 @@ export function PuddleDiveGallery({
   /** Homescreen G-gallery exits on a blank click; the naming step does not. */
   exitOnBackdropClick?: boolean;
   onToggleGrid?: () => void;
+  /** The /memory carousel uses a plus that opens the pond after scrolling
+      to the nearer end of the archive. */
+  toggleIcon?: "view" | "plus";
   /** The foot ruler — hidden on the naming step. */
   showTimeScale?: boolean;
   showArrows?: boolean;
@@ -339,6 +343,39 @@ export function PuddleDiveGallery({
   const rimSettled = Math.abs(rimAt - activeIdx) < 0.04;
   const rimSettledRef = useRef(rimSettled);
   rimSettledRef.current = rimSettled;
+  const pendingPondRef = useRef(false);
+  const pondTargetRef = useRef<number | null>(null);
+
+  const nearerArchiveEnd = () => {
+    const last = Math.max(0, items.length - 1);
+    return activeIdx <= last - activeIdx ? 0 : last;
+  };
+
+  const openPondFromPlus = () => {
+    if (pondDeparture > 0 || pendingPondRef.current) return;
+    const target = nearerArchiveEnd();
+    if (target === activeIdx) {
+      onOverscrollExit?.();
+      return;
+    }
+    pendingPondRef.current = true;
+    pondTargetRef.current = target;
+    onNavigate(target - activeIdx);
+  };
+
+  useEffect(() => {
+    if (!pendingPondRef.current) return;
+    if (pondDeparture > 0 || (pondTargetRef.current !== null && activeIdx !== pondTargetRef.current)) {
+      pendingPondRef.current = false;
+      pondTargetRef.current = null;
+      return;
+    }
+    if (rimSettled) {
+      pendingPondRef.current = false;
+      pondTargetRef.current = null;
+      onOverscrollExit?.();
+    }
+  }, [activeIdx, rimSettled, pondDeparture, onOverscrollExit]);
 
   /* arrows — keyboard */
   useEffect(() => {
@@ -973,8 +1010,9 @@ export function PuddleDiveGallery({
 
       <GalleryViewToggle
         view="carousel"
-        onToggle={onToggleGrid ?? (() => {})}
-        visible={!hideHeader && chromeVisible && !!onToggleGrid}
+        icon={toggleIcon}
+        onToggle={toggleIcon === "plus" ? openPondFromPlus : (onToggleGrid ?? (() => {}))}
+        visible={!hideHeader && chromeVisible && (toggleIcon === "plus" ? !!onOverscrollExit : !!onToggleGrid)}
         enterAnimation={carriedChrome}
       />
 

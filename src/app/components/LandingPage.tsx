@@ -162,7 +162,7 @@ export function LandingPage() {
   const pond = pondTransition(pondElapsed ?? 0, reducedMotion);
   const pondArrival = inPond && pondElapsed === null ? 1 : pond.arrival;
   return (
-    <main style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: "#ededee" }}>
+    <main style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: "#e4e4e6" }}>
       {showGallery && (
         <div ref={galleryRef} tabIndex={-1} aria-label="memory gallery" inert={pondElapsed !== null || (!inGallery && !inNaming)}
           style={{ position: "absolute", inset: 0, zIndex: 0, outline: "none", opacity: pondElapsed !== null ? pond.galleryOpacity : 1 }}>
@@ -195,7 +195,14 @@ export function LandingPage() {
             if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
             else closePond();
           }} />
-          <GalleryViewToggle view="carousel" onToggle={() => navigate("/memory/scroll")} />
+          <GalleryViewToggle
+            view="carousel"
+            label="return to carousel"
+            onToggle={() => {
+              if (openingPond && !pondLeaving) { setPondElapsed(null); setPondReady(false); }
+              else closePond();
+            }}
+          />
         </div>
       )}
       {!inGallery && !inNaming && !inPond && (

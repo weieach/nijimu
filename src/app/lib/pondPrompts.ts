@@ -1,5 +1,10 @@
 import { smoothProgress } from "./landingTransition";
 
+/** First pond visit plays the invitation; later visits start at rest. */
+let pondInstructionSeen = false;
+export const hasSeenPondInstruction = () => pondInstructionSeen;
+export const markPondInstructionSeen = () => { pondInstructionSeen = true; };
+
 export const POND_THOUGHTS = [
   { text: "when was the last time your heart felt heavy?", x: -2.4, z: -4 },
   { text: "who made an ordinary day feel different?", x: 2.6, z: -7.2 },

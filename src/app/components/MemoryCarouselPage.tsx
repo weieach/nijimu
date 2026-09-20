@@ -85,6 +85,7 @@ export function MemoryCarouselPage({
             onExit: goHome,
             onOverscrollExit: goPond,
             onToggleGrid: goGrid,
+            toggleIcon: "plus",
             arrival: galleryCarried ? "carried" : "resolve",
           }}
         />
@@ -109,6 +110,7 @@ export function MemoryCarouselPage({
       onGalleryExit={goHome}
       onOverscrollExit={goPond}
       onToggleGrid={goGrid}
+      toggleIcon="plus"
     />
   );
 }

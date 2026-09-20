@@ -13,8 +13,6 @@ import { inkGallerySeat } from "./PuddleDiveGallery";
 
 /** Caption + annotation dot — shared so the marks match the words. */
 const BLOB_CAPTION_COLOR = "#D6DADB";
-/** Dark label ink — a step below CHROME_GRAY so it holds on the paper. */
-const BLOB_LABEL_INK = "#5c5c64";
 /** Landing description. */
 const HEADER_DESC_SIZE = 12;
 /** Blob year + title — restored clamp, a step above the header description. */
@@ -226,8 +224,20 @@ function gentleEase(t: number): number {
 }
 
 const PAPER = "#ededee";
+/** Landing paper — a step below the raw token so isolation doesn't read as a flash. */
+const LANDING_PAPER = "#e4e4e6";
 const HEADER_INK = { mark: "#504A4A", desc: "#2A2018" };
 const HEADER_LIGHT = { mark: "#e2e2e3", desc: "#D6DADB" };
+const HEADER_COLOR_FADE = "color 1.15s ease";
+/** Labels invert against the field; the saturation pass keeps that invert gray. */
+const LANDING_INK = {
+  color: "rgba(255, 255, 255, 0.8)",
+  mixBlendMode: "difference" as const,
+};
+const LANDING_MONO = {
+  color: "#808080",
+  mixBlendMode: "saturation" as const,
+};
 
 function hexLuma(hex: string): number {
   const n = hex.replace("#", "");
@@ -237,15 +247,13 @@ function hexLuma(hex: string): number {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
 
-const PAPER_LUMA = hexLuma(PAPER);
+const PAPER_LUMA = hexLuma(LANDING_PAPER);
 
 interface CaptionFx {
   /** How far the caption sits in the header keep-out — blur only. */
   progress: number;
   /** Label-on-label coverage — blur only; the top of the stack stays sharp. */
   overlap: number;
-  onDark: boolean;
-  dotOnDark: boolean;
   stack: number;
 }
 
@@ -536,18 +544,36 @@ export function BlobScene({
     if (!c) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    c.width = 512;
-    c.height = 512;
-    const img = ctx.createImageData(512, 512);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const v = Math.random() * 255;
-      img.data[i] = v;
-      img.data[i + 1] = v;
-      img.data[i + 2] = v;
-      img.data[i + 3] = 30;
-    }
-    ctx.putImageData(img, 0, 0);
-  }, []);
+    let painted = false;
+    const paint = () => {
+      // The old 512px texture stretched each grain into a block on desktop.
+      // Match the landing's display pixels so the texture stays fine at any size.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = classicChrome ? Math.max(1, Math.round(c.clientWidth * dpr)) : 512;
+      const height = classicChrome ? Math.max(1, Math.round(c.clientHeight * dpr)) : 512;
+      if (painted && c.width === width && c.height === height) return;
+      c.width = width;
+      c.height = height;
+      const img = ctx.createImageData(width, height);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const v = Math.random() * 255;
+        img.data[i] = v;
+        img.data[i + 1] = v;
+        img.data[i + 2] = v;
+        img.data[i + 3] = 30;
+      }
+      ctx.putImageData(img, 0, 0);
+      painted = true;
+    };
+    paint();
+    const observer = new ResizeObserver(paint);
+    observer.observe(c);
+    window.addEventListener("resize", paint);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", paint);
+    };
+  }, [classicChrome]);
 
   /* ─── pause blob animations on hover ─── */
   useEffect(() => {
@@ -1081,13 +1107,10 @@ export function BlobScene({
         }
       }
 
-      const field = containerRef.current?.getBoundingClientRect();
       const nextFx: CaptionFx[] = blobs.map((_, i) => {
         const prev = captionFxRef.current[i] ?? {
           progress: 0,
           overlap: 0,
-          onDark: false,
-          dotOnDark: false,
           stack: 0,
         };
         const row = laid[i];
@@ -1108,12 +1131,7 @@ export function BlobScene({
 
         const progress = prev.progress + (headerTarget - prev.progress) * follow;
         const overlap = prev.overlap + (cover[i] - prev.overlap) * follow;
-        const onDark = onDarkFrom(lumaAt(cx, cy), prev.onDark);
-        const ann = annotationsRef.current[i];
-        const dotOnDark = field && ann && (ann.dotX !== 0 || ann.dotY !== 0)
-          ? onDarkFrom(lumaAt(field.left + ann.dotX, field.top + ann.dotY), prev.dotOnDark)
-          : prev.dotOnDark;
-        return { progress, overlap, onDark, dotOnDark, stack: stackOf[i] };
+        return { progress, overlap, stack: stackOf[i] };
       });
 
       const changed =
@@ -1124,8 +1142,6 @@ export function BlobScene({
             !prev ||
             Math.abs(prev.progress - fx.progress) > 0.01 ||
             Math.abs(prev.overlap - fx.overlap) > 0.01 ||
-            prev.onDark !== fx.onDark ||
-            prev.dotOnDark !== fx.dotOnDark ||
             prev.stack !== fx.stack
           );
         });
@@ -1145,6 +1161,140 @@ export function BlobScene({
 
   // Connection lines: from hovered event's dot to each connected event's dot
   const hoveredConns = hoveredIdx !== null ? getConnections(hoveredIdx) : [];
+  const labelsFade = clamp(1 - morphVal * 5, 0, 1) * entryLabels;
+  const renderAnnotationMarks = (bind: boolean) => blobs.map((blob, i) => {
+    const a = annotations[i];
+    if (!a || (a.dotX === 0 && a.dotY === 0)) {
+      if (bind) captionEls.current[i] = null;
+      return null;
+    }
+    const isPulsating = connectionCount(i) > 2;
+    const isHovered = hoveredIdx === i;
+    const isConnectedToHovered = hoveredIdx !== null && hoveredConns.includes(i);
+    const dimmed = hoveredIdx !== null && !isHovered && !isConnectedToHovered;
+    const fx = classicChrome ? captionFx[i] : undefined;
+    const headerNear = fx?.progress ?? 0;
+    const overlap = fx?.overlap ?? 0;
+    const stack = fx?.stack ?? i;
+    const buried = headerNear > 0.45 || overlap > 0.45;
+    const captionColor = classicChrome ? LANDING_INK.color : BLOB_CAPTION_COLOR;
+    const dotColor = classicChrome ? LANDING_INK.color : BLOB_CAPTION_COLOR;
+    const visible = dimmed ? 0.2 : 1;
+    const soften = Math.max(headerNear, overlap) * 6;
+    const softenFilter = soften > 0.1 ? `blur(${soften}px)` : "none";
+
+    return (
+      <div
+        key={`${bind ? "a" : "m"}-${blob.id}`}
+        onMouseEnter={bind ? (e) => { e.stopPropagation(); setHoveredIdx(i); } : undefined}
+        onMouseLeave={bind ? () => setHoveredIdx(null) : undefined}
+        onClick={bind ? (e) => {
+          e.stopPropagation();
+          if (!classicChrome) morphToGalleryAt(i);
+        } : undefined}
+        style={{ pointerEvents: bind && !buried ? "auto" : "none" }}
+      >
+        <div
+          className="absolute"
+          style={{
+            left: `${a.dotX}px`,
+            top: `${a.dotY}px`,
+            width: BLOB_DOT,
+            height: BLOB_DOT,
+            borderRadius: "50%",
+            backgroundColor: dotColor,
+            transform: "translate(-50%, -50%)",
+            zIndex: 22 + stack,
+            opacity: dimmed ? 0.25 : 1,
+            filter: softenFilter,
+          }}
+        />
+        {isPulsating && (
+          <div
+            className="absolute"
+            style={{
+              left: `${a.dotX}px`,
+              top: `${a.dotY}px`,
+              width: BLOB_DOT,
+              height: BLOB_DOT,
+              borderRadius: "50%",
+              border: `${BLOB_RING_STROKE}px solid ${dotColor}`,
+              backgroundColor: "transparent",
+              boxSizing: "content-box",
+              transform: "translate(-50%, -50%)",
+              zIndex: 21 + stack,
+              opacity: dimmed ? 0.15 : 1,
+              filter: softenFilter,
+              animation: "ringPulse 2.5s ease-in-out infinite",
+              ["--ring-from" as string]: `${BLOB_DOT}px`,
+              ["--ring-to" as string]: `${BLOB_DOT * 5.6}px`,
+            }}
+          />
+        )}
+        <div
+          ref={bind ? (el) => { captionEls.current[i] = el; } : undefined}
+          className="absolute"
+          style={{
+            left: `${a.anchorX}px`,
+            top: `${a.anchorY}px`,
+            transform: a.textAlign === "right" ? "translateX(-100%)" : "translateX(0)",
+            zIndex: 22 + stack,
+            cursor: "pointer",
+            padding: "4px 8px",
+            margin: "-4px -8px",
+            color: captionColor,
+            pointerEvents: buried ? "none" : "auto",
+          }}
+        >
+          <div style={{ opacity: visible, filter: softenFilter }}>
+            <div
+              style={{
+                fontFamily: SERIF_CJK,
+                fontStyle: "normal",
+                fontSize: BLOB_CAPTION_SIZE,
+                color: "inherit",
+                opacity: 0.8,
+                letterSpacing: "0.06em",
+                marginBottom: 4,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {blob.year}
+            </div>
+            <div
+              style={{
+                fontFamily: SERIF,
+                fontStyle: "italic",
+                fontSize: BLOB_CAPTION_SIZE,
+                color: "inherit",
+                opacity: 0.9,
+                lineHeight: blob.event.includes("\n") ? 1.5 : "normal",
+                whiteSpace: blob.event.includes("\n") ? "pre-line" : "nowrap",
+                letterSpacing: SERIF_ITALIC_TRACKING,
+              }}
+            >
+              {blob.event}
+            </div>
+            {blob.year === "2026" && (
+              <div
+                style={{
+                  fontFamily: "Georgia, serif",
+                  fontStyle: "italic",
+                  fontSize: 11,
+                  color: "inherit",
+                  opacity: 0.35,
+                  marginTop: 8,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ...
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  });
 
   return (
     <div
@@ -1154,7 +1304,12 @@ export function BlobScene({
         : entryTime < INK_ENTRY.shrinkEnd ? "shrink" : entryTime < INK_ENTRY.ringEnd ? "gather" : entryTime < INK_ENTRY.ringHoldEnd ? "ring"
         : entryTime < INK_ENTRY.unfoldEnd ? "unfold" : "artifacts"}
       className="relative w-full h-screen overflow-hidden cursor-pointer select-none"
-      style={{ background: landingArrival ? `rgba(237,237,238,${entryPaper})` : PAPER }}
+      style={{
+        background: classicChrome
+          ? (landingArrival ? `rgba(228,228,230,${entryPaper})` : LANDING_PAPER)
+          : (landingArrival ? `rgba(237,237,238,${entryPaper})` : PAPER),
+        isolation: classicChrome ? "isolate" : undefined,
+      }}
       onClick={handleClick}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
@@ -1186,11 +1341,13 @@ export function BlobScene({
           top: 0,
           width: `${canvasWidth}px`,
           height: `${canvasHeight}px`,
-          transform: morphVal < 0.05
-            ? `translate(${panState.x}px, ${panState.y}px)`
-            : `translate(${-(canvasWidth - vw) / 2 + vw * 0.15}px, ${-(canvasHeight - vh) / 2 - vh * 0.1}px)`,
+          transform: classicChrome && morphVal < 0.05 && !panState.x && !panState.y
+            ? undefined
+            : morphVal < 0.05
+              ? `translate(${panState.x}px, ${panState.y}px)`
+              : `translate(${-(canvasWidth - vw) / 2 + vw * 0.15}px, ${-(canvasHeight - vh) / 2 - vh * 0.1}px)`,
           transition: morphVal > 0.05 ? "transform 0.6s ease" : "none",
-          willChange: "transform",
+          willChange: classicChrome ? undefined : "transform",
         }}
       >
         {/* ═══ BLOB LAYER ═══ */}
@@ -1214,7 +1371,7 @@ export function BlobScene({
                 animation: `blobFloat${blob.id % 4} ${blob.animDuration}s ease-in-out ${blob.animDelay}s infinite,
                   blobMorph ${blob.animDuration * 1.3}s ease-in-out ${blob.animDelay}s infinite,
                   blobScale ${blob.animDuration * 0.8}s ease-in-out ${blob.animDelay * 0.5}s infinite`,
-                willChange: "transform, left, top, width, height",
+                willChange: classicChrome ? undefined : "transform, left, top, width, height",
               }}
             />
           ))}
@@ -1288,162 +1445,25 @@ export function BlobScene({
           </svg>
         )}
 
-        {/* ═══ ANNOTATIONS ═══ */}
-        <div className="absolute inset-0" style={{ opacity: clamp(1 - morphVal * 5, 0, 1) * entryLabels, zIndex: 19 }}>
-          {blobs.map((blob, i) => {
-            const a = annotations[i];
-            if (!a || (a.dotX === 0 && a.dotY === 0)) {
-              captionEls.current[i] = null;
-              return null;
-            }
-            const cc = connectionCount(i);
-            const ts = textScale(i);
-            const isPulsating = cc > 2;
-            const isHovered = hoveredIdx === i;
-            const isConnectedToHovered = hoveredIdx !== null && hoveredConns.includes(i);
-            const dimmed = hoveredIdx !== null && !isHovered && !isConnectedToHovered;
-            const fx = classicChrome ? captionFx[i] : undefined;
-            const headerNear = fx?.progress ?? 0;
-            const overlap = fx?.overlap ?? 0;
-            const stack = fx?.stack ?? i;
-            const buried = headerNear > 0.45 || overlap > 0.45;
-            const captionColor = classicChrome
-              ? (fx?.onDark ? HEADER_LIGHT.desc : BLOB_LABEL_INK)
-              : BLOB_CAPTION_COLOR;
-            const dotColor = classicChrome
-              ? (fx?.dotOnDark ? HEADER_LIGHT.desc : BLOB_LABEL_INK)
-              : BLOB_CAPTION_COLOR;
-            const visible = dimmed ? 0.2 : 1;
-            const soften = Math.max(headerNear, overlap) * 6;
-            const softenFilter = soften > 0.1 ? `blur(${soften}px)` : "none";
-
-            return (
-              <div
-                key={`a-${blob.id}`}
-                onMouseEnter={(e) => { e.stopPropagation(); setHoveredIdx(i); }}
-                onMouseLeave={() => setHoveredIdx(null)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!classicChrome) morphToGalleryAt(i);
-                }}
-                style={{ pointerEvents: buried ? "none" : "auto" }}
-              >
-                {/* Dot */}
-                <div
-                  className="absolute"
-                  style={{
-                    left: `${a.dotX}px`,
-                    top: `${a.dotY}px`,
-                    width: BLOB_DOT,
-                    height: BLOB_DOT,
-                    borderRadius: "50%",
-                    backgroundColor: dotColor,
-                    transform: "translate(-50%, -50%)",
-                    zIndex: 22 + stack,
-                    opacity: dimmed ? 0.25 : 1,
-                    filter: softenFilter,
-                    transition: "background-color 0.35s ease",
-                  }}
-                />
-                {/* Pulsating ring for highly-connected events */}
-                {isPulsating && (
-                  <div
-                    className="absolute"
-                    style={{
-                      left: `${a.dotX}px`,
-                      top: `${a.dotY}px`,
-                      width: BLOB_DOT,
-                      height: BLOB_DOT,
-                      borderRadius: "50%",
-                      border: `${BLOB_RING_STROKE}px solid ${dotColor}`,
-                      backgroundColor: "transparent",
-                      boxSizing: "content-box",
-                      transform: "translate(-50%, -50%)",
-                      zIndex: 21 + stack,
-                      opacity: dimmed ? 0.15 : 1,
-                      filter: softenFilter,
-                      animation: "ringPulse 2.5s ease-in-out infinite",
-                      transition: "border-color 0.35s ease",
-                      ["--ring-from" as string]: `${BLOB_DOT}px`,
-                      ["--ring-to" as string]: `${BLOB_DOT * 5.6}px`,
-                    }}
-                  />
-                )}
-                {/* Outer box is the hit + keep-out measure; inner text only blurs. */}
-                <div
-                  ref={(el) => { captionEls.current[i] = el; }}
-                  className="absolute"
-                  style={{
-                    left: `${a.anchorX}px`,
-                    top: `${a.anchorY}px`,
-                    transform: a.textAlign === "right" ? "translateX(-100%)" : "translateX(0)",
-                    zIndex: 22 + stack,
-                    cursor: "pointer",
-                    padding: "4px 8px",
-                    margin: "-4px -8px",
-                    color: captionColor,
-                    pointerEvents: buried ? "none" : "auto",
-                  }}
-                >
-                  <div
-                    style={{
-                      opacity: visible,
-                      filter: softenFilter,
-                    }}
-                  >
-                  {/* Year — GenRyuMin first, same rule as gallery / puddle captions */}
-                  <div
-                    style={{
-                      fontFamily: SERIF_CJK,
-                      fontStyle: "normal",
-                      fontSize: BLOB_CAPTION_SIZE,
-                      color: "inherit",
-                      opacity: 0.8,
-                      letterSpacing: "0.06em",
-                      marginBottom: 4,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {blob.year}
-                  </div>
-                  {/* Memory text */}
-                  <div
-                    style={{
-                      fontFamily: SERIF,
-                      fontStyle: "italic",
-                      fontSize: BLOB_CAPTION_SIZE,
-                      color: "inherit",
-                      opacity: 0.9,
-                      lineHeight: blob.event.includes("\n") ? 1.5 : "normal",
-                      whiteSpace: blob.event.includes("\n") ? "pre-line" : "nowrap",
-                      letterSpacing: SERIF_ITALIC_TRACKING,
-                    }}
-                  >
-                    {blob.event}
-                  </div>
-                  {/* Ellipsis for entry 15 (2026) */}
-                  {blob.year === "2026" && (
-                    <div
-                      style={{
-                        fontFamily: "Georgia, serif",
-                        fontStyle: "italic",
-                        fontSize: 11,
-                        color: "inherit",
-                        opacity: 0.35,
-                        marginTop: 8,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      ...
-                    </div>
-                  )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {!classicChrome && (
+          <div className="absolute inset-0" style={{ opacity: labelsFade, zIndex: 19 }}>
+            {renderAnnotationMarks(!classicChrome)}
+          </div>
+        )}
       </div>{/* end pannable inner canvas */}
+
+      {/* Grain sits on the blobs, under the landing type so exclusion can read the field. */}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full pointer-events-none opacity-40"
+        style={{ mixBlendMode: "overlay", imageRendering: classicChrome ? "auto" : "pixelated", opacity: landingArrival ? 0.4 * entryPaper : undefined }}
+      />
+      <div className="absolute inset-0 pointer-events-none" style={{
+        opacity: entryPaper,
+        background: classicChrome
+          ? "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.12) 100%)"
+          : "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.08) 100%)",
+      }} />
 
       {/* ═══ GALLERY TEXT ═══ */}
       <div
@@ -1527,149 +1547,33 @@ export function BlobScene({
       {onNewMemory && (
         <div
           className="absolute inset-0 pointer-events-none"
-          style={{
+          style={classicChrome ? {
+            mixBlendMode: LANDING_INK.mixBlendMode,
+            ...(landingArrival ? { opacity: 1 } : morphVal > 0 ? {
+              opacity: clamp(1 - morphVal * 4, 0, 1),
+              transition: "opacity 0.3s ease",
+            } : {}),
+          } : {
             opacity: landingArrival ? 1 : clamp(1 - morphVal * 4, 0, 1),
             zIndex: 25,
             transition: landingArrival ? "none" : "opacity 0.3s ease",
           }}
         >
           {classicChrome ? (
-            <>
             <div
               style={{
                 position: "absolute",
-                inset: 0,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 28,
-                zIndex: 2,
+                left: 0,
+                top: 0,
+                width: canvasWidth,
+                height: canvasHeight,
+                ...(labelsFade < 1 ? { opacity: labelsFade } : {}),
               }}
             >
-              <div
-                ref={headerCopyRef}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "stretch",
-                  gap: 28,
-                  width: "fit-content",
-                }}
-              >
-              <p
-                style={{
-                  fontFamily: SERIF,
-                  color: headerOnDark ? HEADER_LIGHT.desc : HEADER_INK.desc,
-                  fontSize: HEADER_DESC_SIZE,
-                  letterSpacing: "0.24px",
-                  lineHeight: 1.5,
-                  margin: 0,
-                  padding: 0,
-                  textAlign: "center",
-                  width: 0,
-                  minWidth: "100%",
-                  boxSizing: "border-box",
-                  opacity: entryDesc,
-                  transition: "color 0.35s ease",
-                }}
-              >
-                An interactive memory sculpting tool to trace how memory evolves.
-              </p>
-              <button
-                type="button"
-                className="landing-enter-btn"
-                disabled={!!landingArrival}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNewMemory();
-                }}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 16,
-                  margin: 0,
-                  padding: 0,
-                  border: "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  pointerEvents: landingArrival ? "none" : "auto",
-                  color: headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark,
-                  fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
-                  lineHeight: 1.5,
-                  transition: "color 0.35s ease",
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: HEADER_DESC_SIZE + 1,
-                    letterSpacing: "0.01em",
-                    whiteSpace: "nowrap",
-                    marginRight: -4,
-                    opacity: entryHeader,
-                  }}
-                >
-                  {ctaLabel}
-                </span>
-                {!markHeld && (
-                <span
-                  ref={markRef}
-                  style={{
-                    fontFamily: SERIF_CJK,
-                    fontStyle: "normal",
-                    letterSpacing: PAGE_HEADER_MARK.letterSpacing,
-                    textTransform: "lowercase",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    color: markInk,
-                  }}
-                >
-                  <span>滲む</span>
-                  <span>nijimu</span>
-                </span>
-                )}
-                <span className="landing-enter-arrow" aria-hidden style={{ opacity: entryHeader }}>
-                  <span className="landing-enter-stem" />
-                  <span className="landing-enter-caret" />
-                </span>
-              </button>
-              </div>
+              {renderAnnotationMarks(true)}
             </div>
-            {markHeld && markFrom.current && (
-              <span
-                style={{
-                  position: "fixed",
-                  left: lerp(markFrom.current.left, vw / 2, entryMark),
-                  top: lerp(markFrom.current.top, PAGE_HEADER_MARK.top, entryMark),
-                  transform: "translateX(-50%)",
-                  fontFamily: SERIF_CJK,
-                  fontStyle: "normal",
-                  fontSize: lerp(markFrom.current.fontSize, PAGE_HEADER_MARK.fontSize, entryMark),
-                  letterSpacing: PAGE_HEADER_MARK.letterSpacing,
-                  lineHeight: 1.5,
-                  textTransform: "lowercase",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: lerp(markFrom.current.gap, PAGE_HEADER_MARK.gap, entryMark),
-                  color: markInk,
-                  whiteSpace: "nowrap",
-                  margin: 0,
-                  padding: 0,
-                  zIndex: 50,
-                  pointerEvents: "none",
-                }}
-              >
-                <span>滲む</span>
-                <span>nijimu</span>
-              </span>
-            )}
-            </>
           ) : (
             <>
-              {/* Bottom blur gradient */}
               <div
                 style={{
                   position: "absolute",
@@ -1710,18 +1614,177 @@ export function BlobScene({
         </div>
       )}
 
-      {/* Grain */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none opacity-40"
-        style={{ mixBlendMode: "overlay", imageRendering: "pixelated", opacity: landingArrival ? 0.4 * entryPaper : undefined }}
-      />
+      {classicChrome && onNewMemory && (
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            ...LANDING_MONO,
+            ...(landingArrival ? { opacity: 1 } : morphVal > 0 ? {
+              opacity: clamp(1 - morphVal * 4, 0, 1),
+            } : {}),
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: canvasWidth,
+              height: canvasHeight,
+              ...(labelsFade < 1 ? { opacity: labelsFade } : {}),
+            }}
+          >
+            {renderAnnotationMarks(false)}
+          </div>
+        </div>
+      )}
 
-      {/* Vignette */}
-      <div className="absolute inset-0 pointer-events-none" style={{
-        opacity: entryPaper,
-        background: "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.08) 100%)",
-      }} />
+      {classicChrome && onNewMemory && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            zIndex: 26,
+            ...(landingArrival ? { opacity: 1 } : morphVal > 0 ? {
+              opacity: clamp(1 - morphVal * 4, 0, 1),
+              transition: "opacity 0.3s ease",
+            } : {}),
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 28,
+            }}
+          >
+            <div
+              ref={headerCopyRef}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "stretch",
+                gap: 28,
+                width: "fit-content",
+              }}
+            >
+              <p
+                style={{
+                  fontFamily: SERIF,
+                  color: headerOnDark ? HEADER_LIGHT.desc : HEADER_INK.desc,
+                  fontSize: HEADER_DESC_SIZE,
+                  letterSpacing: "0.24px",
+                  lineHeight: 1.5,
+                  margin: 0,
+                  padding: 0,
+                  textAlign: "center",
+                  width: 0,
+                  minWidth: "100%",
+                  boxSizing: "border-box",
+                  opacity: entryDesc,
+                  transition: HEADER_COLOR_FADE,
+                }}
+              >
+                An interactive memory sculpting tool to trace how memory evolves.
+              </p>
+              <button
+                type="button"
+                className="landing-enter-btn"
+                disabled={!!landingArrival}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewMemory();
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 16,
+                  margin: 0,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
+                  appearance: "none",
+                  WebkitAppearance: "none",
+                  cursor: "pointer",
+                  pointerEvents: landingArrival ? "none" : "auto",
+                  color: headerOnDark ? HEADER_LIGHT.mark : HEADER_INK.mark,
+                  fontSize: "clamp(12px, calc(12px + (16 - 12) * ((100vw - 390px) / (1024 - 390))), 16px)",
+                  lineHeight: 1.5,
+                  transition: HEADER_COLOR_FADE,
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: SANS,
+                    fontSize: HEADER_DESC_SIZE + 1,
+                    letterSpacing: "0.01em",
+                    whiteSpace: "nowrap",
+                    marginRight: -4,
+                    opacity: entryHeader,
+                  }}
+                >
+                  {ctaLabel}
+                </span>
+                {!markHeld && (
+                  <span
+                    ref={markRef}
+                    style={{
+                      fontFamily: SERIF_CJK,
+                      fontStyle: "normal",
+                      letterSpacing: PAGE_HEADER_MARK.letterSpacing,
+                      textTransform: "lowercase",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      color: "inherit",
+                    }}
+                  >
+                    <span>滲む</span>
+                    <span>nijimu</span>
+                  </span>
+                )}
+                <span className="landing-enter-arrow" aria-hidden style={{ opacity: entryHeader }}>
+                  <span className="landing-enter-stem" />
+                  <span className="landing-enter-caret" />
+                </span>
+              </button>
+            </div>
+          </div>
+          {markHeld && markFrom.current && (
+            <span
+              style={{
+                position: "fixed",
+                left: lerp(markFrom.current.left, vw / 2, entryMark),
+                top: lerp(markFrom.current.top, PAGE_HEADER_MARK.top, entryMark),
+                transform: "translateX(-50%)",
+                fontFamily: SERIF_CJK,
+                fontStyle: "normal",
+                fontSize: lerp(markFrom.current.fontSize, PAGE_HEADER_MARK.fontSize, entryMark),
+                letterSpacing: PAGE_HEADER_MARK.letterSpacing,
+                lineHeight: 1.5,
+                textTransform: "lowercase",
+                display: "flex",
+                alignItems: "center",
+                gap: lerp(markFrom.current.gap, PAGE_HEADER_MARK.gap, entryMark),
+                color: markInk,
+                whiteSpace: "nowrap",
+                margin: 0,
+                padding: 0,
+                zIndex: 50,
+                pointerEvents: "none",
+              }}
+            >
+              <span>滲む</span>
+              <span>nijimu</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ═══ KEYFRAMES ═══ */}
       <style>{`

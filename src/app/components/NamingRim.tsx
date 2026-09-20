@@ -550,6 +550,7 @@ export interface DiveGalleryProps {
   onExit: () => void;
   onOverscrollExit?: () => void;
   onToggleGrid?: () => void;
+  toggleIcon?: "view" | "plus";
   arrival: DiveArrival;
 }
 

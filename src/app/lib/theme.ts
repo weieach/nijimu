@@ -8,3 +8,5 @@ export const SERIF_DISPLAY = "'Exposure Trial Plus', Rowan, 'GenRyuMin2 TW', Geo
 export const SERIF_EXPOSURE = "'Exposure Trial', Rowan, 'GenRyuMin2 TW', Georgia, serif";
 export const SANS = "Switzer, sans-serif";
 export const SANS_UI = "'SF Pro', system-ui, sans-serif";
+/** Shared size for instructional copy (pond invitation, thought prompts, hold hint). */
+export const INSTRUCTION_SIZE = 16;
