@@ -7,7 +7,7 @@ import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
-import { inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
+import { flowProgress, inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
 import { pondRimPose, pondRimSeat } from "../lib/pondTransition";
 import { carouselFrame, carouselSeat, carouselContainsOffset, CAROUSEL_OLDER_SEATS, CAROUSEL_NEWER_SEATS } from "../lib/carouselLayout";
 
@@ -208,6 +208,8 @@ export function PuddleDiveGallery({
      x/y lerp would cut straight across the S instead of following its bends. */
   const [rimIdx, setRimIdx] = useState(activeIdx);
   const rimIdxRef = useRef(activeIdx);
+  /** Where a press on the backdrop began, so a drag is never read as a click. */
+  const backdropDownRef = useRef<{ x: number; y: number } | null>(null);
   const activeIdxRef = useRef(activeIdx);
   activeIdxRef.current = activeIdx;
   /* The naming year rebuilds the archive around the memory already at the
@@ -303,6 +305,24 @@ export function PuddleDiveGallery({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
+
+  /* A sideways gesture over the carousel is for the artifacts, never for the
+     browser's swipe-to-go-back — which unwound the entry and dropped the
+     viewer on the landing page. The handler below cannot do this job: it bails
+     out before preventDefault whenever the phase, the growth or a pond
+     departure says the carousel is not listening, and the gesture reaches the
+     compositor in exactly those gaps. overscroll-behavior does not cover it
+     either, since nothing here is a scroll port. */
+  useEffect(() => {
+    const block = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, [contenteditable=true]")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("wheel", block, { passive: false });
+    return () => window.removeEventListener("wheel", block);
+  }, []);
 
   /* scroll — stop at the oldest memory; past the newest opens the pond.
      The naming step has no arrows and must not steal the wheel. */
@@ -607,7 +627,16 @@ export function PuddleDiveGallery({
       className="absolute inset-0 select-none"
       inert={pondDeparture > 0}
       style={{ zIndex: 30, pointerEvents: growth < 1 || pondDeparture > 0 ? "none" : undefined }}
-      onClick={() => {
+      onPointerDownCapture={(e) => {
+        backdropDownRef.current = { x: e.clientX, y: e.clientY };
+      }}
+      onClick={(e) => {
+        const down = backdropDownRef.current;
+        backdropDownRef.current = null;
+        // The browser fires click on the common ancestor of the press and the
+        // release, so turning an artifact and letting go a little off it lands
+        // a click here. That is someone handling a memory, not asking to leave.
+        if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
         if (chromeVisible && exitOnBackdropClick) onExit();
       }}
     >
@@ -745,7 +774,13 @@ export function PuddleDiveGallery({
                   height: "100%",
                   opacity: gather
                     ? gatherHidden ? 0 : 1
-                    : inkArrival ? Math.min(1, growth * 5) : phase === "diving" ? 0 : undefined,
+                    : inkArrival
+                      // Keyed to the form's own size, not to the clock: it stays
+                      // out of sight until it is 40% grown, then fades in over
+                      // the next third. Opacity used to finish at 20% of the
+                      // growth, so the artifact simply appeared at dot size.
+                      ? flowProgress(entryScale, 0.4, 0.72)
+                      : phase === "diving" ? 0 : undefined,
                   filter: gather ? (gatherHidden ? "blur(24px)" : "blur(0px)") : undefined,
                   transform: gather
                     ? gatherHidden ? "translateY(22px) scale(0.94)" : "translateY(0) scale(1)"

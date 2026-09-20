@@ -8,7 +8,7 @@ import { PageHeader, PAGE_HEADER_MARK } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
-import { INK_ENTRY, INK_POINTER_SIZE, inkGrowth, smoothProgress, type InkArrival } from "../lib/landingTransition";
+import { INK_ENTRY, INK_POINTER_SIZE, flowProgress, inkGrowth, type InkArrival } from "../lib/landingTransition";
 import { LANDING_RETURN, useLandingReturn } from "../lib/landingReturn";
 import { carouselSeat, carouselContainsOffset, inkUnfoldSeat } from "../lib/carouselLayout";
 
@@ -414,18 +414,18 @@ export function BlobScene({
   }[] | null>(null);
   const entryTime = landingArrival?.elapsed ?? 0;
   const entryReduced = landingArrival?.reducedMotion ?? false;
-  const entryDesc = landingArrival ? 1 - smoothProgress(entryTime, 0, entryReduced ? 80 : INK_ENTRY.descEnd) : 1;
-  const entryHeader = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 80 : INK_ENTRY.descEnd,
+  const entryDesc = landingArrival ? 1 - flowProgress(entryTime, 0, entryReduced ? 80 : INK_ENTRY.descEnd) : 1;
+  const entryHeader = landingArrival ? 1 - flowProgress(entryTime, entryReduced ? 80 : INK_ENTRY.descEnd,
     entryReduced ? 160 : INK_ENTRY.headerEnd) : 1;
   const markFlightStart = entryReduced ? 160 : INK_ENTRY.headerEnd;
   const markFlightEnd = entryReduced ? 320 : INK_ENTRY.markEnd;
   const entryMark = landingArrival
-    ? smoothProgress(entryTime, markFlightStart, markFlightEnd)
+    ? flowProgress(entryTime, markFlightStart, markFlightEnd)
     : 0;
   const entryMarkInk = landingArrival
-    ? smoothProgress(entryTime, lerp(markFlightStart, markFlightEnd, 0.35), lerp(markFlightStart, markFlightEnd, 0.65))
+    ? flowProgress(entryTime, lerp(markFlightStart, markFlightEnd, 0.35), lerp(markFlightStart, markFlightEnd, 0.65))
     : 0;
-  const entryLabels = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 160 : INK_ENTRY.headerEnd,
+  const entryLabels = landingArrival ? 1 - flowProgress(entryTime, entryReduced ? 160 : INK_ENTRY.headerEnd,
     entryReduced ? 320 : INK_ENTRY.labelsEnd) : 1;
   const headerGone = !!landingArrival && entryTime >= markFlightStart;
   const markRef = useRef<HTMLSpanElement>(null);
@@ -465,8 +465,8 @@ export function BlobScene({
     readMark();
     setMarkHeld(true);
   }, [landingArrival, headerGone, markHeld]);
-  const entryShrink = landingArrival && !entryReduced ? smoothProgress(entryTime, INK_ENTRY.labelsEnd, INK_ENTRY.shrinkEnd) : 0;
-  const entryPaper = landingArrival ? 1 - smoothProgress(entryTime, entryReduced ? 320 : INK_ENTRY.pathHoldEnd,
+  const entryShrink = landingArrival && !entryReduced ? flowProgress(entryTime, INK_ENTRY.labelsEnd, INK_ENTRY.shrinkEnd) : 0;
+  const entryPaper = landingArrival ? 1 - flowProgress(entryTime, entryReduced ? 320 : INK_ENTRY.pathHoldEnd,
     entryReduced ? INK_ENTRY.reducedEnd : INK_ENTRY.growEnd) : 1;
 
   /* ─── sizing ─── */
@@ -511,8 +511,8 @@ export function BlobScene({
           radius: style.borderRadius, blur: blobs[i].blur * scale, opacity: blobs[i].opacity };
       });
     }
-    const gather = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.shrinkEnd, INK_ENTRY.pathEnd);
-    const unfold = entryReduced ? 0 : smoothProgress(entryTime, INK_ENTRY.pathHoldEnd, INK_ENTRY.unfoldEnd);
+    const gather = entryReduced ? 0 : flowProgress(entryTime, INK_ENTRY.shrinkEnd, INK_ENTRY.pathEnd);
+    const unfold = entryReduced ? 0 : flowProgress(entryTime, INK_ENTRY.pathHoldEnd, INK_ENTRY.unfoldEnd);
     const growth = inkGrowth(landingArrival);
     entryCapture.current.forEach((captured, i) => {
       const el = blobEls.current[i];
@@ -537,7 +537,7 @@ export function BlobScene({
       el.style.transform = `matrix(${lerp(captured.a, 1, entryShrink)}, ${lerp(captured.b, 0, entryShrink)}, ${lerp(captured.c, 0, entryShrink)}, ${lerp(captured.d, 1, entryShrink)}, ${-width / 2}, ${-height / 2})`;
       el.style.borderRadius = entryShrink > 0.98 ? "50%" : captured.radius;
       el.style.filter = `blur(${captured.blur * (1 - entryShrink)}px)`;
-      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * lerp(1, becomesArtifact ? seat.opacity : 1, unfold) * (becomesArtifact || entryReduced ? 1 - smoothProgress(growth, 0.01, entryReduced ? 1 : 0.24) : 1)}`;
+      el.style.opacity = `${lerp(captured.opacity, 1, entryShrink) * lerp(1, becomesArtifact ? seat.opacity : 1, unfold) * (becomesArtifact || entryReduced ? 1 - flowProgress(growth, 0.01, entryReduced ? 1 : 0.24) : 1)}`;
       if (entryShrink > 0.98) el.style.background = blobs[i].color.match(/#[0-9a-f]{6}/i)?.[0] ?? MEMORY_COLORS[0];
     });
   }, [landingArrival, entryTime, entryShrink, entryReduced, gallerySlot, landingFocusSlot, blobs, scale, vw, vh]);
@@ -1534,6 +1534,11 @@ export function BlobScene({
               height: "clamp(310px, 33.4vw, 430px)",
               position: "relative",
               overflow: "visible",
+              // The wrapper above is pointer-events:none so the carousel keeps
+              // the rest of the screen. The artifact itself has to take the
+              // pointer back, or OrbitControls never sees a drag and the form
+              // only ever appears to turn on its own clock.
+              pointerEvents: "auto",
             }}
           >
             <SceneViewer

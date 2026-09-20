@@ -302,6 +302,9 @@ function Model({
   );
   const { scene: threeScene } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
+  /** Angle the form holds beyond the shared clock, so pausing and resuming the
+   *  auto-turn is continuous instead of a jump to the clock's own angle. */
+  const spinOffsetRef = useRef(0);
   // Seeded from the page clock when the pose has to continue across a route
   // change; the artifact then starts mid-motion rather than at rest.
   const clock = useRef(sharedClock ? performance.now() / 1000 : 0);
@@ -563,8 +566,16 @@ function Model({
       groupRef.current.rotation.z = THREE.MathUtils.lerp(groupRef.current.rotation.z, tilt, blend);
     }
     // read off the clock rather than accumulated, so a seeded clock hands the
-    // turn over mid-rotation (see `sharedClock`)
-    if (autoRotate && !stillRef.current) groupRef.current.rotation.y = t * 0.16;
+    // turn over mid-rotation (see `sharedClock`). The offset is what keeps that
+    // from being destructive: assigning the bare clock angle meant any pause —
+    // a drag, a remount, a prop flip — snapped the form to wherever the clock
+    // had got to. While the turn is held, the offset tracks the angle the form
+    // is actually at, so resuming continues from there instead of jumping.
+    if (autoRotate && !stillRef.current) {
+      groupRef.current.rotation.y = t * 0.16 + spinOffsetRef.current;
+    } else {
+      spinOffsetRef.current = groupRef.current.rotation.y - t * 0.16;
+    }
 
     // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in
     const photoParts = morphPartsRef.current;
@@ -874,8 +885,13 @@ export function SceneViewer({
      This is tracked separately from `autoRotate` because most callers pass that
      in as a prop, and a state setter can't talk them out of it. */
   const [grabbed, setGrabbed] = useState(false);
+  /** Set the first time the viewer orbits, and never cleared: from then on the
+   *  angle belongs to them, so neither the auto-turn nor a re-fit may move it. */
+  const userTurnedRef = useRef(false);
   const autoRotate =
-    (autoRotateProp !== undefined ? autoRotateProp : autoRotateInternal) && !grabbed;
+    (autoRotateProp !== undefined ? autoRotateProp : autoRotateInternal) &&
+    !grabbed &&
+    !userTurnedRef.current;
   const setAutoRotate = onAutoRotateChange ?? setAutoRotateInternal;
 
   const [isDragging, setIsDragging] = useState(false);
@@ -922,14 +938,30 @@ export function SceneViewer({
     const z = (r / Math.sin(fovRad / 2)) * margin;
     const near = Math.max(0.01, z - r * 2.5);
     const far = z + r * 6;
-    setFitCam({ z, near, far });
+    // A fresh object on every bounds report re-runs the fit effect, which used
+    // to re-seat the camera. Keep the identity when the numbers have not moved.
+    setFitCam((prev) =>
+      prev &&
+      Math.abs(prev.z - z) < 1e-4 &&
+      Math.abs(prev.near - near) < 1e-4 &&
+      Math.abs(prev.far - far) < 1e-4
+        ? prev
+        : { z, near, far },
+    );
   }
 
   function FitControlsTarget() {
     const { camera } = useThree();
     useEffect(() => {
       if (!fitCam) return;
-      camera.position.set(0, 0, fitCam.z);
+      // Re-fitting is about distance, not direction. Once the viewer has turned
+      // the form, keep their angle and only push the camera out to the new
+      // radius; seating it back on +Z threw the turn away.
+      if (userTurnedRef.current && camera.position.lengthSq() > 1e-6) {
+        camera.position.setLength(fitCam.z);
+      } else {
+        camera.position.set(0, 0, fitCam.z);
+      }
       (camera as THREE.PerspectiveCamera).near = fitCam.near;
       (camera as THREE.PerspectiveCamera).far = fitCam.far;
       camera.updateProjectionMatrix();
@@ -1081,6 +1113,7 @@ export function SceneViewer({
           maxDistance={orbitMax}
           autoRotate={false}
           onStart={() => {
+            userTurnedRef.current = true;
             setGrabbed(true);
             setAutoRotate(false);
           }}

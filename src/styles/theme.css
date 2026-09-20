@@ -128,6 +128,9 @@
     background: #ededee;
     height: 100%;
     font-size: var(--font-size);
+    /* A sideways drag on the carousel is for turning an artifact, never for
+       the browser's swipe-to-go-back — which unwound the whole entry. */
+    overscroll-behavior-x: none;
   }
 
   body {
