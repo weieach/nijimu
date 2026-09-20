@@ -3,7 +3,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CHROME_GRAY } from "./lib/colors";
 import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
-import { CAROUSEL_PATH, MEMORY_FIELD_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, SHAPE_BUILD_PATH, TRANSCRIPT_PATH } from "./lib/routes";
+import {
+  CAROUSEL_PATH,
+  MEMORY_FIELD_PATH,
+  MEMORY_POND_PATH,
+  NAMING_PATH,
+  RECORD_START_PATH,
+  SHAPE_BUILD_PATH,
+  SHAPE_DISTANCE_PATH,
+  SHAPE_FEELING_PATH,
+  SHAPE_GROW_PATH,
+  TRANSCRIPT_PATH,
+} from "./lib/routes";
 import {
   LANDING_PAPER,
   LANDING_RETURN,
@@ -118,7 +129,9 @@ const router = createBrowserRouter([
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
       { path: SHAPE_BUILD_PATH, Component: BuildObjectPage },
-      { path: "/record/shape/grow", Component: ShapeGrowPage },
+      { path: SHAPE_GROW_PATH, Component: ShapeGrowPage },
+      { path: SHAPE_FEELING_PATH, Component: ShapeGrowPage },
+      { path: SHAPE_DISTANCE_PATH, Component: ShapeGrowPage },
       { path: "/record/shape/color", Component: ShapeColorPage },
       { path: "/record/shape/texture", Component: ShapeTexturePage },
       { path: "/record/saved", Component: MemorySavedPage },

@@ -16,6 +16,11 @@ export const TRANSCRIPT_PATH = "/record/transcript";
 /** Camera gate before the MediaPipe shape steps. */
 export const SHAPE_BUILD_PATH = "/record/build";
 
+/** MediaPipe shape steps — one screen per gesture. */
+export const SHAPE_GROW_PATH = "/record/shape/grow";
+export const SHAPE_FEELING_PATH = "/record/shape/feeling";
+export const SHAPE_DISTANCE_PATH = "/record/shape/distance";
+
 /** The naming step of the create flow. Rendered by LandingPage (see App.tsx), so
     that saving can turn the naming rim into the /memory gallery in place. */
 export const NAMING_PATH = "/record/name";
