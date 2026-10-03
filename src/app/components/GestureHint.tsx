@@ -3,8 +3,9 @@ import shapePrayerUrl from "../../assets/gesture-shape-prayer.png";
 import feelingHandUrl from "../../assets/gesture-feeling-horizontal.png";
 import distanceOpenUrl from "../../assets/gesture-distance-open.png";
 import distanceFistUrl from "../../assets/gesture-distance-fist.png";
+import colorPinchUrl from "../../assets/gesture-color-pinch.png";
 
-export type GestureHintKind = "shape" | "feeling" | "distance";
+export type GestureHintKind = "shape" | "feeling" | "distance" | "color";
 
 export function GestureHint({
   kind,
@@ -43,6 +44,8 @@ export function GestureHint({
           </>
         ) : kind === "feeling" ? (
           <img className="nijimu-gesture-feeling" src={feelingHandUrl} alt="" />
+        ) : kind === "color" ? (
+          <img className="nijimu-gesture-color" src={colorPinchUrl} alt="" />
         ) : (
           <>
             <img className="nijimu-gesture-distance-fist" src={distanceFistUrl} alt="" />
@@ -91,6 +94,12 @@ export function GestureHint({
           opacity: 1;
           animation: nijimuGestureLift 2.4s ease-in-out infinite;
         }
+        .nijimu-gesture-color {
+          width: 58px;
+          height: 58px;
+          opacity: 1;
+          animation: nijimuGestureColorSweep 2.8s ease-in-out infinite;
+        }
         .nijimu-gesture-distance-fist {
           width: 52px;
           height: 52px;
@@ -123,6 +132,11 @@ export function GestureHint({
           50%, 64% { transform: translateY(-8px); }
           100% { transform: translateY(8px); }
         }
+        @keyframes nijimuGestureColorSweep {
+          0%, 12% { transform: translateX(-18px); }
+          50%, 62% { transform: translateX(18px); }
+          100% { transform: translateX(-18px); }
+        }
         @keyframes nijimuGestureFist {
           0%, 18% { opacity: 1; transform: scale(0.88); }
           42%, 68% { opacity: 0; transform: scale(0.96); }
@@ -142,6 +156,7 @@ export function GestureHint({
           .nijimu-gesture-shape-left { opacity: 1; transform: translateX(-36px) scaleX(-1); }
           .nijimu-gesture-shape-right { opacity: 1; transform: translateX(36px); }
           .nijimu-gesture-feeling { opacity: 1; transform: none; }
+          .nijimu-gesture-color { opacity: 1; transform: none; }
           .nijimu-gesture-distance-fist { opacity: 0; }
           .nijimu-gesture-distance-open { opacity: 1; }
         }

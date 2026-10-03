@@ -25,7 +25,7 @@ export type AmbientFill = {
 
 export const BUBBLE_MAX_LIGHTS = 8;
 
-/** Tuned defaults from geometry-view screenshots (dir 4.35 / fill 2.85). */
+/** Tuned defaults from geometry-view screenshots (dir 4.70 / fill 2.85). */
 export const DEFAULT_BUBBLE_LIGHTS: EditableLight[] = [
   {
     id: "dir-key",
@@ -33,8 +33,8 @@ export const DEFAULT_BUBBLE_LIGHTS: EditableLight[] = [
     position: [1.35, 2.15, 1.7],
     rotation: [0, 0, 0],
     scale: [1, 1, 1],
-    color: "#ffffff",
-    intensity: 4.35,
+    color: "#dfdfe0",
+    intensity: 4.7,
   },
   {
     id: "pt-fill",
@@ -48,7 +48,7 @@ export const DEFAULT_BUBBLE_LIGHTS: EditableLight[] = [
 ];
 
 export const DEFAULT_BUBBLE_AMBIENTS: AmbientFill[] = [
-  { id: "amb-water", color: "#c8c9ce", intensity: 0.4 },
+  { id: "amb-water", color: "#c8c9ce", intensity: 2 },
 ];
 
 /** @deprecated Glass lights live hardcoded in SceneViewer; kept as an alias. */
