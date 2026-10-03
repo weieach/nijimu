@@ -223,7 +223,7 @@ export function OklchColorField({ u, v, held = false, onPick }: Props) {
           width: "100%",
           height: "100%",
           display: "block",
-          filter: "blur(18px) saturate(1.08)",
+          filter: "blur(18px) saturate(0.92)",
           transform: "scale(1.04, 1.12)",
           transformOrigin: "center bottom",
           opacity: 0.6,

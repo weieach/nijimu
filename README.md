@@ -38,7 +38,7 @@ Stacks live in `src/app/lib/theme.ts`. Faces are loaded in `src/styles/fonts.css
 | Font | How it's loaded | Used as |
 |---|---|---|
 | **Rowan** | Self-hosted woff2 (Light–Bold, roman + italic) | Latin serif — English titles, body (`SERIF`) |
-| **GenRyuMin2 TW** | CDN Fonts | East Asian serif — the 滲む wordmark (`SERIF_CJK`); CJK fallback on `SERIF` |
+| **GenRyuMin2 TW** | Self-hosted woff2 subset (Regular; SIL OFL) | East Asian serif — the 滲む wordmark (`SERIF_CJK`); CJK fallback on `SERIF` |
 | **Exposure Trial** | Self-hosted `ExposureTrial-20.otf` (optical grade −20) | Recording / profile display (`SERIF_EXPOSURE`) |
 | **Exposure Trial Plus** | Self-hosted `ExposureTrial+10.otf` (optical grade +10) | Transcript / polish display (`SERIF_DISPLAY`) |
 | **Switzer** | Self-hosted woff2 (Thin–Black, roman + italic) | UI sans — labels, light / outline buttons, editor chrome (`SANS`) |

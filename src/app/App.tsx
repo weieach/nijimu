@@ -30,6 +30,7 @@ import { EditWeightPage } from "./components/EditWeightPage";
 import { EditColorPage } from "./components/EditColorPage";
 import { EditTexturePage } from "./components/EditTexturePage";
 import { StyleGuidePage } from "./components/StyleGuidePage";
+import { DescentPrototype } from "./lab/DescentPrototype";
 
 const SOUNDTRACK_URL =
   "https://cdn.jsdelivr.net/gh/Noyok1vas/figbuildAssets/prodarmaan%20-%20somber%20springtime.mp3";
@@ -104,6 +105,7 @@ function RootLayout() {
 
 const router = createBrowserRouter([
   { path: "/style", Component: StyleGuidePage },
+  { path: "/lab/descent", Component: DescentPrototype },
   {
     Component: RootLayout,
     children: [

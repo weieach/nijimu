@@ -8,7 +8,7 @@ import { POND_DROP_SLOTS } from "../lib/voicePeaks";
 
 export interface PondTouch { x: number; y: number; serial: number; strength?: number }
 
-const waves = /* glsl */ `
+export const POND_WAVES_GLSL = /* glsl */ `
   uniform float uTime;
   uniform vec4 uDrops[${POND_DROP_SLOTS}];
   uniform vec4 uTrails[${POND_TRAIL_SLOTS}];
@@ -142,7 +142,7 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
-  ${waves}
+  ${POND_WAVES_GLSL}
   varying vec3 vWorld;
   void main() {
     vec2 p = vWorld.xz;
@@ -211,7 +211,7 @@ const TAP_DOWN = .07, TAP_HOLD = .025, TAP_UP = .34;
 // the hold takes over, so the handoff cannot be seen.
 const HOLD_PIN = .06;
 const ringVertex = /* glsl */ `
-  ${waves}
+  ${POND_WAVES_GLSL}
   uniform vec3 uCenter;
   uniform float uTap;
   varying vec2 vLocal;

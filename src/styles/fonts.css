@@ -1,4 +1,14 @@
-@import url('https://fonts.cdnfonts.com/css/genryumin2-tw');
+/* GenRyuMin2 TW (源流明體月) — East Asian serif, SIL OFL 1.1.
+   Self-hosted Regular subset (TW common ideographs + kana + punct) for the
+   滲む wordmark and CJK fallback on the serif stacks. Full family:
+   https://github.com/ButTaiwan/genryu-font */
+@font-face {
+  font-family: "GenRyuMin2 TW";
+  src: url("../assets/fonts/GenRyuMin2TW-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* Switzer — static cuts (all weights + italics). Single family for SANS
    (light / outline buttons, labels, editor chrome). */

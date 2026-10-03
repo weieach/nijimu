@@ -831,7 +831,7 @@ export function ShapeGrowPage() {
 
       <PhotoLibraryTray
         open={step === "distance" && photoLibraryOpen}
-        photoUrl={snowMountainPhotoUrl}
+        photos={[snowMountainPhotoUrl, memoryPhotoUrl]}
         selectedUrl={selectedPhotoUrl}
         onSelect={selectLibraryPhoto}
         onClose={() => setPhotoLibraryOpen(false)}

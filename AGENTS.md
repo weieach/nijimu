@@ -4,32 +4,54 @@
 > codebase: what it is, how it's built, where things live, and the non-obvious
 > rules. Read it before making changes.
 
-## Context recovered on 2026-10-03
+## Where work stands (2026-10-03, branch `10.3-Echo`)
 
-The repository survived the reported Codex crash. The earlier nijimu conversation
-was not found in the available task list, archived tasks, local session metadata,
-or matching local task records. This context is reconstructed from source and Git;
-it is not a restoration of the original conversation.
+Continue on **`10.3-Echo`**. It was cut from `10.3-mesh-Gielis-superformula` at
+`dd87f31` (the merge of 9.19-Nicole into the superformula work). Leave
+`10.3-mesh-Gielis-superformula` and `main` alone. Chat history does not follow a
+new Cursor account; this section is the handoff.
 
-- At recovery, the working tree was clean on `10.3-mesh-Gielis-superformula`,
-  at `881e35f`, the same commit as local `9.19-Nicole` and its cached remote ref.
-  The branch was checked out on October 3; it has no unique commits yet.
-- Latest committed work (September 19–20): carousel layout/drag and landing entry,
-  landing return/profile transitions, pond cursor trails and voice ripples,
-  speech transcription, and restored MediaPipe sculpting before naming.
-- The branch name suggests planned Gielis/superformula exploration, but no
-  implementation or specification mentioning it was found in `src`, `docs`, or
-  `scripts`. Do not treat the name alone as a feature specification.
-- Shape work starts in `ShapeGrowPage.tsx`, `BubbleViewer.tsx`, and
-  `SceneViewer.tsx`; the current editor selects existing models and morphs them.
-  `formDraft.ts` preserves some editor settings in sessionStorage; recorded
-  memories themselves remain in memory only.
-- Historical plans under `docs/superpowers/` describe earlier states, including
-  localStorage persistence that was later removed. Follow current source and
-  this guide when those plans conflict. README's npm setup instructions are
-  also stale: use pnpm.
-- Cached Git refs were inspected without fetching. Production deployment and
-  external API credentials were not verified during context recovery.
+The live create flow is unchanged. The new shot is a lab at **`/lab/descent`**
+(`src/app/lab/DescentPrototype.tsx`). Open it on the dev server. `?speed=0.3`
+slows the whole shot. It is one canvas and one camera, using the pond's own
+wave field (`POND_WAVES_GLSL` exported from `PerspectivePond.tsx`).
+
+Intended sequence, built in the lab and not yet wired into the production route:
+
+1. After recording, stay on the pond and pick a photo (bundled stills, or a
+   local jpeg/png/webp/gif for this visit only).
+2. The chosen photo falls as a soft, faded 35mm film strip — sprocket holes,
+   torn ends, a slight curl pressed down by the water — and floats.
+3. Hold to descend through the film into the water. The form surfaces.
+4. Shape, distance, then color. While the form is handled, the water washes
+   paler and less saturated so the object is what has the color.
+5. On confirm, the film overhead dissolves into sparse particles of uneven
+   weight and spacing. They settle onto the form as its photo map (the existing
+   `MemoryPhotoLayer` look).
+6. The form rises, breaks the surface, and is named.
+
+Still open, on purpose: the photo-to-film transformation needs another pass.
+The user deferred that and asked to continue the underwater steps first. Do not
+treat the film look as finished.
+
+Color picking (`src/app/lib/oklch.ts`, `FIELD`) was pulled toward the landing
+palette: lower chroma, less candy green and yellow, darker toward slate. This
+changes the live color step as well as the lab. The photo tray
+(`PhotoLibraryTray`) can add a device photo; the data URL lives in module
+memory for this visit and is gone on reload.
+
+GenRyuMin2 TW Regular is self-hosted
+(`src/assets/fonts/GenRyuMin2TW-Regular.woff2`, SIL OFL). The CDN import is gone.
+
+Discussed and not built: a more watercolor landing-ink transition. Revisit
+already exists at `/memory/revisit`; it is the existing editor path, not a new
+immersive viewer.
+
+Shape work starts in `ShapeGrowPage.tsx`, `BubbleViewer.tsx`, `SceneViewer.tsx`,
+and `src/app/lib/superformula.ts`. `formDraft.ts` keeps some editor settings in
+sessionStorage; recorded memories stay in memory only. Historical plans under
+`docs/superpowers/` describe earlier states. Follow current source and this
+guide when they conflict. `.env.local` is gitignored and stays on this machine.
 
 ---
 
@@ -96,6 +118,7 @@ nijimu/
 │   ├── app/
 │   │   ├── App.tsx                 # ROUTER + GlobalControls (music/profile)
 │   │   ├── components/             # one file per live screen, plus shared UI
+│   │   ├── lab/                    # /lab/descent — in-progress create shot, not the live flow
 │   │   ├── archive/                # unused former record-loop pages
 │   │   ├── hooks/                  # reusable behavior (see §7)
 │   │   ├── lib/                    # pure/shared modules (see §6)

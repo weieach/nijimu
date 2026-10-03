@@ -4,22 +4,77 @@ import type { AmbientFill, EditableLight } from "./sceneLights";
 
 export type Oklch = { l: number; c: number; h: number };
 
-/** Soft field: hue across X, lightness down Y, chroma kept low. */
+/*
+ * The field the color step picks from. Hue runs across, lightness down.
+ *
+ * It is struck from the landing palette (colors.ts): slate, mist, sky, sage,
+ * ocean — blue-greys between 0.6 and 0.88 light with chroma under 0.06 — and
+ * a little warmth in sand and rose. The field used to run to 0.118 chroma at
+ * near-white, which is pastel candy next to that; it now stays inside the
+ * palette's own range, and darkens toward slate at the bottom rather than
+ * staying bright.
+ */
 export const FIELD = {
-  lTop: 0.998,
-  lBottom: 0.851,
-  cMin: 0.032,
-  cMax: 0.118,
+  lTop: 0.94,
+  lBottom: 0.72,
+  cMin: 0.012,
+  cMax: 0.058,
 };
 
-export const DEFAULT_OKLCH: Oklch = { l: 0.92, c: 0.05, h: 248 };
+/*
+ * Where the hues sit across the width. The palette lives mostly in blue-grey,
+ * so that family gets almost half the field; the greens and yellows that read
+ * as candy against it are passed through in a fifth. Monotonic in u, with the
+ * hue unwrapped past 360 so it can be inverted.
+ */
+const HUE_STOPS: ReadonlyArray<readonly [number, number]> = [
+  [0, 350], // rose
+  [0.2, 400], // sand
+  [0.3, 480], // olive — passed through
+  [0.4, 540], // sea
+  [0.65, 595], // sky, ocean
+  [0.85, 640], // slate, periwinkle
+  [1, 710], // back to rose
+];
+
+export function hueAt(u: number): number {
+  const x = clamp01(u);
+  for (let i = 1; i < HUE_STOPS.length; i++) {
+    const [u0, h0] = HUE_STOPS[i - 1];
+    const [u1, h1] = HUE_STOPS[i];
+    if (x <= u1) return wrapHue(h0 + ((x - u0) / (u1 - u0)) * (h1 - h0));
+  }
+  return wrapHue(HUE_STOPS[HUE_STOPS.length - 1][1]);
+}
+
+function uOfHue(h: number): number {
+  let hh = wrapHue(h);
+  if (hh < HUE_STOPS[0][1]) hh += 360;
+  for (let i = 1; i < HUE_STOPS.length; i++) {
+    const [u0, h0] = HUE_STOPS[i - 1];
+    const [u1, h1] = HUE_STOPS[i];
+    if (hh <= h1) return u0 + ((hh - h0) / (h1 - h0)) * (u1 - u0);
+  }
+  return 1;
+}
+
+/** Greens and yellows carry less chroma than the blue-greys they sit beside;
+    at equal chroma they are what reads as neon. */
+function chromaScale(h: number): number {
+  const d = Math.abs(wrapHue(h) - 110);
+  const dist = Math.min(d, 360 - d);
+  const t = clamp01(1 - dist / 80);
+  return 1 - 0.45 * t * t * (3 - 2 * t);
+}
+
+export const DEFAULT_OKLCH: Oklch = { l: 0.84, c: 0.032, h: 248 };
 
 export function sampleField(u: number, v: number): Oklch {
-  const x = clamp01(u);
   const y = clamp01(v);
+  const h = hueAt(u);
   const l = FIELD.lTop + (FIELD.lBottom - FIELD.lTop) * y;
-  const c = FIELD.cMin + (FIELD.cMax - FIELD.cMin) * y;
-  return { l, c, h: x * 360 };
+  const c = (FIELD.cMin + (FIELD.cMax - FIELD.cMin) * y) * chromaScale(h);
+  return { l, c, h };
 }
 
 export function oklchCss({ l, c, h }: Oklch): string {
@@ -137,7 +192,7 @@ export function ambientBackground(ok: Oklch): string {
 export function uvFromOklch(ok: Oklch): { u: number; v: number } {
   const span = FIELD.lTop - FIELD.lBottom;
   return {
-    u: ((ok.h % 360) + 360) % 360 / 360,
+    u: uOfHue(ok.h),
     v: clamp01((FIELD.lTop - ok.l) / (span || 1)),
   };
 }

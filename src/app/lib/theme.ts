@@ -1,5 +1,6 @@
 // Shared font stacks — the single place to change typography.
-// SERIF is Latin-first: English renders in Rowan; CJK glyphs fall through to GenRyuMin.
+// SERIF is Latin-first: English renders in Rowan; CJK glyphs fall through to
+// self-hosted GenRyuMin2 TW (see fonts.css).
 export const SERIF = "Rowan, 'GenRyuMin2 TW', Georgia, serif";
 /** A hair of air for Rowan italic titles — the italic sits tight without it. */
 export const SERIF_ITALIC_TRACKING = "0.012em";
