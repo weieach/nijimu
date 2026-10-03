@@ -94,7 +94,7 @@ export function RevisitMemoryPage() {
           >
             <SceneViewer
               key={memory.id}
-              modelPath={shape.modelPath}
+              form={shape.form}
               fluidity={shape.fluidity}
               evolve={shape.evolve}
               bumpAmount={shape.bumpAmount}

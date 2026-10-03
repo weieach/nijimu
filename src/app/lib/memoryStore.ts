@@ -1,4 +1,5 @@
 import { MemoryEvent } from "../data/memoryData";
+import type { ArtifactForm } from "./superformula";
 
 const KEY = "nijimu.memories.v1";
 
@@ -11,7 +12,8 @@ export interface SavedMemory {
   highlightedWords: string[];
   /** The shape the user sculpted — replayed verbatim, never re-randomized. */
   shape: {
-    modelPath: string;
+    /** Assigned when the memory was recorded; see lib/superformula.ts. */
+    form: ArtifactForm;
     matPresetIndex: number;
     fluidity: number;
     evolve: number;

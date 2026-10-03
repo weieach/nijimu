@@ -4,8 +4,10 @@ import {
   DEFAULT_BUBBLE_LIGHTS,
   EditableLight,
 } from "./sceneLights";
+import { ArtifactForm, isArtifactForm } from "./superformula";
 
-const KEY = "nijimu.formDraft.v1";
+// v2: the form replaced the GLB model path
+const KEY = "nijimu.formDraft.v2";
 
 const FALLBACK_MATERIAL = {
   roughness: 0.35,
@@ -15,7 +17,7 @@ const FALLBACK_MATERIAL = {
 };
 
 export type FormDraft = {
-  modelPath: string;
+  form: ArtifactForm;
   morphProgress: number;
   bubbleMaterial: typeof FALLBACK_MATERIAL;
   lights: EditableLight[];
@@ -35,9 +37,9 @@ export function loadFormDraft(): FormDraft | null {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<FormDraft>;
-    if (typeof parsed.modelPath !== "string") return null;
+    if (!isArtifactForm(parsed.form)) return null;
     return {
-      modelPath: parsed.modelPath,
+      form: parsed.form,
       morphProgress:
         typeof parsed.morphProgress === "number" ? parsed.morphProgress : 0,
       bubbleMaterial: {

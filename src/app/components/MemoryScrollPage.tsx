@@ -22,7 +22,7 @@ export function MemoryScrollPage() {
           color: memory.color,
         },
         shape: {
-          modelPath: memory.shape.modelPath,
+          form: memory.shape.form,
           fluidity: memory.shape.fluidity,
           evolve: memory.shape.evolve,
           bumpAmount: memory.shape.bumpAmount,

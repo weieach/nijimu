@@ -155,7 +155,7 @@ assert.equal(floatState.floatClock.current, 0, "rapid reversal resets the float 
 assert.equal(floatState.t, 12, "rotation clock is preserved");
 
 // Run the real keyboard, wheel and touch handlers against both archive ends.
-const inputSource = gallery.slice(gallery.indexOf("  /* arrows — keyboard */"), gallery.indexOf("  /* preload the artifacts"));
+const inputSource = gallery.slice(gallery.indexOf("  /* arrows — keyboard */"), gallery.indexOf("  /* build the forms just off the end of the rim"));
 assert.ok(inputSource.includes('addEventListener("touchend"'));
 for (const oldest of [true, false]) {
   const handlers = {};

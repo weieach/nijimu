@@ -109,7 +109,7 @@ export function EditWeightPage() {
             }}
           >
             <SceneViewer
-              modelPath={shape.modelPath}
+              form={shape.form}
               fluidity={fluidity}
               evolve={0}
               bumpAmount={shape.bumpAmount ?? 0}

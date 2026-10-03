@@ -1,4 +1,3 @@
-import { useGLTF } from "@react-three/drei";
 import { useNavigate } from "react-router";
 import {
   CSSProperties,
@@ -10,13 +9,18 @@ import {
   useRef,
   useState,
 } from "react";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { saveMemory, type SavedMemory } from "../lib/memoryStore";
 import { CAROUSEL_PATH } from "../lib/routes";
+import {
+  DEFAULT_ARTIFACT_FORM,
+  formFromState,
+  formKey,
+  getArtifactMesh,
+  type ArtifactForm,
+} from "../lib/superformula";
 import { SERIF } from "../lib/theme";
-import { MODEL_PATHS } from "./SceneViewer";
 import { TextButton } from "./TextButton";
 import {
   CAPTION_TITLE_GAP,
@@ -49,7 +53,7 @@ export interface NameFlowState {
   highlightedWords?: string[];
   matPresetIndex?: number;
   shape?: {
-    modelPath?: string;
+    form?: ArtifactForm;
     fluidity?: number;
     evolve?: number;
     bumpAmount?: number;
@@ -75,7 +79,7 @@ export function draftColorIndex(matPresetIndex: number | undefined): number {
 
 export function draftShapeOf(state: NameFlowState | null): ArchiveArtifact["shape"] {
   return {
-    modelPath: state?.shape?.modelPath ?? MODEL_PATHS[0],
+    form: formFromState(state) ?? DEFAULT_ARTIFACT_FORM,
     fluidity: state?.shape?.fluidity ?? 0,
     evolve: state?.shape?.evolve ?? 0.5,
     bumpAmount: state?.shape?.bumpAmount ?? 0,
@@ -275,35 +279,33 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
   const draftShape = useMemo(() => draftShapeOf(state), [state]);
   const active = session !== null;
 
+  const draftFormKey = formKey(draftShape.form);
+
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    useGLTF.preload(draftShape.modelPath);
+    // The form is generated, not fetched: build it now so the artifact has
+    // its mesh on its first frame.
+    getArtifactMesh(draftShape.form);
 
-    const reveal = () => {
+    const paint = () => {
       if (cancelled) return;
-      const paint = () => {
-        if (cancelled) return;
-        setFieldsVisible(true);
-        setFocusedField("name");
-      };
-      if (reducedMotion) {
-        paint();
-        return;
-      }
-      // Let the artifact paint first, then fade the fields in.
-      window.setTimeout(() => {
-        requestAnimationFrame(paint);
-      }, 280);
+      setFieldsVisible(true);
+      setFocusedField("name");
     };
-
-    const loader = new GLTFLoader();
-    loader.load(draftShape.modelPath, reveal, undefined, reveal);
-
+    if (reducedMotion) {
+      paint();
+      return () => {
+        cancelled = true;
+      };
+    }
+    // Let the artifact paint first, then fade the fields in.
+    const timer = window.setTimeout(() => requestAnimationFrame(paint), 280);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [active, draftShape.modelPath, reducedMotion]);
+  }, [active, draftFormKey, reducedMotion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!fieldsVisible) return;
@@ -364,7 +366,7 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
         transcript: state?.transcript ?? "",
         highlightedWords: state?.highlightedWords ?? [],
         shape: {
-          modelPath: shape?.modelPath ?? draftShape.modelPath,
+          form: draftShape.form,
           matPresetIndex,
           fluidity: shape?.fluidity ?? draftShape.fluidity,
           evolve: shape?.evolve ?? draftShape.evolve,

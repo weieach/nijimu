@@ -4,6 +4,33 @@
 > codebase: what it is, how it's built, where things live, and the non-obvious
 > rules. Read it before making changes.
 
+## Context recovered on 2026-10-03
+
+The repository survived the reported Codex crash. The earlier nijimu conversation
+was not found in the available task list, archived tasks, local session metadata,
+or matching local task records. This context is reconstructed from source and Git;
+it is not a restoration of the original conversation.
+
+- At recovery, the working tree was clean on `10.3-mesh-Gielis-superformula`,
+  at `881e35f`, the same commit as local `9.19-Nicole` and its cached remote ref.
+  The branch was checked out on October 3; it has no unique commits yet.
+- Latest committed work (September 19–20): carousel layout/drag and landing entry,
+  landing return/profile transitions, pond cursor trails and voice ripples,
+  speech transcription, and restored MediaPipe sculpting before naming.
+- The branch name suggests planned Gielis/superformula exploration, but no
+  implementation or specification mentioning it was found in `src`, `docs`, or
+  `scripts`. Do not treat the name alone as a feature specification.
+- Shape work starts in `ShapeGrowPage.tsx`, `BubbleViewer.tsx`, and
+  `SceneViewer.tsx`; the current editor selects existing models and morphs them.
+  `formDraft.ts` preserves some editor settings in sessionStorage; recorded
+  memories themselves remain in memory only.
+- Historical plans under `docs/superpowers/` describe earlier states, including
+  localStorage persistence that was later removed. Follow current source and
+  this guide when those plans conflict. README's npm setup instructions are
+  also stale: use pnpm.
+- Cached Git refs were inspected without fetching. Production deployment and
+  external API credentials were not verified during context recovery.
+
 ---
 
 ## 1. What nijimu is
@@ -48,13 +75,15 @@ library**; build with the existing primitives.
 
 ```bash
 pnpm install       # use pnpm, never npm
-pnpm dev           # Vite dev server on :5180 (includes the /api/polish endpoint)
+pnpm dev           # Vite dev server on :5180 (includes polish + transcribe endpoints)
 pnpm build         # vite build + copy-404.mjs (the 404 copy is a harmless GH-Pages leftover)
-pnpm typecheck     # tsc --noEmit on the frontend AND the api/ function — run before pushing
+pnpm typecheck     # tsc --noEmit on src + vite.config.ts — run before pushing
 ```
 
 There is **no test framework**. Verification is: `pnpm typecheck`, `pnpm build`,
-and manually exercising the running dev server.
+and manually exercising the running dev server. Standalone Node assertions also
+exist in `scripts/check-*.mjs` for carousel, pond, transcription routing, and voice
+behavior; these are not wired into a package test script.
 
 ---
 
@@ -103,10 +132,14 @@ that renders `GlobalControls` (background music + profile button) once, so
 /  (landing)
  └ /memory            MemoryCarouselPage — dive gallery
    └ /memory/pond     MemoryPondPage — hold to record
-     └ /record/start      PuddleRecordingPage — records the voice, sends it to /api/transcribe
+     └ /record/start      PondRecordingOverlay on MemoryPondPage — records and transcribes
        └ /record/transcript  PuddleTranscriptPage — words + highlight
-         └ /record/name      naming rim on LandingPage — title + year; this visit only
-           └ /memory         same gallery, now including the new memory
+         └ /record/build       BuildObjectPage — camera gate
+           └ /record/shape/grow     ShapeGrowPage — form + hand controls
+             └ /record/shape/color   ShapeColorPage
+               └ /record/shape/texture ShapeTexturePage
+                 └ /record/name    naming rim on LandingPage — title + year; this visit only
+                   └ /memory       same gallery, now including the new memory
 ```
 
 **B. Revisit memories:**
@@ -117,8 +150,11 @@ that renders `GlobalControls` (background music + profile button) once, so
      └ /record/saved  MemorySavedPage — writes the edited memory
 ```
 
-The previous sculpt loop (`/record/build`, `/record/shape/*`, blob recording,
-gray transcript, orb / click / process) lives in `src/app/archive/record-loop/`.
+Landing, carousel, pond, recording, transcript, and naming share a mounted
+`LandingPage` layout; its route children render no separate page themselves.
+The restored build/grow/color/texture pages are live sibling routes in `App.tsx`.
+Other former screens (blob recording, gray transcript, orb / click / process,
+and older sculpt variants) remain in `src/app/archive/record-loop/`.
 
 The profile is **not a route** — the profile button in `GlobalControls` opens
 `ProfilePanel`, a glass popup over the current page (iridescent WebGL sheen from
@@ -163,7 +199,7 @@ lowercase "nijimu" wordmark link). Prefer these over hand-rolling.
 ### 8a. Transcription — the spoken memory becomes words
 
 ```
-Browser: PuddleRecordingPage
+Browser: PondRecordingOverlay (mounted by MemoryPondPage)
    └ hooks/useVoiceRecorder  MediaRecorder ──► audio Blob
    └ lib/transcribe.ts  beginTranscription() ──POST /api/transcribe (raw audio body)──┐
                                                                                       │
@@ -187,6 +223,12 @@ Browser: PuddleRecordingPage
   so a failure shows the reason and a "record again" way back.
 
 ### 8b. Polish — the words become prose
+
+**Current UI status:** the backend and browser helper remain implemented, but
+`requestPolish()` is only called by the archived gray `TranscriptPage`. The live
+`PuddleTranscriptPage` transcribes and highlights words without invoking polish.
+The following describes the retained polish implementation, not an active step
+in the current create journey.
 
 ```
 Browser: TranscriptPage

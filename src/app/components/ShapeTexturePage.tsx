@@ -16,6 +16,8 @@ import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
 import { NAMING_PATH } from "../lib/routes";
+import { loadFormDraft } from "../lib/formDraft";
+import { createArtifactForm, formFromState } from "../lib/superformula";
 
 export function ShapeTexturePage() {
   const location = useLocation();
@@ -35,7 +37,9 @@ export function ShapeTexturePage() {
   const cameraPermission = location.state?.cameraPermission ?? "denied";
 
   // Get state from previous pages
-  const modelPath = location.state?.modelPath;
+  const [form] = useState(
+    () => formFromState(location.state) ?? loadFormDraft()?.form ?? createArtifactForm(),
+  );
   const fluidity = location.state?.fluidity ?? 0;
   const matPresetIndex: number = location.state?.matPresetIndex ?? 0;
 
@@ -117,8 +121,9 @@ export function ShapeTexturePage() {
     navigate(NAMING_PATH, {
       state: {
         ...stripLegacyEvolveFromState(location.state),
+        form,
         shape: {
-          modelPath,
+          form,
           evolve: getShapeBuildEvolvePhase(),
           bumpAmount,
           fluidity,
@@ -173,7 +178,7 @@ export function ShapeTexturePage() {
           fluidity={fluidity}
           ready={sceneReady}
           matPresetIndex={matPresetIndex}
-          modelPath={modelPath}
+          form={form}
         />
       </div>
 

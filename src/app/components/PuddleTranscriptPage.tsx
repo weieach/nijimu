@@ -4,6 +4,7 @@ import { CHROME_GRAY } from "../lib/colors";
 import { RECORD_START_PATH, SHAPE_BUILD_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
+import type { ArtifactForm } from "../lib/superformula";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PillButton } from "./PillButton";
 
@@ -19,7 +20,7 @@ interface PuddleTranscriptState {
   transcript?: string;
   transcriptionId?: string;
   focus?: [number, number];
-  shape?: { modelPath?: string };
+  shape?: { form?: ArtifactForm };
 }
 
 /**

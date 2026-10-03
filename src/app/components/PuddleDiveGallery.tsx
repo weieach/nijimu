@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useGLTF } from "@react-three/drei";
 import { SceneViewer } from "./SceneViewer";
+import { warmArtifactMeshes } from "../hooks/useArtifactGeometry";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
@@ -390,14 +390,18 @@ export function PuddleDiveGallery({
     };
   }, [showArrows, phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onOverscrollExit, onExit]);
 
-  /* preload the artifacts just off the end of the rim, so the memory that
-     swings in on an arrow press never stalls on a network fetch */
-  useEffect(() => {
-    for (const k of [-CAROUSEL_OLDER_SEATS - 1, CAROUSEL_NEWER_SEATS + 1]) {
-      const neighbour = items[activeIdx + k];
-      if (neighbour) useGLTF.preload(neighbour.shape.modelPath);
-    }
-  }, [items, activeIdx]);
+  /* build the forms just off the end of the rim while the page is idle, so
+     the memory that swings in on an arrow press never spends its first frame
+     on the formula */
+  useEffect(
+    () =>
+      warmArtifactMeshes(
+        [-CAROUSEL_OLDER_SEATS - 1, CAROUSEL_NEWER_SEATS + 1]
+          .map((k) => items[activeIdx + k]?.shape.form)
+          .filter((form) => form !== undefined),
+      ),
+    [items, activeIdx],
+  );
 
   /* The refraction wobble is a full-element filter pass, so it only runs when
      something is actually moving through the water: the arrival and the exit.
@@ -821,7 +825,7 @@ export function PuddleDiveGallery({
                 >
                   <SceneViewer
                     measureUnscaled
-                    modelPath={slotItem.shape.modelPath}
+                    form={slotItem.shape.form}
                     fluidity={slotItem.shape.fluidity}
                     evolve={slotItem.shape.evolve}
                     bumpAmount={slotItem.shape.bumpAmount}

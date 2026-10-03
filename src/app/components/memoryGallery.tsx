@@ -1,10 +1,11 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { SceneViewer } from "./SceneViewer";
 import { PageHeader } from "./PageHeader";
 import { LIFE_EVENTS } from "../data/memoryData";
 import { SERIF, SERIF_ITALIC_TRACKING, SANS } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 import { loadMemories } from "../lib/memoryStore";
+import { ArtifactForm, formForMemory } from "../lib/superformula";
 import addEllipse from "../../assets/memory-grid/add-ellipse.svg";
 import addTriangle from "../../assets/memory-grid/add-triangle.png";
 
@@ -15,7 +16,7 @@ export interface GalleryMemory {
   lastUpdated: string;
   color: number;
   shape: {
-    modelPath: string;
+    form: ArtifactForm;
     colorIndex: number;
     matPresetIndex?: number;
     fluidity: number;
@@ -54,7 +55,7 @@ export function generateGalleryMemories(): GalleryMemory[] {
       lastUpdated: formatYearMonth(event.year),
       color: event.color,
       shape: {
-        modelPath: MODEL_PATHS[Math.floor(seededUnit(event.id, 1) * MODEL_PATHS.length)],
+        form: formForMemory(event.id),
         colorIndex,
         fluidity: seededUnit(event.id, 2),
         evolve: seededUnit(event.id, 3),
@@ -70,7 +71,7 @@ export function generateGalleryMemories(): GalleryMemory[] {
     lastUpdated: formatYearMonth(memory.createdAt || memory.year),
     color: memory.colorIndex,
     shape: {
-      modelPath: memory.shape.modelPath,
+      form: memory.shape.form,
       colorIndex: memory.colorIndex % COLOR_PALETTE.length,
       matPresetIndex: memory.shape.matPresetIndex,
       fluidity: memory.shape.fluidity,
@@ -119,7 +120,7 @@ export function ArtifactPreview({
       }}
     >
       <SceneViewer
-        modelPath={memory.shape.modelPath}
+        form={memory.shape.form}
         fluidity={memory.shape.fluidity}
         evolve={memory.shape.evolve}
         bumpAmount={memory.shape.bumpAmount}

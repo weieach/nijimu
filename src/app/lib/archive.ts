@@ -1,7 +1,7 @@
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
-import { MODEL_PATHS } from "../components/SceneViewer";
 import { COLOR_PALETTE } from "./colors";
 import { loadMemories, toMemoryEvent, SavedMemory } from "./memoryStore";
+import { ArtifactForm, formForMemory } from "./superformula";
 
 /*
  * The archive, as the carousel reads it.
@@ -20,7 +20,7 @@ export interface ArchiveArtifact {
   event: string;
   colorIndex: number;
   shape: {
-    modelPath: string;
+    form: ArtifactForm;
     fluidity: number;
     evolve: number;
     bumpAmount: number;
@@ -29,8 +29,9 @@ export interface ArchiveArtifact {
   anchor?: { x: number; y: number };
 }
 
-// Deterministic per-memory form, so a curated memory keeps its shape across
-// visits and across screens.
+// Deterministic per-memory texture, so a curated memory keeps its surface
+// across visits and across screens. (Its form is seeded the same way, in
+// formForMemory.)
 function hashString(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -53,10 +54,14 @@ function mulberry32(seed: number): () => number {
 
 const yearOf = (year: string) => parseInt(year) || 0;
 
-/** A saved memory replays the form the user sculpted; a curated one gets a
-    seeded form, alternating between barely-bumped and openly textured. */
+/** A saved memory replays the form it was given and the surface the user
+    sculpted; a curated one gets a seeded form and surface, alternating
+    between barely-bumped and openly textured. */
 function artifactFor(event: MemoryEvent, index: number, saved?: SavedMemory): ArchiveArtifact {
   const rand = mulberry32(hashString(`shape|${event.id}|${event.year}|${event.event}`));
+  // The first draw once picked a GLB model. It is still taken, so every
+  // curated memory keeps the texture it had.
+  rand();
   return {
     id: event.id,
     year: event.year,
@@ -64,13 +69,13 @@ function artifactFor(event: MemoryEvent, index: number, saved?: SavedMemory): Ar
     colorIndex: event.color % COLOR_PALETTE.length,
     shape: saved
       ? {
-          modelPath: saved.shape.modelPath,
+          form: saved.shape.form,
           fluidity: saved.shape.fluidity,
           evolve: saved.shape.evolve,
           bumpAmount: saved.shape.bumpAmount,
         }
       : {
-          modelPath: MODEL_PATHS[Math.floor(rand() * MODEL_PATHS.length)],
+          form: formForMemory(event.id),
           fluidity: rand() * 0.5 + 0.5,
           evolve: rand() * 0.5 + 0.5,
           bumpAmount: index % 2 === 0 ? rand() * 0.03 : 0.03 + rand() * 0.12,

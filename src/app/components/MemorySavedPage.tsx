@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { SANS, SANS_UI, SERIF } from "../lib/theme";
 import { COLOR_PALETTE } from "../lib/colors";
 import { saveMemory } from "../lib/memoryStore";
+import type { ArtifactForm } from "../lib/superformula";
 import { MEMORY_FIELD_PATH } from "../lib/routes";
 import { PageHeader } from "./PageHeader";
 import { PillButton } from "./PillButton";
@@ -15,7 +16,7 @@ interface SavedState {
   highlightedWords?: string[];
   matPresetIndex?: number;
   shape?: {
-    modelPath?: string;
+    form?: ArtifactForm;
     fluidity?: number;
     evolve?: number;
     bumpAmount?: number;
@@ -48,7 +49,7 @@ export function MemorySavedPage() {
   // the edit flow has no id to update against.
   useEffect(() => {
     if (persistedRef.current || isEditing) return;
-    if (!state?.shape?.modelPath || !memoryName) return;
+    if (!state?.shape?.form || !memoryName) return;
     persistedRef.current = true; // guards against StrictMode's double effect
 
     const matPresetIndex = state.matPresetIndex ?? 0;
@@ -59,7 +60,7 @@ export function MemorySavedPage() {
       transcript: state.transcript ?? "",
       highlightedWords: state.highlightedWords ?? [],
       shape: {
-        modelPath: state.shape.modelPath,
+        form: state.shape.form,
         matPresetIndex,
         fluidity: state.shape.fluidity ?? 0,
         evolve: state.shape.evolve ?? 0.5,

@@ -1,23 +1,33 @@
 import { SANS, SERIF } from "../lib/theme";
-
-const FORM_LABELS = ["form 01", "form 02", "form 03"] as const;
+import {
+  ARTIFACT_CATEGORIES,
+  ArtifactCategory,
+  ArtifactForm,
+  CATEGORY_LABELS,
+  SuperParams,
+} from "../lib/superformula";
 
 type BubbleFormViewProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  selectedIndex: number;
-  onSelect: (index: number) => void;
+  form: ArtifactForm;
+  /** Grow a new form in this category — the same one again draws another deviation. */
+  onSelectCategory: (category: ArtifactCategory) => void;
 };
 
+const fmt = (v: number) => String(Math.round(v * 100) / 100);
+const setLine = (p: SuperParams) => `${fmt(p.m)}, ${fmt(p.n1)}, ${fmt(p.n2)}, ${fmt(p.n3)}`;
+
 /**
- * Bottom-left toggle + right panel for picking form 01/02/03.
+ * Bottom-left toggle + right panel for previewing superformula categories.
+ * A memory's form is assigned, not chosen; this is for looking at the range.
  * Same chrome family as lights / material / photo.
  */
 export function BubbleFormView({
   open,
   onOpenChange,
-  selectedIndex,
-  onSelect,
+  form,
+  onSelectCategory,
 }: BubbleFormViewProps) {
   return (
     <>
@@ -59,7 +69,7 @@ export function BubbleFormView({
               position: "absolute",
               top: 120,
               right: 24,
-              width: 220,
+              width: 244,
               pointerEvents: "auto",
               padding: "16px 16px 18px",
               borderRadius: 16,
@@ -81,31 +91,54 @@ export function BubbleFormView({
             >
               form
             </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {FORM_LABELS.map((label, i) => {
-                const active = i === selectedIndex;
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 6,
+              }}
+            >
+              {ARTIFACT_CATEGORIES.map((category) => {
+                const active = category === form.category;
                 return (
                   <button
-                    key={label}
+                    key={category}
                     type="button"
-                    onClick={() => onSelect(i)}
+                    onClick={() => onSelectCategory(category)}
                     style={{
                       fontFamily: SANS,
-                      fontSize: 13,
+                      fontSize: 12,
                       textTransform: "lowercase",
                       border: "none",
                       cursor: "pointer",
                       borderRadius: 100,
-                      padding: "10px 14px",
+                      padding: "8px 12px",
                       textAlign: "left",
+                      whiteSpace: "nowrap",
                       color: active ? "#ffffff" : "rgba(255,255,255,0.7)",
                       background: active ? "#7b7b87" : "rgba(255,255,255,0.08)",
                     }}
                   >
-                    {label}
+                    {CATEGORY_LABELS[category]}
                   </button>
                 );
               })}
+            </div>
+            <div
+              style={{
+                marginTop: 14,
+                lineHeight: 1.6,
+                opacity: 0.7,
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {form.hybridOf && (
+                <p style={{ margin: 0 }}>
+                  {CATEGORY_LABELS[form.hybridOf[0]]} over {CATEGORY_LABELS[form.hybridOf[1]]}
+                </p>
+              )}
+              <p style={{ margin: 0 }}>top ({setLine(form.top)})</p>
+              <p style={{ margin: 0 }}>side ({setLine(form.side)})</p>
             </div>
           </div>
         </div>

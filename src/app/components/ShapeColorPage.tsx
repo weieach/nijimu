@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
-import { MATERIAL_PRESETS, MODEL_PATHS } from "./SceneViewer";
+import { MATERIAL_PRESETS } from "./SceneViewer";
 import { BubbleViewer, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
 import { AmbientSurround } from "./AmbientSurround";
 import { OklchColorField, WASH_HEIGHT } from "./OklchColorField";
@@ -20,6 +20,7 @@ import {
   DEFAULT_BUBBLE_LIGHTS,
 } from "../lib/sceneLights";
 import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
+import { createArtifactForm, formFromState, formKey } from "../lib/superformula";
 import memoryPhotoUrl from "../../assets/memory-photo.jpg";
 import { SERIF } from "../lib/theme";
 import { PageHeader } from "./PageHeader";
@@ -31,8 +32,11 @@ export function ShapeColorPage() {
   const [fadeIn, setFadeIn] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
 
-  const draft = loadFormDraft();
-  const modelPath = location.state?.modelPath ?? draft?.modelPath ?? MODEL_PATHS[0];
+  // Read once: hand tracking re-renders this page on every frame it sees.
+  const [draft] = useState(loadFormDraft);
+  const [form] = useState(
+    () => formFromState(location.state) ?? draft?.form ?? createArtifactForm(),
+  );
   const morphProgress =
     asFiniteNumber(location.state?.morphProgress) ??
     asFiniteNumber(draft?.morphProgress) ??
@@ -118,7 +122,7 @@ export function ShapeColorPage() {
 
   const formState = () => ({
     ...stripLegacyEvolveFromState(location.state),
-    modelPath,
+    form,
     morphProgress,
     bubbleMaterial,
     lights,
@@ -129,13 +133,7 @@ export function ShapeColorPage() {
   });
 
   const handleBackToForm = () => {
-    saveFormDraft({
-      modelPath,
-      morphProgress,
-      bubbleMaterial,
-      lights,
-      ambients,
-    });
+    saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
     navigate("/record/shape/grow", { state: formState() });
   };
 
@@ -171,11 +169,11 @@ export function ShapeColorPage() {
         }}
       >
         <BubbleViewer
-          key={modelPath}
+          key={formKey(form)}
           autoRotate
           morphProgress={morphProgress}
           ready={sceneReady}
-          modelPath={modelPath}
+          form={form}
           coreColor={coreColor}
           rimColor={rimColor}
           roughness={bubbleMaterial.roughness}

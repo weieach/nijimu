@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
-import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { SceneViewer } from "./SceneViewer";
 import { BubbleViewer, BUBBLE_BACKGROUND, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
 import {
@@ -29,12 +29,19 @@ import {
   TransformMode,
 } from "../lib/sceneLights";
 import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
+import {
+  ArtifactCategory,
+  ArtifactForm,
+  CATEGORY_LABELS,
+  createArtifactForm,
+  formFromState,
+  formKey,
+} from "../lib/superformula";
 import memoryPhotoUrl from "../../assets/memory-photo.jpg";
 import memoryPhoto02Url from "../../assets/memory-photo-02.png";
 
 const WRAP_PHOTOS = [memoryPhotoUrl, memoryPhoto02Url] as const;
 
-const FORM_LABELS = ["form 01", "form 02", "form 03"] as const;
 const BUBBLE_TABS = ["shape", "feeling", "distance"] as const;
 type BubbleTab = (typeof BUBBLE_TABS)[number];
 type GestureMode = "adjust" | "confirm";
@@ -86,7 +93,8 @@ export function ShapeGrowPage() {
   const [debugPalmY, setDebugPalmY] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const draft = loadFormDraft();
+  // Read once: the smoothing loop re-renders this page every frame.
+  const [draft] = useState(loadFormDraft);
   const startingMorph =
     asFiniteNumber(location.state?.morphProgress) ??
     asFiniteNumber(draft?.morphProgress) ??
@@ -104,14 +112,11 @@ export function ShapeGrowPage() {
   const gestureModeRef = useRef<GestureMode>("adjust");
 
   const cameraPermission = location.state?.cameraPermission ?? "denied";
-  const [modelPath, setModelPath] = useState(
-    () => location.state?.modelPath ?? draft?.modelPath ?? MODEL_PATHS[0],
+  // Assigned when the memory was recorded; a deep link gets a fresh one.
+  const [form, setForm] = useState<ArtifactForm>(
+    () => formFromState(location.state) ?? draft?.form ?? createArtifactForm(),
   );
   const [morphProgress, setMorphProgress] = useState(startingMorph);
-  const selectedIndex = Math.max(
-    0,
-    MODEL_PATHS.findIndex((p) => p === modelPath),
-  );
 
   const [variant, setVariant] = useState<RenderVariant>(() => {
     try {
@@ -234,17 +239,15 @@ export function ShapeGrowPage() {
     setTimeout(() => setSceneReady(true), 300);
   }, []);
 
+  // Debounced: growth changes every frame while a hand is moving.
   useEffect(() => {
-    saveFormDraft({
-      modelPath,
-      morphProgress,
-      bubbleMaterial,
-      lights,
-      ambients,
-    });
-  }, [modelPath, morphProgress, bubbleMaterial, lights, ambients]);
+    const timer = window.setTimeout(() => {
+      saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [form, morphProgress, bubbleMaterial, lights, ambients]);
 
-  // "A" swaps the render variant; gesture state and form choice carry over.
+  // "A" swaps the render variant; gesture state and form carry over.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "a" && e.key !== "A") return;
@@ -367,10 +370,9 @@ export function ShapeGrowPage() {
     onNoHands: () => setHandsDetected(0),
   });
 
-  const handleSelectForm = (index: number) => {
-    const next = MODEL_PATHS[index];
-    if (!next || next === modelPath) return;
-    setModelPath(next);
+  /** Debug preview: a new deviation in the given category. */
+  const handleSelectCategory = (category: ArtifactCategory) => {
+    setForm(createArtifactForm({ category }));
     // Restart from sphere; gesture (or slider) grows into the new form.
     setMorphProgress(0);
     targetMorphRef.current = 0;
@@ -378,18 +380,12 @@ export function ShapeGrowPage() {
   };
 
   const handleContinue = () => {
-    saveFormDraft({
-      modelPath,
-      morphProgress,
-      bubbleMaterial,
-      lights,
-      ambients,
-    });
+    saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
     navigate("/record/shape/color", {
       state: {
         ...stripLegacyEvolveFromState(location.state),
         cameraPermission,
-        modelPath,
+        form,
         morphProgress,
         bubbleMaterial,
         lights,
@@ -437,11 +433,11 @@ export function ShapeGrowPage() {
       >
         {variant === "bubble" ? (
           <BubbleViewer
-            key={`bubble-${modelPath}-${wrapPhotoUrl}`}
+            key={`bubble-${formKey(form)}-${wrapPhotoUrl}`}
             autoRotate={!lightEditOpen}
             morphProgress={morphProgress}
             ready={sceneReady}
-            modelPath={modelPath}
+            form={form}
             memoryPhotoUrl={lightEditOpen ? undefined : wrapPhotoUrl}
             lightEditMode={lightEditOpen}
             lights={lights}
@@ -459,7 +455,7 @@ export function ShapeGrowPage() {
           />
         ) : (
           <SceneViewer
-            key={modelPath}
+            key={formKey(form)}
             autoRotate
             floatAmplitude={0.05}
             shapeBuildOscillatingEvolve={false}
@@ -471,7 +467,7 @@ export function ShapeGrowPage() {
             morphProgress={morphProgress}
             ready={sceneReady}
             matPresetIndex={0}
-            modelPath={modelPath}
+            form={form}
             memoryPhotoUrl={memoryPhotoUrl}
           />
         )}
@@ -548,7 +544,6 @@ export function ShapeGrowPage() {
             <>
               <p style={{ margin: 0 }}>close your hand to begin as a sphere.</p>
               <p style={{ margin: 0 }}>open it to grow the shape.</p>
-              <p style={{ margin: 0 }}>choose which form wants to become you.</p>
             </>
           )}
         </div>
@@ -560,7 +555,7 @@ export function ShapeGrowPage() {
           />
         )}
 
-        {variant === "bubble" ? (
+        {variant === "bubble" && (
           <div
             style={{
               position: "absolute",
@@ -596,46 +591,6 @@ export function ShapeGrowPage() {
                   }}
                 >
                   {tab}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div
-            style={{
-              position: "absolute",
-              bottom: cameraPermission === "denied" ? 220 : 110,
-              left: "50%",
-              transform: "translateX(-50%)",
-              display: "flex",
-              gap: 10,
-              padding: "8px 10px",
-              borderRadius: 100,
-              background: "rgba(163, 167, 175, 0.22)",
-              zIndex: 10,
-            }}
-          >
-            {FORM_LABELS.map((label, i) => {
-              const active = i === selectedIndex;
-              return (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => handleSelectForm(i)}
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: 13,
-                    textTransform: "lowercase",
-                    border: "none",
-                    cursor: "pointer",
-                    borderRadius: 100,
-                    padding: "10px 18px",
-                    color: active ? "#ffffff" : "#7b7b87",
-                    background: active ? "#7b7b87" : "transparent",
-                    transition: "background 0.2s ease, color 0.2s ease",
-                  }}
-                >
-                  {label}
                 </button>
               );
             })}
@@ -793,7 +748,7 @@ export function ShapeGrowPage() {
               Current Growth: {(morphProgress * 100).toFixed(1)}%
             </p>
             <p style={{ margin: "5px 0" }}>
-              Form: {FORM_LABELS[selectedIndex] ?? "—"}
+              Form: {CATEGORY_LABELS[form.category]}
             </p>
             <p style={{ margin: "5px 0" }}>Render (A to switch): {variant}</p>
             <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
@@ -842,8 +797,8 @@ export function ShapeGrowPage() {
           <BubbleFormView
             open={formOpen}
             onOpenChange={openForm}
-            selectedIndex={selectedIndex}
-            onSelect={handleSelectForm}
+            form={form}
+            onSelectCategory={handleSelectCategory}
           />
           <BubbleWrapView
             open={wrapOpen}

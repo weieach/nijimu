@@ -98,7 +98,7 @@ export function EditColorPage() {
             }}
           >
             <SceneViewer
-              modelPath={shape.modelPath}
+              form={shape.form}
               fluidity={shape.fluidity ?? 0}
               evolve={0.4}
               bumpAmount={shape.bumpAmount ?? 0}

@@ -7,27 +7,27 @@ import React, {
   Suspense,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useGLTF, OrbitControls, Environment } from "@react-three/drei";
+import { OrbitControls, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import { getShapeBuildEvolvePhase } from "../hooks/useOscillatingEvolve";
+import { useArtifactGeometry } from "../hooks/useArtifactGeometry";
+import {
+  ArtifactForm,
+  ArtifactMesh,
+  DEFAULT_ARTIFACT_FORM,
+  computeMeshNormals,
+  formKey,
+} from "../lib/superformula";
 import {
   MemoryPhotoTexture,
   attachMemoryPhotoOverlay,
   buildPhotoUv,
   createMemoryPhotoMaterial,
   detachMemoryPhotoOverlays,
-  MEMORY_PHOTO_OVERLAY_NAME,
   setMemoryPhotoFade,
   setPhotoUvAttribute,
 } from "./MemoryPhotoLayer";
 import { FrostOverlay } from "./FrostOverlay";
-
-// Available 3D model paths
-export const MODEL_PATHS = [
-  "https://raw.githubusercontent.com/Noyok1vas/figbuildAssets/main/Form_01.glb",
-  "https://raw.githubusercontent.com/Noyok1vas/figbuildAssets/main/Form_02.glb",
-  "https://raw.githubusercontent.com/Noyok1vas/figbuildAssets/main/Form_03.glb",
-];
 
 // Glass material presets — 5 warmth choices (cool → warm)
 export interface MaterialPreset {
@@ -83,10 +83,33 @@ function scaledHex(hex: string, factor: number): string {
     .padStart(2, "0")}${clamp(b).toString(16).padStart(2, "0")}`;
 }
 
+// ─── Artifact framing ───────────────────────────────────────────────────────
+
+/**
+ * A superformula form carries most of itself in its top-down cross-section —
+ * a star's arms, a flower's petals — and the profile stands along y, so seen
+ * level the camera would only ever get the edge. The artifact leans its top
+ * toward the camera and turns about its own axis.
+ */
+export const ARTIFACT_TILT = 0.45;
+
+/** The form is the whole model, so photo UVs read straight off its sphere. */
+export const MODEL_SPACE = new THREE.Matrix4();
+
+/** Uniform scale that fits a form to `fitTargetSize`, and the box it then fills. */
+export function fitArtifact(rest: ArtifactMesh, fitTargetSize: number) {
+  const maxDim = Math.max(...rest.size);
+  // Guard: a degenerate form must never push the camera inside it.
+  const scale = Math.min(Math.max(fitTargetSize / maxDim, 0.02), 50);
+  const half = new THREE.Vector3(...rest.size).multiplyScalar(scale / 2);
+  const box = new THREE.Box3(half.clone().negate(), half);
+  return { scale, box, sphere: box.getBoundingSphere(new THREE.Sphere()) };
+}
+
 // ─── 3D Model ────────────────────────────────────────────────────────────────
 
 interface ModelProps {
-  modelPath: string;
+  form: ArtifactForm;
   matColor: string;
   matAttenuationColor: string;
   matSheenColor: string;
@@ -144,109 +167,85 @@ export function easeSoftMorph(t: number): number {
   return x * 0.55 + eased * 0.45;
 }
 
-/**
- * Project each form vertex onto a sphere that shares the mesh centroid and
- * mean radius — same vertex count / order as the GLB (Path A morph targets).
- */
-/**
- * Pristine form vertices for a geometry. `useGLTF` shares one BufferGeometry
- * across mounts and we mutate positions every frame, so the untouched pose is
- * cached on the geometry the first time it is seen.
- */
-export function readFormRestPose(geom: THREE.BufferGeometry): Float32Array {
-  const attr = geom.attributes.position;
-  if (!geom.userData.__nijimuFormRest) {
-    geom.userData.__nijimuFormRest = Float32Array.from(
-      attr.array as Float32Array,
-    );
-  }
-  return Float32Array.from(geom.userData.__nijimuFormRest as Float32Array);
-}
-
-export function buildSphereRestPose(formPos: Float32Array): Float32Array {
-  const count = formPos.length / 3;
-  let cx = 0;
-  let cy = 0;
-  let cz = 0;
-  for (let i = 0; i < count; i++) {
-    cx += formPos[i * 3];
-    cy += formPos[i * 3 + 1];
-    cz += formPos[i * 3 + 2];
-  }
-  cx /= count;
-  cy /= count;
-  cz /= count;
-
-  let meanR = 0;
-  const dirs = new Float32Array(formPos.length);
-  for (let i = 0; i < count; i++) {
-    const dx = formPos[i * 3] - cx;
-    const dy = formPos[i * 3 + 1] - cy;
-    const dz = formPos[i * 3 + 2] - cz;
-    const len = Math.hypot(dx, dy, dz) || 1e-6;
-    meanR += len;
-    dirs[i * 3] = dx / len;
-    dirs[i * 3 + 1] = dy / len;
-    dirs[i * 3 + 2] = dz / len;
-  }
-  meanR /= count;
-  // Match average radius — no inflate, so the start sphere sits calmly in frame.
-  const radius = meanR;
-
-  const sphere = new Float32Array(formPos.length);
-  for (let i = 0; i < count; i++) {
-    sphere[i * 3] = cx + dirs[i * 3] * radius;
-    sphere[i * 3 + 1] = cy + dirs[i * 3 + 1] * radius;
-    sphere[i * 3 + 2] = cz + dirs[i * 3 + 2] * radius;
-  }
-  return sphere;
-}
+const GLASS = {
+  transmission: 0.94,
+  thickness: 3,
+  roughness: 0.1,
+  metalness: 0.4,
+  ior: 1.45,
+  envMapIntensity: 0.88,
+  attenuationDistance: 0.55,
+  sheenRoughness: 0.35,
+};
 
 /**
- * One sphere for the whole model: lift each part into model space, project
- * onto a shared sphere, then write the result back in mesh-local space.
+ * Bump-texture coordinates per mesh unit. Forms are normalised to ±1, and at
+ * the texture step's densities (150–500) raw coordinates would ripple faster
+ * than the grid samples them — blotches, not texture. At this scale even 500
+ * keeps four vertices to a ripple on the coarsest grid (128 around).
  */
-export function assignUnifiedSpherePose(
-  parts: { form: Float32Array; sphere: Float32Array }[],
-  matrices: THREE.Matrix4[],
+const BUMP_SPACE = 0.065;
+/** Fluidity wave: spatial frequency per mesh unit (sampled on the settled form). */
+const WAVE_SPATIAL = 2.5;
+
+/**
+ * Sphere→form growth plus the bump texture — everything about the surface
+ * that doesn't move with time. Bumps push out along the settled form's normals.
+ */
+function writeStaticPose(
+  out: Float32Array,
+  rest: ArtifactMesh,
+  blend: number,
+  bump: number,
+  bumpSpike: number,
+  density: number,
 ): void {
-  const total = parts.reduce((n, p) => n + p.form.length, 0);
-  const modelSpace = new Float32Array(total);
-  const v = new THREE.Vector3();
-
-  let offset = 0;
-  parts.forEach((part, pi) => {
-    const m = matrices[pi];
-    for (let i = 0; i < part.form.length; i += 3) {
-      v.set(part.form[i], part.form[i + 1], part.form[i + 2]).applyMatrix4(m);
-      modelSpace[offset + i] = v.x;
-      modelSpace[offset + i + 1] = v.y;
-      modelSpace[offset + i + 2] = v.z;
+  const form = rest.positions;
+  const sph = rest.sphere;
+  const norms = rest.normals;
+  const k = density * BUMP_SPACE;
+  const exponent = 1.0 - bumpSpike * 0.98;
+  for (let i = 0; i < form.length; i += 3) {
+    const ox = form[i];
+    const oy = form[i + 1];
+    const oz = form[i + 2];
+    let px = sph[i] + (ox - sph[i]) * blend;
+    let py = sph[i + 1] + (oy - sph[i + 1]) * blend;
+    let pz = sph[i + 2] + (oz - sph[i + 2]) * blend;
+    if (bump > 0) {
+      const raw =
+        (Math.sin(ox * k) * Math.cos(oy * k) +
+          Math.sin(oy * k) * Math.cos(oz * k) +
+          Math.sin(oz * k) * Math.cos(ox * k)) /
+        3;
+      if (raw > 0) {
+        const amount = Math.pow(raw, exponent) * bump * 0.25;
+        px += norms[i] * amount;
+        py += norms[i + 1] * amount;
+        pz += norms[i + 2] * amount;
+      }
     }
-    offset += part.form.length;
-  });
+    out[i] = px;
+    out[i + 1] = py;
+    out[i + 2] = pz;
+  }
+}
 
-  const sphereModelSpace = buildSphereRestPose(modelSpace);
-
-  offset = 0;
-  parts.forEach((part, pi) => {
-    const inv = new THREE.Matrix4().copy(matrices[pi]).invert();
-    for (let i = 0; i < part.form.length; i += 3) {
-      v.set(
-        sphereModelSpace[offset + i],
-        sphereModelSpace[offset + i + 1],
-        sphereModelSpace[offset + i + 2],
-      ).applyMatrix4(inv);
-      part.sphere[i] = v.x;
-      part.sphere[i + 1] = v.y;
-      part.sphere[i + 2] = v.z;
-    }
-    offset += part.form.length;
-  });
+/** sin/cos of every vertex's wave phase, so the per-frame wave needs no trig per vertex. */
+function buildWaveBasis(rest: ArtifactMesh): Float32Array {
+  const form = rest.positions;
+  const basis = new Float32Array((form.length / 3) * 4);
+  for (let i = 0, b = 0; i < form.length; i += 3, b += 4) {
+    basis[b] = Math.sin(form[i] * WAVE_SPATIAL);
+    basis[b + 1] = Math.cos(form[i] * WAVE_SPATIAL);
+    basis[b + 2] = Math.sin(form[i + 2] * WAVE_SPATIAL);
+    basis[b + 3] = Math.cos(form[i + 2] * WAVE_SPATIAL);
+  }
+  return basis;
 }
 
 function Model({
-  modelPath,
+  form,
   matColor,
   matAttenuationColor,
   matSheenColor,
@@ -269,37 +268,30 @@ function Model({
   onBounds,
   photoTexture = null,
 }: ModelProps) {
-  const { scene: cached } = useGLTF(modelPath);
-  /**
-   * useGLTF hands every caller the same scene graph, and a three.js object can
-   * only have one parent — so two artifacts built from the same .glb would
-   * reparent the mesh away from each other and one canvas would come up empty.
-   * Geometry is cloned too, not just the graph: the render loop below writes
-   * vertex positions every frame, and instances with different fluidity/bump
-   * would otherwise be overwriting each other's shape.
-   */
-  const scene = useMemo(() => {
-    const copy = cached.clone(true);
-    copy.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (mesh.isMesh) mesh.geometry = mesh.geometry.clone();
-    });
-    return copy;
-  }, [cached]);
-  useEffect(
-    () => () => {
-      detachMemoryPhotoOverlays(scene);
-      scene.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        if (mesh.name === MEMORY_PHOTO_OVERLAY_NAME) return;
-        mesh.geometry.dispose();
-        const material = mesh.material as THREE.Material | null;
-        if (material && typeof material.dispose === "function") material.dispose();
-      });
-    },
-    [scene],
+  const { geometry, rest } = useArtifactGeometry(form);
+  const material = useMemo(
+    () =>
+      new THREE.MeshPhysicalMaterial({
+        ...GLASS,
+        color: new THREE.Color(matColor),
+        transparent: true,
+        opacity: matOpacity,
+        side: THREE.DoubleSide,
+        attenuationColor: new THREE.Color(matAttenuationColor),
+        sheenColor: new THREE.Color(matSheenColor),
+      }),
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- tints follow below
   );
+  useEffect(() => () => material.dispose(), [material]);
+  const { scene, mesh } = useMemo(() => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    const scene = new THREE.Group();
+    scene.add(mesh);
+    return { scene, mesh };
+  }, [geometry, material]);
+
   const { scene: threeScene } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
   /** Angle the form holds beyond the shared clock, so pausing and resuming the
@@ -309,21 +301,7 @@ function Model({
   // change; the artifact then starts mid-motion rather than at rest.
   const clock = useRef(sharedClock ? performance.now() / 1000 : 0);
   const floatClock = useRef(0);
-  const originalPositions = useRef<Float32Array | null>(null);
-  const spherePositions = useRef<Float32Array | null>(null);
-  const originalNormals = useRef<Float32Array | null>(null);
-  const meshRef = useRef<THREE.Mesh | null>(null);
-  const morphPartsRef = useRef<
-    {
-      mesh: THREE.Mesh;
-      geometry: THREE.BufferGeometry;
-      form: Float32Array;
-      sphere: Float32Array;
-      normals: Float32Array | null;
-    }[]
-  >([]);
   const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const maxDimRef = useRef<number>(1);
   const morphRef = useRef(introMorph ? 0 : morphProgress);
   const introMorphRef = useRef(introMorph);
   const introDurationRef = useRef(introMorphDuration);
@@ -344,179 +322,55 @@ function Model({
     if (!introMorphRef.current) morphRef.current = morphProgress;
   }, [morphProgress]);
 
-  const matTransmission = 0.94;
-  const matThickness = 3;
-  const matRoughness = 0.1;
-  const matMetalness = 0.4;
-  const matIor = 1.45;
-  const matEnvMapIntensity = 0.88;
-  const matAttenuationDistance = 0.55;
-  const matSheenRoughness = 0.35;
+  /**
+   * The vertices are rewritten only when the pose actually changes. A settled
+   * artifact with no fluidity — a parked carousel neighbour, a still preview —
+   * costs nothing per frame. `staticRef` holds growth + bumps (pose null =
+   * the settled form as built); `writtenRef` is what the geometry holds now.
+   */
+  const staticRef = useRef({
+    blend: 1,
+    bump: 0,
+    spike: 0,
+    density: 0,
+    version: 0,
+    pose: null as Float32Array | null,
+  });
+  const writtenRef = useRef({ version: 0, fluid: 0, waveT: 0 });
+  const waveBasisRef = useRef<Float32Array | null>(null);
 
-  // Layout + mesh capture when the glTF path changes.
-  // Reset transform first so cached glTF + StrictMode double-invoke stay idempotent.
+  // Center/scale the form and report bounds for the camera fit.
+  useLayoutEffect(() => {
+    const fit = fitArtifact(rest, fitTargetSize);
+    scene.scale.setScalar(fit.scale);
+    onBounds?.(fit.box, fit.sphere);
+  }, [scene, rest, fitTargetSize]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Memory photo wrapped on the growth sphere; it shares the geometry, so it
+  // follows every vertex the form writes.
   useEffect(() => {
-    scene.position.set(0, 0, 0);
-    scene.rotation.set(0, 0, 0);
-    scene.scale.set(1, 1, 1);
-
-    const box = new THREE.Box3().setFromObject(scene);
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    scene.position.sub(center);
-
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) {
-      // Guard: some assets have tiny units → huge scale → camera ends up inside.
-      const desiredScale = fitTargetSize / maxDim;
-      const clampedScale = Math.min(Math.max(desiredScale, 0.02), 50);
-      scene.scale.setScalar(clampedScale);
-      maxDimRef.current = maxDim;
-    }
-
-    // Recompute bounds after transform and report to parent for camera fitting.
-    if (onBounds) {
-      const finalBox = new THREE.Box3().setFromObject(scene);
-      const finalSphere = new THREE.Sphere();
-      finalBox.getBoundingSphere(finalSphere);
-      onBounds(finalBox, finalSphere);
-    }
-
-    detachMemoryPhotoOverlays(scene);
-    photoMaterialRef.current?.dispose();
-    photoMaterialRef.current = null;
-    morphPartsRef.current = [];
-
-    scene.updateMatrixWorld(true);
-    const sceneInverse = new THREE.Matrix4().copy(scene.matrixWorld).invert();
-    const parts: {
-      mesh: THREE.Mesh;
-      geometry: THREE.BufferGeometry;
-      form: Float32Array;
-      sphere: Float32Array;
-      normals: Float32Array | null;
-    }[] = [];
-    const matrices: THREE.Matrix4[] = [];
-
-    scene.traverse((child) => {
-      if (!(child as THREE.Mesh).isMesh) return;
-      const mesh = child as THREE.Mesh;
-      if (mesh.name === MEMORY_PHOTO_OVERLAY_NAME) return;
-      const prev = mesh.material as THREE.Material | null;
-      if (prev && typeof prev.dispose === "function") prev.dispose();
-      mesh.material = new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(matColor),
-        transmission: matTransmission,
-        thickness: matThickness,
-        roughness: matRoughness,
-        metalness: matMetalness,
-        ior: matIor,
-        transparent: true,
-        opacity: matOpacity,
-        side: THREE.DoubleSide,
-        envMapIntensity: matEnvMapIntensity,
-        attenuationColor: new THREE.Color(matAttenuationColor),
-        attenuationDistance: matAttenuationDistance,
-        sheenColor: new THREE.Color(matSheenColor),
-        sheenRoughness: matSheenRoughness,
-      });
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      meshRef.current = mesh;
-
-      const geom = mesh.geometry as THREE.BufferGeometry;
-      if (!geom.attributes.normal) geom.computeVertexNormals();
-
-      const attr = geom.attributes.position;
-      const formPos = readFormRestPose(geom);
-      // Restore pristine form before building sphere / starting morph.
-      (attr.array as Float32Array).set(formPos);
-      attr.needsUpdate = true;
-
-      originalPositions.current = formPos;
-      spherePositions.current = buildSphereRestPose(formPos);
-      if (!geom.attributes.normal) geom.computeVertexNormals();
-      originalNormals.current = Float32Array.from(
-        geom.attributes.normal.array as Float32Array,
-      );
-
-      parts.push({
-        mesh,
-        geometry: geom,
-        form: formPos,
-        sphere: new Float32Array(formPos.length),
-        normals: originalNormals.current,
-      });
-      matrices.push(
-        new THREE.Matrix4().multiplyMatrices(sceneInverse, mesh.matrixWorld),
-      );
-
-      // Start visually as a sphere when playing the archive intro morph.
-      if (introMorphRef.current && spherePositions.current) {
-        const sph = spherePositions.current;
-        for (let i = 0; i < attr.count; i++) {
-          attr.setXYZ(i, sph[i * 3], sph[i * 3 + 1], sph[i * 3 + 2]);
-        }
-        attr.needsUpdate = true;
-        geom.computeVertexNormals();
-        morphRef.current = 0;
-      }
-    });
-
-    if (photoTexture && parts.length) {
-      assignUnifiedSpherePose(parts, matrices);
-      const photoMaterial = createMemoryPhotoMaterial(
-        photoTexture,
-        1 - easeSoftMorph(morphRef.current),
-      );
-      photoMaterialRef.current = photoMaterial;
-      parts.forEach((part, i) => {
-        part.mesh.geometry = part.geometry;
-        setPhotoUvAttribute(part.geometry, buildPhotoUv(part.sphere, matrices[i]));
-        attachMemoryPhotoOverlay(part.mesh, photoMaterial);
-        const attr = part.geometry.attributes.position;
-        if (introMorphRef.current) {
-          const sph = part.sphere;
-          for (let j = 0; j < attr.count; j++) {
-            attr.setXYZ(j, sph[j * 3], sph[j * 3 + 1], sph[j * 3 + 2]);
-          }
-          attr.needsUpdate = true;
-          part.geometry.computeVertexNormals();
-        }
-      });
-      // Last mesh still drives the no-photo fallback refs; photo path morphs all.
-      const last = parts[parts.length - 1];
-      originalPositions.current = last.form;
-      spherePositions.current = last.sphere;
-      originalNormals.current = last.normals;
-      meshRef.current = last.mesh;
-      morphPartsRef.current = parts;
-    }
-
+    if (!photoTexture) return;
+    setPhotoUvAttribute(geometry, buildPhotoUv(rest.sphere, MODEL_SPACE));
+    const photoMaterial = createMemoryPhotoMaterial(
+      photoTexture,
+      1 - easeSoftMorph(morphRef.current),
+    );
+    photoMaterialRef.current = photoMaterial;
+    attachMemoryPhotoOverlay(mesh, photoMaterial);
     return () => {
       detachMemoryPhotoOverlays(scene);
-      photoMaterialRef.current?.dispose();
+      photoMaterial.dispose();
       photoMaterialRef.current = null;
-      morphPartsRef.current = [];
     };
-  }, [modelPath, scene, fitTargetSize, photoTexture]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, mesh, geometry, rest, photoTexture]);
 
-  // Tint update — separate effect so we never re-apply center/scale on preset switch
-  useEffect(() => {
-    scene.traverse((child) => {
-      if (!(child as THREE.Mesh).isMesh) return;
-      if (child.name === MEMORY_PHOTO_OVERLAY_NAME) return;
-      const m = (child as THREE.Mesh).material as THREE.MeshPhysicalMaterial;
-      if (!m?.isMeshPhysicalMaterial) return;
-      m.color.set(matColor);
-      m.opacity = matOpacity;
-      m.attenuationColor.set(matAttenuationColor);
-      m.sheenColor.set(matSheenColor);
-      m.needsUpdate = true;
-    });
-  }, [scene, matColor, matAttenuationColor, matSheenColor, matOpacity]);
+  // Tints are uniforms — no program rebuild, so no needsUpdate.
+  useLayoutEffect(() => {
+    material.color.set(matColor);
+    material.opacity = matOpacity;
+    material.attenuationColor.set(matAttenuationColor);
+    material.sheenColor.set(matSheenColor);
+  }, [material, matColor, matAttenuationColor, matSheenColor, matOpacity]);
 
   useFrame((_, rawDelta) => {
     if (!groupRef.current) return;
@@ -577,162 +431,88 @@ function Model({
       spinOffsetRef.current = groupRef.current.rotation.y - t * 0.16;
     }
 
-    // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in
-    const photoParts = morphPartsRef.current;
-    const morphMeshes =
-      photoParts.length > 0
-        ? photoParts
-        : originalPositions.current &&
-            spherePositions.current &&
-            meshRef.current?.geometry
-          ? [
-              {
-                mesh: meshRef.current,
-                geometry: meshRef.current.geometry,
-                form: originalPositions.current,
-                sphere: spherePositions.current,
-                normals: originalNormals.current,
-              },
-            ]
-          : [];
+    // Vertex effects: quiet sphere→form growth + late fluidity/bump settle-in.
+    // Advance intro morph inside the render loop (no React setState per frame).
+    if (introMorphRef.current && morphRef.current < 1) {
+      const dur = Math.max(0.05, introDurationRef.current);
+      morphRef.current = Math.min(1, morphRef.current + delta / dur);
+    }
+    const mt = Math.min(1, Math.max(0, morphRef.current));
+    // Intro: slow organic; gesture: nearly linear with a touch of ease.
+    const formBlend = introMorphRef.current
+      ? easeOrganicGrowth(mt)
+      : easeSoftMorph(mt);
+    setMemoryPhotoFade(photoMaterialRef.current, 1 - formBlend);
+    // Keep surface detail quiet until the body has mostly emerged.
+    const detailGain = mt < 0.62 ? 0 : Math.pow((mt - 0.62) / 0.38, 2);
+    const fluid = fluidity * 0.6 * detailGain;
+    const bump = bumpAmount > 1e-9 && detailGain > 1e-4 ? bumpAmount * detailGain : 0;
+    const waveT = fluid > 0 ? t : 0;
 
-    if (morphMeshes.length > 0) {
-      // Advance intro morph inside the render loop (no React setState per frame).
-      if (introMorphRef.current && morphRef.current < 1) {
-        const dur = Math.max(0.05, introDurationRef.current);
-        morphRef.current = Math.min(1, morphRef.current + delta / dur);
-      }
-
-      const mt = Math.min(1, Math.max(0, morphRef.current));
-      // Intro: slow organic; gesture: nearly linear with a touch of ease.
-      const formBlend = introMorphRef.current
-        ? easeOrganicGrowth(mt)
-        : easeSoftMorph(mt);
-      setMemoryPhotoFade(photoMaterialRef.current, 1 - formBlend);
-      // Keep surface detail quiet until the body has mostly emerged.
-      const detailGain =
-        mt < 0.62 ? 0 : Math.pow((mt - 0.62) / 0.38, 2);
-
-      const f = fluidity * 0.6 * detailGain;
-
-      for (const part of morphMeshes) {
-        const pos = part.geometry.attributes.position;
-        if (!pos) continue;
-        const form = part.form;
-        const sph = part.sphere;
-        const norms = part.normals;
-        const useBump = !!norms && bumpAmount > 1e-9 && detailGain > 1e-4;
-
-        for (let i = 0; i < pos.count; i++) {
-          const i3 = i * 3;
-          const sx = sph[i3];
-          const sy = sph[i3 + 1];
-          const sz = sph[i3 + 2];
-          const ox = form[i3];
-          const oy = form[i3 + 1];
-          const oz = form[i3 + 2];
-
-          let px = sx + (ox - sx) * formBlend;
-          let py = sy + (oy - sy) * formBlend;
-          let pz = sz + (oz - sz) * formBlend;
-
-          const wave =
-            f > 0
-              ? Math.sin(ox * 2.5 + t * f * 3) *
-                Math.cos(oz * 2.5 + t * f * 2) *
-                0.08 *
-                f
-              : 0;
-          py += wave;
-
-          if (useBump && norms) {
-            const nx = norms[i3];
-            const ny = norms[i3 + 1];
-            const nz = norms[i3 + 2];
-            const n1 = Math.sin(ox * density) * Math.cos(oy * density);
-            const n2 = Math.sin(oy * density) * Math.cos(oz * density);
-            const n3 = Math.sin(oz * density) * Math.cos(ox * density);
-            const raw = (n1 + n2 + n3) / 3;
-            const shaped = Math.pow(
-              Math.max(0, raw),
-              1.0 - bumpSpike * 0.98,
-            );
-            const amount = shaped * bumpAmount * 0.25 * detailGain;
-            px += nx * amount;
-            py += ny * amount;
-            pz += nz * amount;
-          }
-
-          pos.setXYZ(i, px, py, pz);
-        }
-        pos.needsUpdate = true;
-        part.geometry.computeVertexNormals();
-      }
-    } else if (
-      originalPositions.current &&
-      meshRef.current?.geometry?.attributes?.position
+    const s = staticRef.current;
+    if (
+      s.blend !== formBlend ||
+      s.bump !== bump ||
+      (bump > 0 && (s.spike !== bumpSpike || s.density !== density))
     ) {
-      // Fallback: no sphere pose yet — original fluidity/bump path
-      const pos = meshRef.current.geometry.attributes.position;
-      const orig = originalPositions.current;
-      const norms = originalNormals.current;
-      const f = fluidity * 0.6;
-      const useBump = !!norms && bumpAmount > 1e-9;
-
-      for (let i = 0; i < pos.count; i++) {
-        const ox = orig[i * 3];
-        const oy = orig[i * 3 + 1];
-        const oz = orig[i * 3 + 2];
-        const wave =
-          f > 0
-            ? Math.sin(ox * 2.5 + t * f * 3) *
-              Math.cos(oz * 2.5 + t * f * 2) *
-              0.08 *
-              f
-            : 0;
-        let px = ox;
-        let py = oy + wave;
-        let pz = oz;
-
-        if (useBump && norms) {
-          const nx = norms[i * 3];
-          const ny = norms[i * 3 + 1];
-          const nz = norms[i * 3 + 2];
-          const n1 = Math.sin(ox * density) * Math.cos(oy * density);
-          const n2 = Math.sin(oy * density) * Math.cos(oz * density);
-          const n3 = Math.sin(oz * density) * Math.cos(ox * density);
-          const raw = (n1 + n2 + n3) / 3;
-          const shaped = Math.pow(
-            Math.max(0, raw),
-            1.0 - bumpSpike * 0.98,
-          );
-          const amount = shaped * bumpAmount * 0.25;
-          px += nx * amount;
-          py += ny * amount;
-          pz += nz * amount;
-        }
-
-        pos.setXYZ(i, px, py, pz);
-      }
-      pos.needsUpdate = true;
-      meshRef.current.geometry.computeVertexNormals();
+      s.pose ??= new Float32Array(rest.positions.length);
+      writeStaticPose(s.pose, rest, formBlend, bump, bumpSpike, density);
+      s.blend = formBlend;
+      s.bump = bump;
+      s.spike = bumpSpike;
+      s.density = density;
+      s.version++;
     }
 
-    // Evolve: breathe the whole model (group), not a single mesh — multi-mesh GLBs were invisible before.
-    if (groupRef.current) {
-      if (e > 0) {
-        const freq = 1.0 + e * 2.0;
-        const breath = 1 + Math.sin(t * freq) * breathAmp;
-        groupRef.current.scale.setScalar(breath);
+    const w = writtenRef.current;
+    if (w.version !== s.version || w.fluid !== fluid || w.waveT !== waveT) {
+      const position = geometry.attributes.position as THREE.BufferAttribute;
+      const normal = geometry.attributes.normal as THREE.BufferAttribute;
+      const out = position.array as Float32Array;
+      const base = s.pose ?? rest.positions;
+      if (fluid > 0) {
+        // sin(a + b) and cos(c + d) expanded, so only these four are per frame
+        const basis = (waveBasisRef.current ??= buildWaveBasis(rest));
+        const sinB = Math.sin(t * fluid * 3);
+        const cosB = Math.cos(t * fluid * 3);
+        const sinD = Math.sin(t * fluid * 2);
+        const cosD = Math.cos(t * fluid * 2);
+        const amp = 0.08 * fluid;
+        for (let i = 0, b = 0; i < out.length; i += 3, b += 4) {
+          const wave =
+            (basis[b] * cosB + basis[b + 1] * sinB) *
+            (basis[b + 3] * cosD - basis[b + 2] * sinD) *
+            amp;
+          out[i] = base[i];
+          out[i + 1] = base[i + 1] + wave;
+          out[i + 2] = base[i + 2];
+        }
       } else {
-        groupRef.current.scale.set(1, 1, 1);
+        out.set(base);
       }
+      computeMeshNormals(out, rest.index, normal.array as Float32Array);
+      position.needsUpdate = true;
+      normal.needsUpdate = true;
+      w.version = s.version;
+      w.fluid = fluid;
+      w.waveT = waveT;
+    }
+
+    // Evolve: breathe the whole model (group), not the mesh.
+    if (e > 0) {
+      const freq = 1.0 + e * 2.0;
+      const breath = 1 + Math.sin(t * freq) * breathAmp;
+      groupRef.current.scale.setScalar(breath);
+    } else {
+      groupRef.current.scale.set(1, 1, 1);
     }
   });
 
   return (
-    <group ref={groupRef}>
-      <primitive object={scene} />
+    <group rotation-x={ARTIFACT_TILT}>
+      <group ref={groupRef}>
+        <primitive object={scene} />
+      </group>
     </group>
   );
 }
@@ -742,11 +522,12 @@ function Model({
 /**
  * frameloop="demand" draws only when something asks it to, and a parked
  * artifact has to be asked more than once: the environment map, the camera fit
- * and the first vertex pass in `Model` each land later than the glTF itself.
+ * and the first vertex pass in `Model` each land later than the form itself.
  * So we ask a few times, thinly spread — a dense burst of frames across six
  * parked canvases stalls the swing that put them there.
  * Mounted inside the Suspense boundary, so the schedule starts once the model
- * is actually there; after it, the canvas holds its last frame for free.
+ * (and any photo it wears) is actually there; after it, the canvas holds its
+ * last frame for free.
  */
 const DEMAND_DRAW_DELAYS_MS = [60, 160, 340, 700, 1200, 1900];
 
@@ -776,7 +557,8 @@ function Loader() {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface SceneViewerProps {
-  modelPath?: string;
+  /** The artifact's superformula form. */
+  form?: ArtifactForm;
   className?: string;
   style?: React.CSSProperties;
   autoRotate?: boolean;
@@ -840,7 +622,7 @@ interface SceneViewerProps {
 // ─── Main Scene ───────────────────────────────────────────────────────────────
 
 export function SceneViewer({
-  modelPath = MODEL_PATHS[0],
+  form = DEFAULT_ARTIFACT_FORM,
   className = "",
   style = {},
   autoRotate: autoRotateProp,
@@ -989,6 +771,33 @@ export function SceneViewer({
     visibility: fitCam ? undefined : "hidden",
   };
 
+  // A new form (or switching the intro on) mounts a fresh Model, so its
+  // clocks and pose caches start over with the geometry.
+  const modelKey = `${formKey(form)}-${introMorph ? "intro" : "static"}`;
+  const modelProps: ModelProps = {
+    form,
+    matColor,
+    matAttenuationColor,
+    matSheenColor,
+    autoRotate,
+    floatAmplitude,
+    recenterFloat,
+    fluidity: safeFluidity,
+    evolve: safeEvolve,
+    oscillatingEvolve: shapeBuildOscillatingEvolve,
+    still,
+    sharedClock,
+    bumpAmount: safeBumpAmount,
+    bumpSpike: safeBumpSpike,
+    density: safeDensity,
+    matOpacity,
+    fitTargetSize,
+    morphProgress,
+    introMorph,
+    introMorphDuration,
+    onBounds: handleBounds,
+  };
+
   // Don't mount the Canvas until the parent signals ready (avoids iframe conflicts)
   if (!ready) return <div className={className} style={containerStyle} />;
 
@@ -1050,58 +859,11 @@ export function SceneViewer({
           {memoryPhotoUrl ? (
             <MemoryPhotoTexture url={memoryPhotoUrl}>
               {(photoTexture) => (
-                <Model
-                  key={`${modelPath}-${introMorph ? "intro" : "static"}`}
-                  modelPath={modelPath}
-                  matColor={matColor}
-                  matAttenuationColor={matAttenuationColor}
-                  matSheenColor={matSheenColor}
-                  autoRotate={autoRotate}
-                  floatAmplitude={floatAmplitude}
-                  recenterFloat={recenterFloat}
-                  fluidity={safeFluidity}
-                  evolve={safeEvolve}
-                  oscillatingEvolve={shapeBuildOscillatingEvolve}
-                  still={still}
-                  sharedClock={sharedClock}
-                  bumpAmount={safeBumpAmount}
-                  bumpSpike={safeBumpSpike}
-                  density={safeDensity}
-                  matOpacity={matOpacity}
-                  fitTargetSize={fitTargetSize}
-                  morphProgress={morphProgress}
-                  introMorph={introMorph}
-                  introMorphDuration={introMorphDuration}
-                  photoTexture={photoTexture}
-                  onBounds={handleBounds}
-                />
+                <Model key={modelKey} {...modelProps} photoTexture={photoTexture} />
               )}
             </MemoryPhotoTexture>
           ) : (
-            <Model
-              key={`${modelPath}-${introMorph ? "intro" : "static"}`}
-              modelPath={modelPath}
-              matColor={matColor}
-              matAttenuationColor={matAttenuationColor}
-              matSheenColor={matSheenColor}
-              autoRotate={autoRotate}
-              floatAmplitude={floatAmplitude}
-              recenterFloat={recenterFloat}
-              fluidity={safeFluidity}
-              evolve={safeEvolve}
-              oscillatingEvolve={shapeBuildOscillatingEvolve}
-              still={still}
-              sharedClock={sharedClock}
-              bumpAmount={safeBumpAmount}
-              bumpSpike={safeBumpSpike}
-              density={safeDensity}
-              matOpacity={matOpacity}
-              fitTargetSize={fitTargetSize}
-              morphProgress={morphProgress}
-              introMorph={introMorph}
-              introMorphDuration={introMorphDuration}
-              onBounds={handleBounds}
-            />
+            <Model key={modelKey} {...modelProps} />
           )}
           {frameloop === "demand" && <DemandFrames />}
         </Suspense>

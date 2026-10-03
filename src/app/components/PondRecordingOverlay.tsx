@@ -7,9 +7,9 @@ import { beginTranscription } from "../lib/transcribe";
 import svgPathsStop from "../../imports/svg-hpzn3032f5";
 import { PARTICLE_TEXT_KEYFRAMES, ParticleText } from "./ParticleText";
 import { PillButton } from "./PillButton";
-import { pickArtifactModelPath } from "./ContourArtifact";
 import { RecordingInstructionsDialog } from "./RecordingInstructionsDialog";
 import { MEMORY_POND_PATH, TRANSCRIPT_PATH } from "../lib/routes";
+import { ArtifactForm, createArtifactForm, formFromState } from "../lib/superformula";
 import { createVoiceRippleBurstPlanner, pickVoiceRippleSpot, type VoiceRippleSpot } from "../lib/voicePeaks";
 
 const QUESTION_DELAY_S = 0.35;
@@ -29,7 +29,7 @@ const noteStyle = {
 
 interface RecordingArrival {
   focus?: [number, number];
-  shape?: { modelPath?: string };
+  shape?: { form?: ArtifactForm };
 }
 
 /**
@@ -52,7 +52,9 @@ export function PondRecordingOverlay({
   const [leaving, setLeaving] = useState(false);
   const [captureFailed, setCaptureFailed] = useState(false);
   const [openingMicrophone, setOpeningMicrophone] = useState(false);
-  const [modelPath] = useState(() => arrival?.shape?.modelPath ?? pickArtifactModelPath());
+  // The memory's form is assigned here, before it has words, and travels with
+  // it through every step after. Recording again keeps the same one.
+  const [form] = useState(() => formFromState(arrival) ?? createArtifactForm());
   const lastRipple = useRef<VoiceRippleSpot | null>(null);
   const planBurst = useRef(createVoiceRippleBurstPlanner());
   const pendingRipples = useRef(new Set<number>());
@@ -97,7 +99,7 @@ export function PondRecordingOverlay({
         navigate(TRANSCRIPT_PATH, {
           state: {
             transcriptionId,
-            shape: { modelPath },
+            shape: { form },
             ...(focus ? { focus } : {}),
           },
         });
@@ -142,7 +144,7 @@ export function PondRecordingOverlay({
     setTimeout(() => {
       navigate(TRANSCRIPT_PATH, {
         state: {
-          shape: { modelPath },
+          shape: { form },
           ...(focus ? { focus } : {}),
         },
       });

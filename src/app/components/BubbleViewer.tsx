@@ -1,13 +1,28 @@
-import React, { useRef, useEffect, useMemo, useState, Suspense } from "react";
+import React, {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  Suspense,
+} from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useGLTF, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import {
-  MODEL_PATHS,
-  assignUnifiedSpherePose,
+  ARTIFACT_TILT,
+  MODEL_SPACE,
   easeSoftMorph,
-  readFormRestPose,
+  fitArtifact,
 } from "./SceneViewer";
+import { useArtifactGeometry } from "../hooks/useArtifactGeometry";
+import {
+  ArtifactForm,
+  ArtifactMesh,
+  DEFAULT_ARTIFACT_FORM,
+  computeMeshNormals,
+  formKey,
+} from "../lib/superformula";
 import {
   MemoryPhotoTexture,
   applyMemoryPhotoFilter,
@@ -182,23 +197,28 @@ function drift(t: number, axis: 0 | 1 | 2): number {
   );
 }
 
-/* ───────── morph targets ───────── */
-
-interface MorphPart {
-  mesh: THREE.Mesh;
-  geometry: THREE.BufferGeometry;
-  /** Pristine GLB vertices, mesh-local. */
-  form: Float32Array;
-  /** Matching sphere pose, mesh-local. */
-  sphere: Float32Array;
-  /** Form-pose normals, used to push the standing wave outward. */
-  normals: Float32Array;
-}
-
 /* ───────── model ───────── */
 
+/**
+ * sin/cos of each vertex's three wave phases, sampled in world-equivalent
+ * units so the wavelength doesn't depend on the fit scale. The standing wave
+ * then needs no trig per vertex per frame.
+ */
+function buildWaveBasis(rest: ArtifactMesh, worldPerLocal: number): Float32Array {
+  const form = rest.positions;
+  const basis = new Float32Array((form.length / 3) * 6);
+  for (let i = 0, b = 0; i < form.length; i += 3, b += 6) {
+    for (let axis = 0; axis < 3; axis++) {
+      const phase = form[i + axis] * worldPerLocal * WAVE_SPATIAL[axis];
+      basis[b + axis * 2] = Math.sin(phase);
+      basis[b + axis * 2 + 1] = Math.cos(phase);
+    }
+  }
+  return basis;
+}
+
 interface BubbleModelProps {
-  modelPath: string;
+  form: ArtifactForm;
   autoRotate: boolean;
   morphProgress: number;
   fitTargetSize: number;
@@ -219,7 +239,7 @@ interface BubbleModelProps {
 }
 
 function BubbleModel({
-  modelPath,
+  form,
   autoRotate,
   morphProgress,
   fitTargetSize,
@@ -238,63 +258,13 @@ function BubbleModel({
   ambients,
   onBounds,
 }: BubbleModelProps) {
-  const { scene: sharedScene } = useGLTF(modelPath);
-  // useGLTF hands out one shared Object3D; SceneViewer mounts the same one, and
-  // an Object3D can only have a single parent — without a clone, toggling
-  // variants detaches the model from whichever viewer mounted first.
-  const scene = useMemo(() => sharedScene.clone(true), [sharedScene]);
-  const groupRef = useRef<THREE.Group>(null!);
-  const clock = useRef(0);
-  /** One entry per mesh — these GLBs are multi-part, all of them must morph. */
-  const partsRef = useRef<MorphPart[]>([]);
-  /**
-   * World units per mesh-local unit. The GLBs are authored at wildly different
-   * scales, so the wave must be expressed in world units and converted back.
-   */
-  const worldPerLocalRef = useRef(1);
-  const morphRef = useRef(morphProgress);
-  const materialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const photoFilterRef = useRef(photoFilter);
-  photoFilterRef.current = photoFilter;
-  const editMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
-  const lightEditRef = useRef(lightEditMode);
-  lightEditRef.current = lightEditMode;
-  const prevEditRef = useRef<boolean | null>(null);
-
-  useEffect(() => {
-    morphRef.current = morphProgress;
-  }, [morphProgress]);
-
-  useEffect(() => {
-    scene.position.set(0, 0, 0);
-    scene.rotation.set(0, 0, 0);
-    scene.scale.set(1, 1, 1);
-
-    const box = new THREE.Box3().setFromObject(scene);
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    scene.position.sub(center);
-
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) {
-      const desiredScale = fitTargetSize / maxDim;
-      scene.scale.setScalar(Math.min(Math.max(desiredScale, 0.02), 50));
-      worldPerLocalRef.current = scene.scale.x;
-    }
-
-    if (onBounds) {
-      const finalBox = new THREE.Box3().setFromObject(scene);
-      const finalSphere = new THREE.Sphere();
-      finalBox.getBoundingSphere(finalSphere);
-      onBounds(finalBox, finalSphere);
-    }
-
+  const { geometry, rest } = useArtifactGeometry(form);
+  // Made once with the props of the first render; the effects below keep
+  // every uniform current.
+  const material = useMemo(() => {
     const lightUniforms = createBubbleLightUniforms();
     fillBubbleLightUniforms(lightUniforms, lights, ambients);
-    const material = new THREE.ShaderMaterial({
+    return new THREE.ShaderMaterial({
       vertexShader: BUBBLE_VERT,
       fragmentShader: BUBBLE_FRAG,
       uniforms: {
@@ -313,151 +283,107 @@ function BubbleModel({
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    materialRef.current = material;
-
-    const parts: MorphPart[] = [];
-    const matrices: THREE.Matrix4[] = [];
-    scene.updateMatrixWorld(true);
-    const sceneInverse = new THREE.Matrix4().copy(scene.matrixWorld).invert();
-    scene.traverse((child) => {
-      if (!(child as THREE.Mesh).isMesh) return;
-      const mesh = child as THREE.Mesh;
-      mesh.material = material;
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-
-      // Read the rest pose from the shared geometry, then animate a private
-      // copy so the two variants never overwrite each other's vertices.
-      const shared = mesh.geometry as THREE.BufferGeometry;
-      if (!shared.attributes.normal) shared.computeVertexNormals();
-      const formPos = readFormRestPose(shared);
-
-      const geom = shared.clone();
-      mesh.geometry = geom;
-      const attr = geom.attributes.position;
-      (attr.array as Float32Array).set(formPos);
-      attr.needsUpdate = true;
-      geom.computeVertexNormals();
-
-      parts.push({
-        mesh,
-        geometry: geom,
-        form: formPos,
-        sphere: new Float32Array(formPos.length),
-        normals: Float32Array.from(
-          geom.attributes.normal.array as Float32Array,
-        ),
-      });
-      matrices.push(
-        new THREE.Matrix4().multiplyMatrices(sceneInverse, mesh.matrixWorld),
-      );
-    });
-    assignUnifiedSpherePose(parts, matrices);
-    partsRef.current = parts;
-
-    let photoMaterial: THREE.ShaderMaterial | null = null;
-    if (photoTexture && !lightEditRef.current) {
-      photoMaterial = createMemoryPhotoMaterial(
-        photoTexture,
-        1 - easeSoftMorph(morphRef.current),
-        photoFilterRef.current,
-      );
-      photoMaterialRef.current = photoMaterial;
-      parts.forEach((part, i) => {
-        setPhotoUvAttribute(part.geometry, buildPhotoUv(part.sphere, matrices[i]));
-        attachMemoryPhotoOverlay(part.mesh, photoMaterial!);
-      });
-    }
-
-    return () => {
-      detachMemoryPhotoOverlays(scene);
-      photoMaterial?.dispose();
-      photoMaterialRef.current = null;
-      editMaterialRef.current?.dispose();
-      editMaterialRef.current = null;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /** KeyShot-style geometry view: a flat gray stand-in. */
+  const editMaterial = useMemo(
+    () => new THREE.MeshBasicMaterial({ color: "#8d8e94", side: THREE.DoubleSide }),
+    [],
+  );
+  useEffect(
+    () => () => {
       material.dispose();
-      materialRef.current = null;
-      parts.forEach((p) => p.geometry.dispose());
-      partsRef.current = [];
-    };
-  }, [modelPath, scene, fitTargetSize, photoTexture]); // eslint-disable-line react-hooks/exhaustive-deps
+      editMaterial.dispose();
+    },
+    [material, editMaterial],
+  );
+  const { scene, mesh } = useMemo(() => {
+    const mesh = new THREE.Mesh<THREE.BufferGeometry, THREE.Material>(geometry, material);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    const scene = new THREE.Group();
+    scene.add(mesh);
+    return { scene, mesh };
+  }, [geometry, material]);
+
+  const groupRef = useRef<THREE.Group>(null!);
+  const clock = useRef(0);
+  /** World units per mesh unit — the wave is sized in world units. */
+  const worldPerLocalRef = useRef(1);
+  const morphRef = useRef(morphProgress);
+  const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const photoFilterRef = useRef(photoFilter);
+  photoFilterRef.current = photoFilter;
+  const lightEditRef = useRef(lightEditMode);
+  lightEditRef.current = lightEditMode;
+  /** Growth pose (null = the settled form as built) and what the geometry holds now. */
+  const staticRef = useRef({ blend: 1, version: 0, pose: null as Float32Array | null });
+  const writtenRef = useRef({ version: 0, amp: 0, waveT: 0 });
+  const waveBasisRef = useRef<Float32Array | null>(null);
 
   useEffect(() => {
-    const m = materialRef.current;
-    if (m) {
-      (m.uniforms.uCoreColor.value as THREE.Color).set(coreColor);
-      (m.uniforms.uRimColor.value as THREE.Color).set(rimColor);
-      (m.uniforms.uInterior.value as THREE.Color).set(interiorColor);
-      m.uniforms.uTransmit.value = transmit;
-    }
-  }, [coreColor, rimColor, interiorColor, transmit]);
+    morphRef.current = morphProgress;
+  }, [morphProgress]);
+
+  useLayoutEffect(() => {
+    const fit = fitArtifact(rest, fitTargetSize);
+    scene.scale.setScalar(fit.scale);
+    worldPerLocalRef.current = fit.scale;
+    waveBasisRef.current = null;
+    onBounds?.(fit.box, fit.sphere);
+  }, [scene, rest, fitTargetSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const m = materialRef.current;
-    if (!m) return;
-    m.uniforms.uRoughness.value = roughness;
-    m.uniforms.uReflectivity.value = reflectivity;
-    m.uniforms.uTransparency.value = transparency;
-    m.uniforms.uFog.value = fog;
-  }, [roughness, reflectivity, transparency, fog]);
+    const u = material.uniforms;
+    (u.uCoreColor.value as THREE.Color).set(coreColor);
+    (u.uRimColor.value as THREE.Color).set(rimColor);
+    (u.uInterior.value as THREE.Color).set(interiorColor);
+    u.uTransmit.value = transmit;
+  }, [material, coreColor, rimColor, interiorColor, transmit]);
 
   useEffect(() => {
-    const m = materialRef.current;
-    if (!m) return;
+    const u = material.uniforms;
+    u.uRoughness.value = roughness;
+    u.uReflectivity.value = reflectivity;
+    u.uTransparency.value = transparency;
+    u.uFog.value = fog;
+  }, [material, roughness, reflectivity, transparency, fog]);
+
+  useEffect(() => {
     fillBubbleLightUniforms(
-      m.uniforms as unknown as ReturnType<typeof createBubbleLightUniforms>,
+      material.uniforms as unknown as ReturnType<typeof createBubbleLightUniforms>,
       lights,
       ambients,
     );
-  }, [lights, ambients]);
+  }, [material, lights, ambients]);
+
+  // Light editing swaps in the gray stand-in and holds the form at the origin.
+  useLayoutEffect(() => {
+    mesh.material = lightEditMode ? editMaterial : material;
+    if (lightEditMode) groupRef.current?.position.set(0, 0, 0);
+  }, [mesh, material, editMaterial, lightEditMode]);
+
+  // The photo rides on the growth sphere and shares the geometry, so it
+  // follows every vertex the form writes. Not while editing lights.
+  useEffect(() => {
+    if (!photoTexture || lightEditMode) return;
+    setPhotoUvAttribute(geometry, buildPhotoUv(rest.sphere, MODEL_SPACE));
+    const photoMaterial = createMemoryPhotoMaterial(
+      photoTexture,
+      1 - easeSoftMorph(morphRef.current),
+      photoFilterRef.current,
+    );
+    photoMaterialRef.current = photoMaterial;
+    attachMemoryPhotoOverlay(mesh, photoMaterial);
+    return () => {
+      detachMemoryPhotoOverlays(scene);
+      photoMaterial.dispose();
+      photoMaterialRef.current = null;
+    };
+  }, [scene, mesh, geometry, rest, photoTexture, lightEditMode]);
 
   useEffect(() => {
     applyMemoryPhotoFilter(photoMaterialRef.current, photoFilter);
   }, [photoFilter]);
-
-  useEffect(() => {
-    const parts = partsRef.current;
-    const prev = prevEditRef.current;
-    prevEditRef.current = lightEditMode;
-
-    if (lightEditMode) {
-      detachMemoryPhotoOverlays(scene);
-      editMaterialRef.current?.dispose();
-      const gray = new THREE.MeshBasicMaterial({
-        color: "#8d8e94",
-        side: THREE.DoubleSide,
-      });
-      editMaterialRef.current = gray;
-      parts.forEach((p) => {
-        p.mesh.material = gray;
-      });
-      if (groupRef.current) groupRef.current.position.set(0, 0, 0);
-      return;
-    }
-
-    if (prev !== true) return;
-
-    editMaterialRef.current?.dispose();
-    editMaterialRef.current = null;
-    const shader = materialRef.current;
-    if (shader) {
-      parts.forEach((p) => {
-        p.mesh.material = shader;
-      });
-    }
-    if (photoTexture) {
-      if (!photoMaterialRef.current) {
-        photoMaterialRef.current = createMemoryPhotoMaterial(
-          photoTexture,
-          1 - easeSoftMorph(morphRef.current),
-          photoFilterRef.current,
-        );
-      }
-      parts.forEach((p) => {
-        attachMemoryPhotoOverlay(p.mesh, photoMaterialRef.current!);
-      });
-    }
-  }, [lightEditMode, photoTexture, scene]);
 
   useFrame((_, delta) => {
     if (!groupRef.current) return;
@@ -471,52 +397,67 @@ function BubbleModel({
     }
 
     const t = clock.current;
-    const mt = Math.min(1, Math.max(0, morphRef.current));
-    const formBlend = easeSoftMorph(mt);
+    const formBlend = easeSoftMorph(Math.min(1, Math.max(0, morphRef.current)));
     const wpl = worldPerLocalRef.current || 1;
-    const waveAmpLocal = editing ? 0 : WAVE_AMPLITUDE / wpl;
+    const amp = editing ? 0 : WAVE_AMPLITUDE / wpl;
+    const waveT = amp > 0 ? t : 0;
 
-    for (const part of partsRef.current) {
-      const pos = part.geometry.attributes.position;
-      if (!pos) continue;
-      const form = part.form;
-      const sph = part.sphere;
-      const norms = part.normals;
-      const arr = pos.array as Float32Array;
+    const s = staticRef.current;
+    if (s.blend !== formBlend) {
+      const form = rest.positions;
+      const sph = rest.sphere;
+      const pose = (s.pose ??= new Float32Array(form.length));
+      for (let i = 0; i < form.length; i++) pose[i] = sph[i] + (form[i] - sph[i]) * formBlend;
+      s.blend = formBlend;
+      s.version++;
+    }
 
-      for (let i = 0; i < pos.count; i++) {
-        const i3 = i * 3;
-        const sx = sph[i3];
-        const sy = sph[i3 + 1];
-        const sz = sph[i3 + 2];
-        const ox = form[i3];
-        const oy = form[i3 + 1];
-        const oz = form[i3 + 2];
-
-        // Standing wave: the surrounding liquid nudging the film. Sampled in
-        // world-equivalent coordinates so the wavelength is scale-independent.
-        const wave =
-          waveAmpLocal === 0
-            ? 0
-            : Math.sin(ox * wpl * WAVE_SPATIAL[0] + t * WAVE_TEMPORAL[0]) *
-              Math.sin(oy * wpl * WAVE_SPATIAL[1] + t * WAVE_TEMPORAL[1]) *
-              Math.sin(oz * wpl * WAVE_SPATIAL[2] + t * WAVE_TEMPORAL[2]) *
-              waveAmpLocal;
-
-        arr[i3] = sx + (ox - sx) * formBlend + norms[i3] * wave;
-        arr[i3 + 1] = sy + (oy - sy) * formBlend + norms[i3 + 1] * wave;
-        arr[i3 + 2] = sz + (oz - sz) * formBlend + norms[i3 + 2] * wave;
+    const w = writtenRef.current;
+    if (w.version !== s.version || w.amp !== amp || w.waveT !== waveT) {
+      const position = geometry.attributes.position as THREE.BufferAttribute;
+      const normal = geometry.attributes.normal as THREE.BufferAttribute;
+      const out = position.array as Float32Array;
+      const base = s.pose ?? rest.positions;
+      if (amp > 0) {
+        // Standing wave: the surrounding liquid nudging the film, pushed out
+        // along the settled form's normals. sin(a + b) expanded per axis.
+        const basis = (waveBasisRef.current ??= buildWaveBasis(rest, wpl));
+        const norms = rest.normals;
+        const s0 = Math.sin(t * WAVE_TEMPORAL[0]);
+        const c0 = Math.cos(t * WAVE_TEMPORAL[0]);
+        const s1 = Math.sin(t * WAVE_TEMPORAL[1]);
+        const c1 = Math.cos(t * WAVE_TEMPORAL[1]);
+        const s2 = Math.sin(t * WAVE_TEMPORAL[2]);
+        const c2 = Math.cos(t * WAVE_TEMPORAL[2]);
+        for (let i = 0, b = 0; i < out.length; i += 3, b += 6) {
+          const wave =
+            (basis[b] * c0 + basis[b + 1] * s0) *
+            (basis[b + 2] * c1 + basis[b + 3] * s1) *
+            (basis[b + 4] * c2 + basis[b + 5] * s2) *
+            amp;
+          out[i] = base[i] + norms[i] * wave;
+          out[i + 1] = base[i + 1] + norms[i + 1] * wave;
+          out[i + 2] = base[i + 2] + norms[i + 2] * wave;
+        }
+      } else {
+        out.set(base);
       }
-      pos.needsUpdate = true;
-      part.geometry.computeVertexNormals();
+      computeMeshNormals(out, rest.index, normal.array as Float32Array);
+      position.needsUpdate = true;
+      normal.needsUpdate = true;
+      w.version = s.version;
+      w.amp = amp;
+      w.waveT = waveT;
     }
 
     if (!editing) setMemoryPhotoFade(photoMaterialRef.current, 1 - formBlend);
   });
 
   return (
-    <group ref={groupRef}>
-      <primitive object={scene} />
+    <group rotation-x={ARTIFACT_TILT}>
+      <group ref={groupRef}>
+        <primitive object={scene} />
+      </group>
     </group>
   );
 }
@@ -524,7 +465,8 @@ function BubbleModel({
 /* ───────── props ───────── */
 
 export interface BubbleViewerProps {
-  modelPath?: string;
+  /** The artifact's superformula form. */
+  form?: ArtifactForm;
   className?: string;
   style?: React.CSSProperties;
   autoRotate?: boolean;
@@ -586,7 +528,7 @@ export const DEFAULT_BUBBLE_MATERIAL = {
 /* ───────── main ───────── */
 
 export function BubbleViewer({
-  modelPath = MODEL_PATHS[0],
+  form = DEFAULT_ARTIFACT_FORM,
   className = "",
   style = {},
   autoRotate = true,
@@ -646,7 +588,7 @@ export function BubbleViewer({
   };
 
   const modelShared = {
-    modelPath,
+    form,
     autoRotate: autoRotate && !lightEditMode,
     morphProgress,
     fitTargetSize,
@@ -707,14 +649,14 @@ export function BubbleViewer({
             <MemoryPhotoTexture url={memoryPhotoUrl}>
               {(photoTexture) => (
                 <BubbleModel
-                  key={modelPath}
+                  key={formKey(form)}
                   {...modelShared}
                   photoTexture={photoTexture}
                 />
               )}
             </MemoryPhotoTexture>
           ) : (
-            <BubbleModel key={modelPath} {...modelShared} />
+            <BubbleModel key={formKey(form)} {...modelShared} />
           )}
         </Suspense>
         <OrbitControls

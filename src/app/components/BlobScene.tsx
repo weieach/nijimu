@@ -3,7 +3,8 @@ import svgPaths from "../../imports/svg-t19vgojqiy";
 import NewMomoryIdle from "../../imports/NewMomoryIdle";
 import { LIFE_EVENTS, COLORS as MEMORY_COLORS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
-import { SceneViewer, MODEL_PATHS } from "./SceneViewer";
+import { SceneViewer } from "./SceneViewer";
+import { ArtifactForm, formForMemory } from "../lib/superformula";
 import { PageHeader, PAGE_HEADER_MARK } from "./PageHeader";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
@@ -41,7 +42,7 @@ interface BlobData {
   event: string;
   distFromCentroid: number;
   shape: {
-    modelPath: string;
+    form: ArtifactForm;
     colorIndex: number;
     fluidity: number;
     evolve: number;
@@ -159,14 +160,14 @@ function generateBlobs(
       distFromCentroid: 0,
       shape: savedMemory
         ? {
-            modelPath: savedMemory.shape.modelPath,
+            form: savedMemory.shape.form,
             colorIndex: colorIndex % COLOR_PALETTE.length,
             fluidity: savedMemory.shape.fluidity,
             evolve: savedMemory.shape.evolve,
             bumpAmount: savedMemory.shape.bumpAmount,
           }
         : {
-            modelPath: MODEL_PATHS[Math.floor(Math.random() * MODEL_PATHS.length)],
+            form: formForMemory(events[i].id),
             colorIndex: colorIndex % COLOR_PALETTE.length, // Use the same color index
             fluidity: Math.random() * 0.5 + 0.5,
             evolve: Math.random() * 0.5 + 0.5,
@@ -1542,7 +1543,7 @@ export function BlobScene({
             }}
           >
             <SceneViewer
-              modelPath={blobs[activeIdx].shape.modelPath}
+              form={blobs[activeIdx].shape.form}
               fluidity={blobs[activeIdx].shape.fluidity}
               evolve={blobs[activeIdx].shape.evolve}
               bumpAmount={blobs[activeIdx].shape.bumpAmount}
