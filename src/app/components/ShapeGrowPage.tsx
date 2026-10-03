@@ -1,8 +1,10 @@
 import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
-import { SceneViewer } from "./SceneViewer";
+import { SceneViewer, MATERIAL_PRESETS } from "./SceneViewer";
 import { BubbleViewer, BUBBLE_BACKGROUND, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
+import { AmbientSurround } from "./AmbientSurround";
+import { OklchColorField } from "./OklchColorField";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
 import {
   createGestureGate,
@@ -19,8 +21,12 @@ import { LightGeometryView } from "./LightGeometryView";
 import { BubbleMaterialView } from "./BubbleMaterialView";
 import { BubblePhotoView } from "./BubblePhotoView";
 import { BubbleFormView } from "./BubbleFormView";
-import { BubbleWrapView } from "./BubbleWrapView";
-import { MEMORY_PHOTO_FILTER_DEFAULTS } from "./MemoryPhotoLayer";
+import { PhotoLibraryTray } from "./PhotoLibraryTray";
+import {
+  MEMORY_PHOTO_DEFAULTS,
+  MEMORY_PHOTO_FILTER_DEFAULTS,
+  type MemoryPhotoFilter,
+} from "./MemoryPhotoLayer";
 import {
   DEFAULT_BUBBLE_AMBIENTS,
   DEFAULT_BUBBLE_LIGHTS,
@@ -30,36 +36,76 @@ import {
 } from "../lib/sceneLights";
 import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
 import {
+  DEFAULT_OKLCH,
+  type Oklch,
+  meshCoreFromOklch,
+  rimFromOklch,
+  sampleField,
+  uvFromOklch,
+} from "../lib/oklch";
+import {
+  NAMING_PATH,
+  SHAPE_DISTANCE_PATH,
+  SHAPE_FEELING_PATH,
+  SHAPE_GROW_PATH,
+  TRANSCRIPT_PATH,
+} from "../lib/routes";
+import {
   ArtifactCategory,
   ArtifactForm,
-  CATEGORY_LABELS,
   createArtifactForm,
   formFromState,
   formKey,
 } from "../lib/superformula";
 import memoryPhotoUrl from "../../assets/memory-photo.jpg";
-import memoryPhoto02Url from "../../assets/memory-photo-02.png";
+import snowMountainPhotoUrl from "../../assets/memory-photo-02.png";
 
-const WRAP_PHOTOS = [memoryPhotoUrl, memoryPhoto02Url] as const;
-
-const BUBBLE_TABS = ["shape", "feeling", "distance"] as const;
-type BubbleTab = (typeof BUBBLE_TABS)[number];
-type GestureMode = "adjust" | "confirm";
+type GestureStep = "shape" | "feeling" | "distance";
 
 /** 'glass' is the original lit render; 'bubble' is the fresnel + editable env lights variant. */
 type RenderVariant = "glass" | "bubble";
 
-const VARIANT_KEY = "nijimu.growVariant";
+function stepFromPath(pathname: string): GestureStep {
+  if (pathname.includes("/feeling")) return "feeling";
+  if (pathname.includes("/distance")) return "distance";
+  return "shape";
+}
 
 /**
  * Open palm → 1; fist → 0.
- * Used by glass morph. Bubble vividness inverts this (open = frost).
  */
 function opennessToUnit(openness: number): number {
   const openHand = 0.28;
   const fist = 0.09;
   const t = (openness - fist) / (openHand - fist);
   return Math.max(0, Math.min(1, t));
+}
+
+/**
+ * Historical wrap look (MemoryPhotoLayer): soft B&W print at baseOpacity 0.48.
+ * Fist → exact wrap opacity; open palm → ~20% of that.
+ * Never overshoot the wrap default — that reads as a bright flash.
+ */
+const WRAP_PHOTO_OPACITY_FULL = MEMORY_PHOTO_DEFAULTS.baseOpacity;
+const WRAP_PHOTO_OPACITY_FADED = WRAP_PHOTO_OPACITY_FULL * 0.2;
+
+function opennessToWrapOpacity(openness: number): number {
+  const t = opennessToUnit(openness);
+  const next =
+    WRAP_PHOTO_OPACITY_FULL -
+    t * (WRAP_PHOTO_OPACITY_FULL - WRAP_PHOTO_OPACITY_FADED);
+  return Math.min(WRAP_PHOTO_OPACITY_FULL, Math.max(WRAP_PHOTO_OPACITY_FADED, next));
+}
+
+function withWrapPhotoLook(
+  filter: MemoryPhotoFilter,
+  opacity = WRAP_PHOTO_OPACITY_FULL,
+): MemoryPhotoFilter {
+  return {
+    ...filter,
+    saturate: 0,
+    opacity: Math.min(WRAP_PHOTO_OPACITY_FULL, opacity),
+  };
 }
 
 /**
@@ -84,48 +130,55 @@ function palmYToFeeling(palmY: number): number {
 export function ShapeGrowPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const step = stepFromPath(location.pathname);
   const [fadeIn, setFadeIn] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  const [debugMode] = useState(true);
   const [handsDetected, setHandsDetected] = useState(0);
-  const [debugOpenness, setDebugOpenness] = useState(0);
-  const [debugDistance, setDebugDistance] = useState(0);
-  const [debugPalmY, setDebugPalmY] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  // Read once: the smoothing loop re-renders this page every frame.
-  const [draft] = useState(loadFormDraft);
+  const draft = loadFormDraft();
   const startingMorph =
     asFiniteNumber(location.state?.morphProgress) ??
     asFiniteNumber(draft?.morphProgress) ??
     0;
+  const startingVividness = asFiniteNumber(location.state?.vividness) ?? 1;
+  const startingFeeling =
+    asFiniteNumber(location.state?.photoFilter?.feeling) ??
+    MEMORY_PHOTO_FILTER_DEFAULTS.feeling;
+  const startingPhotoOpacity = Math.min(
+    WRAP_PHOTO_OPACITY_FULL,
+    asFiniteNumber(location.state?.photoFilter?.opacity) ??
+      WRAP_PHOTO_OPACITY_FULL,
+  );
+  const initialOklch: Oklch = location.state?.oklch ?? DEFAULT_OKLCH;
+  const initialColorUv = uvFromOklch(initialOklch);
   const targetMorphRef = useRef(startingMorph);
-  const targetVividnessRef = useRef(1);
-  const targetFeelingRef = useRef(MEMORY_PHOTO_FILTER_DEFAULTS.feeling);
+  const targetVividnessRef = useRef(startingVividness);
+  const targetFeelingRef = useRef(startingFeeling);
+  const targetPhotoOpacityRef = useRef(startingPhotoOpacity);
   const smoothingFrameRef = useRef<number | null>(null);
   // Ignore MediaPipe until the driving signal moves from the first pose.
   const morphGateRef = useRef(createGestureGate(0.015));
   const vividnessGateRef = useRef(createGestureGate(0.015));
   const feelingGateRef = useRef(createGestureGate(0.015));
   const variantRef = useRef<RenderVariant>("glass");
-  const bubbleTabRef = useRef<BubbleTab>("shape");
-  const gestureModeRef = useRef<GestureMode>("adjust");
+  const stepRef = useRef<GestureStep>(step);
+  const photoSelectedRef = useRef(!!location.state?.photoUrl);
+  const colorUvRef = useRef(initialColorUv);
+  const colorHeldRef = useRef(false);
+  const pinchFramesRef = useRef(0);
 
-  const cameraPermission = location.state?.cameraPermission ?? "denied";
+  // Entering directly from highlight should request the camera on this page.
+  const cameraPermission = location.state?.cameraPermission ?? "granted";
   // Assigned when the memory was recorded; a deep link gets a fresh one.
   const [form, setForm] = useState<ArtifactForm>(
     () => formFromState(location.state) ?? draft?.form ?? createArtifactForm(),
   );
   const [morphProgress, setMorphProgress] = useState(startingMorph);
 
-  const [variant, setVariant] = useState<RenderVariant>(() => {
-    try {
-      return sessionStorage.getItem(VARIANT_KEY) === "glass" ? "glass" : "bubble";
-    } catch {
-      return "bubble";
-    }
-  });
+  const variant = "bubble" as RenderVariant;
   variantRef.current = variant;
+  stepRef.current = step;
 
   const [lightEditOpen, setLightEditOpen] = useState(false);
   const [lights, setLights] = useState<EditableLight[]>(
@@ -142,15 +195,25 @@ export function ShapeGrowPage() {
   );
   const [photoOpen, setPhotoOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
-  const [wrapOpen, setWrapOpen] = useState(false);
-  const [wrapIndex, setWrapIndex] = useState(0);
-  const wrapPhotoUrl = WRAP_PHOTOS[wrapIndex] ?? WRAP_PHOTOS[0];
-  const [photoFilter, setPhotoFilter] = useState(MEMORY_PHOTO_FILTER_DEFAULTS);
-  const [vividness, setVividness] = useState(1);
-  const [bubbleTab, setBubbleTab] = useState<BubbleTab>("shape");
-  const [gestureMode, setGestureMode] = useState<GestureMode>("adjust");
-  bubbleTabRef.current = bubbleTab;
-  gestureModeRef.current = gestureMode;
+  const [photoLibraryOpen, setPhotoLibraryOpen] = useState(false);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | undefined>(
+    () => location.state?.photoUrl,
+  );
+  photoSelectedRef.current = !!selectedPhotoUrl;
+  const [photoFilter, setPhotoFilter] = useState(() => {
+    const base = {
+      ...MEMORY_PHOTO_FILTER_DEFAULTS,
+      ...(location.state?.photoFilter ?? {}),
+      feeling: startingFeeling,
+      opacity: startingPhotoOpacity,
+    };
+    // A wrapped photo always uses the historical soft B&W print look.
+    return location.state?.photoUrl ? withWrapPhotoLook(base, startingPhotoOpacity) : base;
+  });
+  const [vividness, setVividness] = useState(startingVividness);
+  const [oklch, setOklch] = useState<Oklch>(initialOklch);
+  const [colorUv, setColorUv] = useState(initialColorUv);
+  const [colorHeld, setColorHeld] = useState(false);
 
   const resetGestureGates = () => {
     morphGateRef.current = createGestureGate(0.015);
@@ -158,26 +221,11 @@ export function ShapeGrowPage() {
     feelingGateRef.current = createGestureGate(0.015);
   };
 
-  const closeDebugPanels = () => {
-    setLightEditOpen(false);
-    setMaterialOpen(false);
-    setPhotoOpen(false);
-    setFormOpen(false);
-    setWrapOpen(false);
-  };
-
   const openLightEdit = (open: boolean) => {
     if (open) {
       setMaterialOpen(false);
       setPhotoOpen(false);
       setFormOpen(false);
-      setWrapOpen(false);
-      setVariant("bubble");
-      try {
-        sessionStorage.setItem(VARIANT_KEY, "bubble");
-      } catch {
-        // private mode
-      }
       setSelectedLightId((id) => id ?? "dir-key");
     }
     setLightEditOpen(open);
@@ -188,7 +236,6 @@ export function ShapeGrowPage() {
       setLightEditOpen(false);
       setPhotoOpen(false);
       setFormOpen(false);
-      setWrapOpen(false);
     }
     setMaterialOpen(open);
   };
@@ -198,7 +245,6 @@ export function ShapeGrowPage() {
       setLightEditOpen(false);
       setMaterialOpen(false);
       setFormOpen(false);
-      setWrapOpen(false);
     }
     setPhotoOpen(open);
   };
@@ -208,31 +254,20 @@ export function ShapeGrowPage() {
       setLightEditOpen(false);
       setMaterialOpen(false);
       setPhotoOpen(false);
-      setWrapOpen(false);
     }
     setFormOpen(open);
   };
 
-  const openWrap = (open: boolean) => {
-    if (open) {
-      setLightEditOpen(false);
-      setMaterialOpen(false);
-      setPhotoOpen(false);
-      setFormOpen(false);
-    }
-    setWrapOpen(open);
-  };
-
-  const selectBubbleTab = (tab: BubbleTab) => {
-    if (tab === bubbleTab) return;
-    setBubbleTab(tab);
-    resetGestureGates();
-  };
-
-  // Keep gesture gates fresh when swapping glass ↔ bubble.
+  // Fresh gates when the gesture step changes.
   useEffect(() => {
     resetGestureGates();
-  }, [variant]);
+    if (step !== "distance") setPhotoLibraryOpen(false);
+    if (step !== "feeling") {
+      colorHeldRef.current = false;
+      pinchFramesRef.current = 0;
+      setColorHeld(false);
+    }
+  }, [step]);
 
   useEffect(() => {
     setTimeout(() => setFadeIn(true), 100);
@@ -246,30 +281,6 @@ export function ShapeGrowPage() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [form, morphProgress, bubbleMaterial, lights, ambients]);
-
-  // "A" swaps the render variant; gesture state and form carry over.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "a" && e.key !== "A") return;
-      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-      closeDebugPanels();
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
-        return;
-      }
-      setVariant((v) => {
-        const next: RenderVariant = v === "glass" ? "bubble" : "glass";
-        try {
-          sessionStorage.setItem(VARIANT_KEY, next);
-        } catch {
-          // private mode — the toggle just won't survive a refresh
-        }
-        return next;
-      });
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
 
   // Snappy follow with a bit of ease — responsive but not snappy-hard.
   useEffect(() => {
@@ -291,9 +302,15 @@ export function ShapeGrowPage() {
       setMorphProgress((current) => stepToward(current, targetMorphRef.current));
       setVividness((current) => stepToward(current, targetVividnessRef.current));
       setPhotoFilter((current) => {
-        const next = stepToward(current.feeling, targetFeelingRef.current);
-        if (next === current.feeling) return current;
-        return { ...current, feeling: next };
+        const feeling = stepToward(current.feeling, targetFeelingRef.current);
+        const opacity = stepToward(
+          current.opacity,
+          targetPhotoOpacityRef.current,
+        );
+        if (feeling === current.feeling && opacity === current.opacity) {
+          return current;
+        }
+        return { ...current, feeling, opacity };
       });
       smoothingFrameRef.current = requestAnimationFrame(animate);
     };
@@ -306,46 +323,72 @@ export function ShapeGrowPage() {
     };
   }, []);
 
+  const applyColorPick = (nextU: number, nextV: number) => {
+    const u = clamp01(nextU);
+    const v = clamp01(nextV);
+    colorUvRef.current = { u, v };
+    setColorUv({ u, v });
+    setOklch(sampleField(u, v));
+  };
+
   /*
    * Glass: open palm ↔ fist → morphProgress.
-   * Bubble (adjust mode only, active tab only):
+   * Bubble (current page only):
    *   shape    → two-hand palm distance → morph
-   *   feeling  → palm height → blue-hour filter strength
-   *   distance → open palm ↔ fist → vividness (open = frost)
+   *   feeling  → fingertip position → OKLCH color; pinch → ripple
+   *   distance → open palm ↔ fist → wrap opacity (with photo) / vividness (without)
    */
-  const { isTracking } = useHandTracking({
+  useHandTracking({
     enabled: cameraPermission === "granted",
     videoRef,
-    numHands: variant === "bubble" ? 2 : 1,
+    numHands: variant === "bubble" && step === "shape" ? 2 : 1,
     onLandmarks: (hands) => {
       setHandsDetected(hands.length);
 
       if (variantRef.current === "bubble") {
-        const adjusting = gestureModeRef.current === "adjust";
-        const tab = bubbleTabRef.current;
+        const tab = stepRef.current;
         const openness = handOpenness(hands[0]);
-        setDebugOpenness(openness);
 
-        const palm = [0, 1, 5, 9, 13, 17].map((i) => hands[0][i]);
-        const palmY = palm.reduce((sum, lm) => sum + lm.y, 0) / palm.length;
-        setDebugPalmY(palmY);
+        if (
+          tab === "distance" &&
+          vividnessGateRef.current.update(openness)
+        ) {
+          if (photoSelectedRef.current) {
+            // Photo present: only opacity. Fist = exact wrap default.
+            // Driving frost at the same time clears with a bright flash.
+            targetVividnessRef.current = 1;
+            targetPhotoOpacityRef.current = opennessToWrapOpacity(openness);
+          } else {
+            // No photo: open palm frosts the bubble; fist clears it.
+            targetVividnessRef.current = 1 - opennessToUnit(openness);
+          }
+        }
 
-        if (hands.length >= 2) {
-          setDebugDistance(
-            landmarkDistance(handCenter(hands[0]), handCenter(hands[1])),
+        if (tab === "feeling") {
+          const hand = hands[0];
+          const pinch = landmarkDistance(hand[4], hand[8], true);
+          if (pinch < 0.052) {
+            pinchFramesRef.current += 1;
+            if (!colorHeldRef.current && pinchFramesRef.current >= 2) {
+              colorHeldRef.current = true;
+              setColorHeld(true);
+            }
+          } else {
+            pinchFramesRef.current = 0;
+            if (colorHeldRef.current && pinch > 0.08) {
+              colorHeldRef.current = false;
+              setColorHeld(false);
+            }
+          }
+
+          const nextU = 1 - map01(hand[8].x, 0.12, 0.88);
+          const nextV = map01(hand[8].y, 0.16, 0.84);
+          const current = colorUvRef.current;
+          applyColorPick(
+            current.u + (nextU - current.u) * 0.24,
+            current.v + (nextV - current.v) * 0.24,
           );
-        } else {
-          setDebugDistance(0);
-        }
-
-        if (!adjusting) return;
-
-        if (tab === "distance" && vividnessGateRef.current.update(openness)) {
-          targetVividnessRef.current = 1 - opennessToUnit(openness);
-        }
-
-        if (tab === "feeling" && feelingGateRef.current.update(palmY)) {
-          targetFeelingRef.current = palmYToFeeling(palmY);
+          return;
         }
 
         if (tab === "shape" && hands.length >= 2) {
@@ -361,13 +404,18 @@ export function ShapeGrowPage() {
       }
 
       const openness = handOpenness(hands[0]);
-      setDebugOpenness(openness);
-      setDebugDistance(0);
       if (morphGateRef.current.update(openness)) {
         targetMorphRef.current = opennessToUnit(openness);
       }
     },
-    onNoHands: () => setHandsDetected(0),
+    onNoHands: () => {
+      setHandsDetected(0);
+      if (colorHeldRef.current) {
+        colorHeldRef.current = false;
+        pinchFramesRef.current = 0;
+        setColorHeld(false);
+      }
+    },
   });
 
   /** Debug preview: a new deviation in the given category. */
@@ -379,20 +427,81 @@ export function ShapeGrowPage() {
     resetGestureGates();
   };
 
+  const togglePhoto = () => {
+    if (selectedPhotoUrl) {
+      setSelectedPhotoUrl(undefined);
+      return;
+    }
+    setPhotoLibraryOpen(true);
+  };
+
+  const selectLibraryPhoto = (url: string) => {
+    setSelectedPhotoUrl(url);
+    setPhotoLibraryOpen(false);
+    // Settle on the historical wrap look; keep frost cleared so fist
+    // later returns to this exact state with no pop.
+    targetPhotoOpacityRef.current = WRAP_PHOTO_OPACITY_FULL;
+    targetVividnessRef.current = 1;
+    setVividness(1);
+    setPhotoFilter((current) =>
+      withWrapPhotoLook(current, WRAP_PHOTO_OPACITY_FULL),
+    );
+  };
+
+  const coreColor = meshCoreFromOklch(oklch);
+  const rimColor = rimFromOklch(oklch);
+  const matPresetIndex = Math.min(
+    Math.round(
+      ((((oklch.h % 360) + 360) % 360) / 360) *
+        (MATERIAL_PRESETS.length - 1),
+    ),
+    MATERIAL_PRESETS.length - 1,
+  );
+  const colorApplied = step === "feeling";
+
+  const formState = () => ({
+    ...stripLegacyEvolveFromState(location.state),
+    cameraPermission,
+    form,
+    morphProgress,
+    bubbleMaterial,
+    lights,
+    ambients,
+    renderVariant: variant,
+    vividness,
+    photoFilter,
+    photoUrl: selectedPhotoUrl,
+    oklch,
+    coreColor,
+    rimColor,
+    matPresetIndex,
+    shape: {
+      form,
+      fluidity: 0,
+      evolve: morphProgress,
+      bumpAmount: 0,
+    },
+  });
+
   const handleContinue = () => {
     saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
-    navigate("/record/shape/color", {
-      state: {
-        ...stripLegacyEvolveFromState(location.state),
-        cameraPermission,
-        form,
-        morphProgress,
-        bubbleMaterial,
-        lights,
-        ambients,
-        renderVariant: variant,
-      },
-    });
+    const nextPath =
+      step === "shape"
+        ? SHAPE_DISTANCE_PATH
+        : step === "distance"
+          ? SHAPE_FEELING_PATH
+          : NAMING_PATH;
+    navigate(nextPath, { state: formState() });
+  };
+
+  const handleBack = () => {
+    const previousPath =
+      step === "feeling"
+        ? SHAPE_DISTANCE_PATH
+        : step === "distance"
+          ? SHAPE_GROW_PATH
+          : TRANSCRIPT_PATH;
+    navigate(previousPath, { state: formState() });
   };
 
   return (
@@ -402,23 +511,39 @@ export function ShapeGrowPage() {
         background: variant === "bubble" ? BUBBLE_BACKGROUND : "#e0e0e0",
       }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
+      {step === "feeling" && <AmbientSurround oklch={oklch} />}
+
+      <div
         style={{
-          display: debugMode && cameraPermission === "granted" ? "block" : "none",
+          display:
+            cameraPermission === "granted" && !photoLibraryOpen
+              ? "block"
+              : "none",
           position: "absolute",
-          bottom: 10,
-          right: 10,
-          width: 200,
-          height: 150,
-          border: "2px solid #fff",
-          borderRadius: 10,
+          bottom: 22,
+          right: 22,
+          width: 152,
+          height: 152,
+          borderRadius: "50%",
+          overflow: "hidden",
+          background: "rgba(40, 36, 48, 0.1)",
+          boxShadow: "0 8px 24px rgba(40, 36, 48, 0.14), 0 2px 6px rgba(40, 36, 48, 0.08)",
           zIndex: 1000,
         }}
-      />
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            transform: "scaleX(-1)",
+          }}
+        />
+      </div>
 
       <div
         style={{
@@ -428,17 +553,24 @@ export function ShapeGrowPage() {
           width: "100%",
           height: "100%",
           zIndex: 1,
-          pointerEvents: lightEditOpen ? "auto" : "none",
+          // Always receive wheel / two-finger rotate; UI chrome punches through
+          // with its own pointer-events: auto.
+          pointerEvents: "auto",
         }}
       >
         {variant === "bubble" ? (
           <BubbleViewer
-            key={`bubble-${formKey(form)}-${wrapPhotoUrl}`}
+            key={formKey(form)}
             autoRotate={!lightEditOpen}
             morphProgress={morphProgress}
             ready={sceneReady}
             form={form}
-            memoryPhotoUrl={lightEditOpen ? undefined : wrapPhotoUrl}
+            coreColor={colorApplied ? coreColor : undefined}
+            rimColor={colorApplied ? rimColor : undefined}
+            memoryPhotoUrl={
+              lightEditOpen || step === "shape" ? undefined : selectedPhotoUrl
+            }
+            photoFade={1}
             lightEditMode={lightEditOpen}
             lights={lights}
             onLightsChange={setLights}
@@ -479,10 +611,11 @@ export function ShapeGrowPage() {
           opacity: fadeIn ? 1 : 0,
           position: "relative",
           zIndex: 2,
-          pointerEvents: lightEditOpen ? "none" : "auto",
+          // Pass wheel / two-finger through to the canvas underneath.
+          pointerEvents: "none",
         }}
       >
-        <PageHeader layout="block" />
+        <PageHeader layout="block" style={{ pointerEvents: "auto" }} />
 
         {!lightEditOpen && (
           <>
@@ -503,7 +636,7 @@ export function ShapeGrowPage() {
             mixBlendMode: "difference",
           }}
         >
-          {variant === "bubble" ? bubbleTab : "form"}
+          {variant === "bubble" ? step : "form"}
         </p>
 
         <div
@@ -524,12 +657,12 @@ export function ShapeGrowPage() {
           }}
         >
           {variant === "bubble" ? (
-            bubbleTab === "shape" ? (
+            step === "shape" ? (
               <>
                 <p style={{ margin: 0 }}>each memory already has a shape.</p>
                 <p style={{ margin: 0 }}>open your hands, and let these words find theirs.</p>
               </>
-            ) : bubbleTab === "feeling" ? (
+            ) : step === "feeling" ? (
               <>
                 <p style={{ margin: 0 }}>remembering dyes what happened.</p>
                 <p style={{ margin: 0 }}>how does it feel, returning to it today?</p>
@@ -550,51 +683,9 @@ export function ShapeGrowPage() {
 
         {variant === "bubble" && (
           <GestureHint
-            kind={bubbleTab}
-            active={handsDetected >= (bubbleTab === "shape" ? 2 : 1)}
+            kind={step === "feeling" ? "color" : step}
+            active={handsDetected >= (step === "shape" ? 2 : 1)}
           />
-        )}
-
-        {variant === "bubble" && (
-          <div
-            style={{
-              position: "absolute",
-              bottom: cameraPermission === "denied" ? 250 : 160,
-              left: "50%",
-              transform: "translateX(-50%)",
-              display: "flex",
-              gap: 10,
-              padding: "8px 10px",
-              borderRadius: 100,
-              background: "rgba(163, 167, 175, 0.22)",
-              zIndex: 10,
-            }}
-          >
-            {BUBBLE_TABS.map((tab) => {
-              const active = tab === bubbleTab;
-              return (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => selectBubbleTab(tab)}
-                  style={{
-                    fontFamily: SANS,
-                    fontSize: 13,
-                    textTransform: "lowercase",
-                    border: "none",
-                    cursor: "pointer",
-                    borderRadius: 100,
-                    padding: "10px 18px",
-                    color: active ? "#ffffff" : "#7b7b87",
-                    background: active ? "#7b7b87" : "transparent",
-                    transition: "background 0.2s ease, color 0.2s ease",
-                  }}
-                >
-                  {tab}
-                </button>
-              );
-            })}
-          </div>
         )}
 
         {cameraPermission === "denied" && variant !== "bubble" && (
@@ -625,6 +716,7 @@ export function ShapeGrowPage() {
                 width: "90%",
                 maxWidth: 400,
                 zIndex: 10,
+                pointerEvents: "auto",
               }}
             >
               <div
@@ -678,89 +770,22 @@ export function ShapeGrowPage() {
           </>
         )}
 
-        {variant === "bubble" && (
-          <PillButton
-            label={gestureMode}
-            onClick={() => {
-              const next: GestureMode =
-                gestureMode === "adjust" ? "confirm" : "adjust";
-              setGestureMode(next);
-              if (next === "adjust") resetGestureGates();
-            }}
-            className="transition-opacity duration-500"
-            style={{
-              position: "absolute",
-              left: "50%",
-              transform: "translateX(-50%)",
-              bottom: 96,
-              zIndex: 10,
-              boxSizing: "border-box",
-              width: 148,
-            }}
-          />
-        )}
-
-        {debugMode && (
-          <div
-            style={{
-              position: "absolute",
-              top: 10,
-              left: 10,
-              background: "rgba(0, 0, 0, 0.7)",
-              color: "#fff",
-              padding: "10px",
-              borderRadius: 5,
-              zIndex: 1000,
-              fontFamily: "monospace",
-              fontSize: 12,
-            }}
-          >
-            <p style={{ margin: "5px 0" }}>Camera: {cameraPermission}</p>
-            <p style={{ margin: "5px 0" }}>Hands Detected: {handsDetected}</p>
-            <p style={{ margin: "5px 0" }}>
-              Openness: {debugOpenness.toFixed(4)}
-            </p>
-            {variant === "bubble" && (
-              <>
-                <p style={{ margin: "5px 0" }}>Tab: {bubbleTab}</p>
-                <p style={{ margin: "5px 0" }}>Mode: {gestureMode}</p>
-                <p style={{ margin: "5px 0" }}>
-                  Hand distance: {debugDistance.toFixed(4)}
-                </p>
-                <p style={{ margin: "5px 0" }}>
-                  Palm Y: {debugPalmY.toFixed(4)}
-                </p>
-                <p style={{ margin: "5px 0" }}>
-                  Feeling: {photoFilter.feeling.toFixed(2)}
-                </p>
-                <p style={{ margin: "5px 0" }}>
-                  Target vividness: {(targetVividnessRef.current * 100).toFixed(1)}%
-                </p>
-                <p style={{ margin: "5px 0" }}>
-                  Current vividness: {(vividness * 100).toFixed(1)}%
-                </p>
-              </>
-            )}
-            <p style={{ margin: "5px 0" }}>
-              Target Growth: {(targetMorphRef.current * 100).toFixed(1)}%
-            </p>
-            <p style={{ margin: "5px 0" }}>
-              Current Growth: {(morphProgress * 100).toFixed(1)}%
-            </p>
-            <p style={{ margin: "5px 0" }}>
-              Form: {CATEGORY_LABELS[form.category]}
-            </p>
-            <p style={{ margin: "5px 0" }}>Render (A to switch): {variant}</p>
-            <p style={{ margin: "5px 0", fontSize: 10, opacity: 0.7 }}>
-              MediaPipe: {isTracking ? "✓ Loaded" : "✗ Not loaded"}
-            </p>
-          </div>
-        )}
           </>
         )}
       </div>
 
-      {variant === "bubble" && (
+      {step === "feeling" && (
+        <div style={{ pointerEvents: "auto" }}>
+          <OklchColorField
+            u={colorUv.u}
+            v={colorUv.v}
+            held={colorHeld}
+            onPick={({ u, v }) => applyColorPick(u, v)}
+          />
+        </div>
+      )}
+
+      {variant === "bubble" && step !== "feeling" && (
         <>
           <LightGeometryView
             open={lightEditOpen}
@@ -786,6 +811,7 @@ export function ShapeGrowPage() {
             value={photoFilter}
             onChange={(next) => {
               targetFeelingRef.current = next.feeling;
+              targetPhotoOpacityRef.current = next.opacity;
               setPhotoFilter(next);
             }}
             vividness={vividness}
@@ -800,16 +826,34 @@ export function ShapeGrowPage() {
             form={form}
             onSelectCategory={handleSelectCategory}
           />
-          <BubbleWrapView
-            open={wrapOpen}
-            onOpenChange={openWrap}
-            selectedIndex={wrapIndex}
-            onSelect={setWrapIndex}
-          />
         </>
       )}
 
-      {!lightEditOpen && (
+      <PhotoLibraryTray
+        open={step === "distance" && photoLibraryOpen}
+        photoUrl={snowMountainPhotoUrl}
+        selectedUrl={selectedPhotoUrl}
+        onSelect={selectLibraryPhoto}
+        onClose={() => setPhotoLibraryOpen(false)}
+      />
+
+      {!lightEditOpen && !photoLibraryOpen && step === "distance" && (
+        <PillButton
+          label={selectedPhotoUrl ? "remove photo" : "add photo"}
+          onClick={togglePhoto}
+          className="transition-opacity duration-500"
+          style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 96,
+            zIndex: 30,
+            pointerEvents: "auto",
+          }}
+        />
+      )}
+
+      {!lightEditOpen && !photoLibraryOpen && (
         <PillButton
           label="continue"
           onClick={handleContinue}
@@ -826,7 +870,9 @@ export function ShapeGrowPage() {
         />
       )}
 
-      <BackButton />
+      <div style={{ pointerEvents: "auto" }}>
+        <BackButton onClick={handleBack} />
+      </div>
 
       <style>{`
         input[type="range"]::-webkit-slider-thumb {
@@ -849,4 +895,12 @@ export function ShapeGrowPage() {
       `}</style>
     </div>
   );
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function map01(value: number, min: number, max: number): number {
+  return clamp01((value - min) / (max - min));
 }

@@ -10,9 +10,9 @@ import { ArtifactForm, isArtifactForm } from "./superformula";
 const KEY = "nijimu.formDraft.v2";
 
 const FALLBACK_MATERIAL = {
-  roughness: 0.35,
-  reflectivity: 0.55,
-  transparency: 0.85,
+  roughness: 0,
+  reflectivity: 0.2,
+  transparency: 0.9,
   fog: 0,
 };
 

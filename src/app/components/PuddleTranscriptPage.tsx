@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { RECORD_START_PATH, SHAPE_BUILD_PATH, TRANSCRIPT_PATH } from "../lib/routes";
+import { RECORD_START_PATH, SHAPE_GROW_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import type { ArtifactForm } from "../lib/superformula";
@@ -21,6 +21,9 @@ interface PuddleTranscriptState {
   transcriptionId?: string;
   focus?: [number, number];
   shape?: { form?: ArtifactForm };
+  highlightedWords?: string[];
+  highlightedWordIndices?: number[];
+  cameraPermission?: "pending" | "granted" | "denied";
 }
 
 /**
@@ -59,8 +62,12 @@ export function PuddleTranscriptPage() {
   const [visibleWordCount, setVisibleWordCount] = useState(0);
   const [isTyping, setIsTyping] = useState(true);
   const [showContinue, setShowContinue] = useState(false);
-  const [highlightMode, setHighlightMode] = useState(false);
-  const [highlightedWords, setHighlightedWords] = useState<Set<number>>(new Set());
+  const [highlightMode, setHighlightMode] = useState(
+    () => (state?.highlightedWordIndices?.length ?? 0) > 0,
+  );
+  const [highlightedWords, setHighlightedWords] = useState<Set<number>>(
+    () => new Set(state?.highlightedWordIndices ?? []),
+  );
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [currentSelection, setCurrentSelection] = useState<Set<number>>(new Set());
@@ -154,10 +161,12 @@ export function PuddleTranscriptPage() {
     } else {
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate(SHAPE_BUILD_PATH, {
+        navigate(SHAPE_GROW_PATH, {
           state: {
+            ...state,
             transcript,
             highlightedWords: Array.from(highlightedWords).map((i) => words[i]),
+            highlightedWordIndices: Array.from(highlightedWords),
             shape: state?.shape,
             focus,
           },

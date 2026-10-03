@@ -5,8 +5,9 @@ import React, {
   useMemo,
   useState,
   Suspense,
+  useCallback,
 } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import {
@@ -24,7 +25,7 @@ import {
   formKey,
 } from "../lib/superformula";
 import {
-  MemoryPhotoTexture,
+  configureMemoryPhotoTexture,
   applyMemoryPhotoFilter,
   attachMemoryPhotoOverlay,
   buildPhotoUv,
@@ -181,6 +182,8 @@ const DRIFT_FREQ: [number, number, number] = [0.13, 0.17, 0.11];
 const DRIFT_PHASE: [number, number, number] = [0.0, 1.7, 3.4];
 /** Same auto-rotate rate as the glass variant. */
 const ROTATE_RATE = 0.16;
+/** Two-finger pitch clamp — about ±40°, like a gentle Rhino orbit stop. */
+const USER_TILT_MAX = Math.PI * 0.22;
 /** Standing wave: large-scale, slow, barely visible. */
 const WAVE_AMPLITUDE = 0.012;
 const WAVE_SPATIAL: [number, number, number] = [3.4, 4.7, 5.9];
@@ -232,6 +235,8 @@ interface BubbleModelProps {
   fog: number;
   photoTexture?: THREE.Texture | null;
   photoFilter: MemoryPhotoFilter;
+  /** Explicit photo visibility. Undefined preserves the legacy morph-driven fade. */
+  photoFade?: number;
   lightEditMode?: boolean;
   lights: EditableLight[];
   ambients: AmbientFill[];
@@ -253,6 +258,7 @@ function BubbleModel({
   fog,
   photoTexture = null,
   photoFilter,
+  photoFade,
   lightEditMode = false,
   lights,
   ambients,
@@ -313,16 +319,104 @@ function BubbleModel({
   const photoMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const photoFilterRef = useRef(photoFilter);
   photoFilterRef.current = photoFilter;
+  const photoFadeRef = useRef(photoFade);
+  photoFadeRef.current = photoFade;
   const lightEditRef = useRef(lightEditMode);
   lightEditRef.current = lightEditMode;
   /** Growth pose (null = the settled form as built) and what the geometry holds now. */
   const staticRef = useRef({ blend: 1, version: 0, pose: null as Float32Array | null });
   const writtenRef = useRef({ version: 0, amp: 0, waveT: 0 });
   const waveBasisRef = useRef<Float32Array | null>(null);
+  /** Pauses auto-spin while the user turns the model with two fingers. */
+  const userSpinningRef = useRef(false);
+  const resumeSpinTimerRef = useRef<number | null>(null);
+  const { gl } = useThree();
 
   useEffect(() => {
     morphRef.current = morphProgress;
   }, [morphProgress]);
+
+  // Two-finger (trackpad scroll / touch) turns the model itself — yaw + limited pitch.
+  useEffect(() => {
+    if (lightEditMode) return;
+    const el = gl.domElement;
+
+    const markSpinning = () => {
+      userSpinningRef.current = true;
+      if (resumeSpinTimerRef.current !== null) {
+        window.clearTimeout(resumeSpinTimerRef.current);
+      }
+      resumeSpinTimerRef.current = window.setTimeout(() => {
+        userSpinningRef.current = false;
+        resumeSpinTimerRef.current = null;
+      }, 480);
+    };
+
+    const spinModel = (dx: number, dy: number) => {
+      const g = groupRef.current;
+      if (!g) return;
+      g.rotation.y += dx;
+      g.rotation.x = Math.max(
+        -USER_TILT_MAX,
+        Math.min(USER_TILT_MAX, g.rotation.x + dy),
+      );
+      markSpinning();
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Natural trackpad scroll: finger right → deltaX < 0; the surface follows.
+      const sens = 0.0028;
+      spinModel(e.deltaX * sens, e.deltaY * sens);
+    };
+
+    let twoFinger = false;
+    let lastX = 0;
+    let lastY = 0;
+    const mid = (touches: TouchList) => ({
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    });
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        twoFinger = true;
+        const m = mid(e.touches);
+        lastX = m.x;
+        lastY = m.y;
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!twoFinger || e.touches.length !== 2) return;
+      e.preventDefault();
+      const m = mid(e.touches);
+      const sens = 0.008;
+      spinModel(-(m.x - lastX) * sens, -(m.y - lastY) * sens);
+      lastX = m.x;
+      lastY = m.y;
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) twoFinger = false;
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      if (resumeSpinTimerRef.current !== null) {
+        window.clearTimeout(resumeSpinTimerRef.current);
+        resumeSpinTimerRef.current = null;
+      }
+      userSpinningRef.current = false;
+    };
+  }, [gl, lightEditMode]);
 
   useLayoutEffect(() => {
     const fit = fitArtifact(rest, fitTargetSize);
@@ -369,7 +463,7 @@ function BubbleModel({
     setPhotoUvAttribute(geometry, buildPhotoUv(rest.sphere, MODEL_SPACE));
     const photoMaterial = createMemoryPhotoMaterial(
       photoTexture,
-      1 - easeSoftMorph(morphRef.current),
+      photoFadeRef.current ?? 1 - easeSoftMorph(morphRef.current),
       photoFilterRef.current,
     );
     photoMaterialRef.current = photoMaterial;
@@ -393,7 +487,9 @@ function BubbleModel({
       clock.current += delta;
       const t = clock.current;
       groupRef.current.position.set(drift(t, 0), drift(t, 1), drift(t, 2));
-      if (autoRotate) groupRef.current.rotation.y += delta * ROTATE_RATE;
+      if (autoRotate && !userSpinningRef.current) {
+        groupRef.current.rotation.y += delta * ROTATE_RATE;
+      }
     }
 
     const t = clock.current;
@@ -450,7 +546,9 @@ function BubbleModel({
       w.waveT = waveT;
     }
 
-    if (!editing) setMemoryPhotoFade(photoMaterialRef.current, 1 - formBlend);
+    if (!editing) {
+      setMemoryPhotoFade(photoMaterialRef.current, photoFade ?? 1 - formBlend);
+    }
   });
 
   return (
@@ -496,6 +594,8 @@ export interface BubbleViewerProps {
   memoryPhotoUrl?: string;
   /** CSS-like grading on the photo overlay only — does not touch the bubble film. */
   photoFilter?: MemoryPhotoFilter;
+  /** Explicit photo visibility. Undefined preserves the legacy morph-driven fade. */
+  photoFade?: number;
   /**
    * 1 = current clear bubble (no frost). 0 = glass-default frost (canvasBlurPx 6).
    * Hidden while the light geometry editor is open.
@@ -519,9 +619,9 @@ export const BUBBLE_FOG_COLOR = "#c8c9ce";
 
 /** Slider defaults reconstruct the previous hardcoded fresnel look. */
 export const DEFAULT_BUBBLE_MATERIAL = {
-  roughness: 0.35,
-  reflectivity: 0.55,
-  transparency: 0.85,
+  roughness: 0,
+  reflectivity: 0.2,
+  transparency: 0.9,
   fog: 0,
 };
 
@@ -549,6 +649,7 @@ export function BubbleViewer({
   backgroundGradient = "transparent",
   memoryPhotoUrl,
   photoFilter = MEMORY_PHOTO_FILTER_DEFAULTS,
+  photoFade,
   vividness = 1,
   lightEditMode = false,
   lights = DEFAULT_BUBBLE_LIGHTS,
@@ -570,13 +671,30 @@ export function BubbleViewer({
     far: number;
   } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  const [photoTexture, setPhotoTexture] = useState<THREE.Texture | null>(null);
+  const onPhotoReady = useCallback((texture: THREE.Texture) => {
+    setPhotoTexture(texture);
+  }, []);
+
+  useEffect(() => {
+    if (!memoryPhotoUrl) setPhotoTexture(null);
+  }, [memoryPhotoUrl]);
+
+  const formId = formKey(form);
+  useEffect(() => {
+    setFitCam(null);
+  }, [formId]);
 
   function handleBounds(_box: THREE.Box3, sphere: THREE.Sphere) {
     const r = Math.max(0.001, sphere.radius);
     const fovRad = (cameraFov * Math.PI) / 180;
     const margin = constrainedViewport ? 1.35 : 1.25;
     const z = (r / Math.sin(fovRad / 2)) * margin;
-    setFitCam({ z, near: Math.max(0.01, z - r * 2.5), far: z + r * 6 });
+    setFitCam((prev) => {
+      // Keep an already-settled camera when only the wrap photo changes.
+      if (prev) return prev;
+      return { z, near: Math.max(0.01, z - r * 2.5), far: z + r * 6 };
+    });
   }
 
   const containerStyle: React.CSSProperties = {
@@ -601,6 +719,7 @@ export function BubbleViewer({
     transparency,
     fog,
     photoFilter,
+    photoFade,
     lightEditMode,
     lights,
     ambients,
@@ -618,7 +737,10 @@ export function BubbleViewer({
           near: fitCam?.near ?? 0.1,
           far: fitCam?.far ?? 100,
         }}
-        style={{ background: lightEditMode ? "#c8c8c8" : "transparent" }}
+        style={{
+          background: lightEditMode ? "#c8c8c8" : "transparent",
+          touchAction: "none",
+        }}
         gl={{ antialias: true, alpha: true }}
         onCreated={({ gl }) => {
           if (!lightEditMode) gl.setClearColor(0x000000, 0);
@@ -646,25 +768,25 @@ export function BubbleViewer({
         )}
         <Suspense fallback={null}>
           {memoryPhotoUrl ? (
-            <MemoryPhotoTexture url={memoryPhotoUrl}>
-              {(photoTexture) => (
-                <BubbleModel
-                  key={formKey(form)}
-                  {...modelShared}
-                  photoTexture={photoTexture}
-                />
-              )}
-            </MemoryPhotoTexture>
-          ) : (
-            <BubbleModel key={formKey(form)} {...modelShared} />
-          )}
+            <PhotoTextureLoader
+              key={memoryPhotoUrl}
+              url={memoryPhotoUrl}
+              onReady={onPhotoReady}
+            />
+          ) : null}
+          <BubbleModel
+            key={formId}
+            {...modelShared}
+            photoTexture={photoTexture}
+          />
         </Suspense>
         <OrbitControls
           ref={controlsRef}
-          enableZoom
+          enableZoom={lightEditMode}
           enablePan={lightEditMode}
+          enableRotate={lightEditMode}
           autoRotate={false}
-          enabled={!gizmoDragging}
+          enabled={lightEditMode && !gizmoDragging}
         />
       </Canvas>
       {!lightEditMode && (
@@ -672,6 +794,21 @@ export function BubbleViewer({
       )}
     </div>
   );
+}
+
+function PhotoTextureLoader({
+  url,
+  onReady,
+}: {
+  url: string;
+  onReady: (texture: THREE.Texture) => void;
+}) {
+  const texture = useLoader(THREE.TextureLoader, url);
+  useLayoutEffect(() => {
+    configureMemoryPhotoTexture(texture);
+    onReady(texture);
+  }, [texture, onReady]);
+  return null;
 }
 
 function FitCamera({

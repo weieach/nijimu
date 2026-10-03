@@ -12,7 +12,7 @@ import {
 import { buildArchive, insertChronologically, type ArchiveArtifact } from "../lib/archive";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
 import { saveMemory, type SavedMemory } from "../lib/memoryStore";
-import { CAROUSEL_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, SHAPE_FEELING_PATH } from "../lib/routes";
 import {
   DEFAULT_ARTIFACT_FORM,
   formFromState,
@@ -536,7 +536,7 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
     activeIdx,
     caption,
     neighborsVisible: yearSettled,
-    exit: () => navigate(-1),
+    exit: () => navigate(SHAPE_FEELING_PATH, { state }),
   };
 }
 
