@@ -32,7 +32,25 @@ Intended sequence, built in the lab and not yet wired into the production route:
 
 Still open, on purpose: the photo-to-film transformation needs another pass.
 The user deferred that and asked to continue the underwater steps first. Do not
-treat the film look as finished.
+treat the film look as finished. Portrait photos are cropped into the 36×24
+frame; turning the strip for a vertical photo was offered and not decided.
+
+The lab is one shot, not the live route. Do not wire it in until asked. Gaps
+inside the lab, in the order they matter:
+
+- Shape and distance are full-screen horizontal drags. They stand in for the
+  MediaPipe gestures on `ShapeGrowPage` (two-hand distance, open-palm frost).
+  Color already uses `OklchColorField`.
+- Naming only types a title and a year onto the floating form. It does not
+  call `saveMemory`, and it does not hand the rim to `PuddleDiveGallery`.
+  Photo, OKLCH, frost, and material are still dropped by the archive.
+- The lab starts at the photo tray. Recording and the transcript/highlight
+  step stay on the live pond. The agreed order, when this is wired, is
+  record → transcript highlight → photo → film.
+- Underwater refraction that follows the hand was discussed and not built.
+- No reduced-motion path, and no way to step backward through the shot.
+- Left unjudged: the form reads thin under frost on the color step, the wrap
+  framing, and the sky after the rise, which is very bright.
 
 Color picking (`src/app/lib/oklch.ts`, `FIELD`) was pulled toward the landing
 palette: lower chroma, less candy green and yellow, darker toward slate. This
