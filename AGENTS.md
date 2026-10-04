@@ -477,6 +477,22 @@ right three, the Cursor browser could not confirm motion by canvas
 read-back (frames read identical while rAF ran at 52/s; `Page.captureScreenshot`
 could).
 
+**A kept default (2026-10-04, late).** Beside "copy values" the panel has
+"make this the default": one press keeps the panel's settling — the tune and
+the look's modes (`VesselDefaults`: tune, glass mode, sheet mode, face, room)
+— in `localStorage` (`nijimu.vessel.defaults`), and `/lab/vessel` opens with
+it from then on on that machine; "reset" returns to it; "back to the built-in
+default" (shown only while one is kept) forgets it and returns to the code's.
+`vesselDefaults()` in `VesselPreview.tsx` is the layering: the code's
+`VESSEL_TUNE_DEFAULT` and mode constants under the kept values, with a
+?param named on the URL (`morph`, `frost`, `pitch`, `turn`, `haze`, `glass`,
+`sheet`, `face`) still winning over both. `VESSEL_TUNE_DEFAULT` itself is
+unchanged and is still where a settling goes for everyone, by "copy values".
+The gallery (`VESSEL_GALLERY_TUNE`) and an editor opened with `initial` do
+not read the kept default. Checked: keep, reload (opened with it, the note
+"opens with your default, kept on this machine" under the buttons), `?haze=`
+over it, forget.
+
 **The field (2026-10-04, evening) — a second view of the vessel gallery.**
 The user asked for another view of `/lab/gallery` with the same ten vessels
 as its matter, not ordered by time but hung in space with near and far —

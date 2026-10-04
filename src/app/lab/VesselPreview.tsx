@@ -24,7 +24,9 @@ import photoB from "../../assets/memory-photo-02.png";
  * under the table (the "camera" group: pitch, distance, turn; ?pitch= to
  * open there). The photo is a thing inside the glass, not a map on its
  * surface. Sliders down the right; "copy values" puts them on the clipboard
- * as VESSEL_TUNE_DEFAULT would be written.
+ * as VESSEL_TUNE_DEFAULT would be written; "make this the default" keeps them
+ * on this machine (localStorage) so the lab opens with them from then on
+ * (`vesselDefaults`), "back to the built-in default" forgets them.
  *
  * Five layers, outside to inside, each doing one thing: the glass shell
  * (Fresnel rim, uneven thickness, frost in two or three patches); the gap
@@ -182,6 +184,60 @@ const hexRgb = (hex: string): readonly [number, number, number] => {
     at a lightness is the grey the room began as. */
 export interface Room { above: string; below: string }
 export const ROOM_DEFAULT: Room = { above: "#b3b3b3", below: "#ffffff" };
+
+/* ───────── the user's own default ───────── */
+
+/** What the panel can set and keep as its own default: the knobs and the look's modes. */
+export interface VesselDefaults {
+  tune: VesselTune;
+  mode: GlassMode;
+  sheetMode: SheetMode;
+  face: SheetFace;
+  room: Room;
+}
+const DEFAULTS_KEY = "nijimu.vessel.defaults";
+/* "make this the default" keeps the panel's settling on this machine
+   (localStorage), and the lab opens with it from then on in place of
+   VESSEL_TUNE_DEFAULT and the mode constants — "copy values" is still how a
+   settling goes into the source for everyone. A ?param named on the URL wins
+   over the kept value, as it does over the code's. */
+const PARAM_KEYS: [keyof VesselTune, string][] = [
+  ["morph", "morph"], ["frostStrength", "frost"], ["pitch", "pitch"], ["turn", "turn"], ["haze", "haze"],
+];
+function readKept(): Partial<VesselDefaults> | null {
+  try {
+    const raw = window.localStorage.getItem(DEFAULTS_KEY);
+    return raw ? (JSON.parse(raw) as Partial<VesselDefaults>) : null;
+  } catch { return null; }
+}
+let kept: Partial<VesselDefaults> | null = typeof window === "undefined" ? null : readKept();
+/** The defaults the lab opens with: the kept ones where they exist, the code's otherwise. */
+export function vesselDefaults(): VesselDefaults {
+  const tune = { ...VESSEL_TUNE_DEFAULT };
+  if (kept?.tune) {
+    for (const k of Object.keys(VESSEL_TUNE_DEFAULT) as (keyof VesselTune)[]) {
+      const v = (kept.tune as Partial<VesselTune>)[k];
+      if (typeof v === "number" && Number.isFinite(v)) tune[k] = v;
+    }
+    for (const [k, p] of PARAM_KEYS) if (PARAMS.has(p)) tune[k] = VESSEL_TUNE_DEFAULT[k];
+  }
+  return {
+    tune,
+    mode: PARAMS.has("glass") ? GLASS_MODE : kept?.mode ?? GLASS_MODE,
+    sheetMode: PARAMS.has("sheet") ? SHEET_MODE : kept?.sheetMode ?? SHEET_MODE,
+    face: PARAMS.has("face") ? SHEET_FACE : kept?.face ?? SHEET_FACE,
+    room: kept?.room ?? ROOM_DEFAULT,
+  };
+}
+export function keepVesselDefaults(d: VesselDefaults) {
+  kept = d;
+  try { window.localStorage.setItem(DEFAULTS_KEY, JSON.stringify(d)); } catch { /* storage refused — kept for this visit only */ }
+}
+export function forgetVesselDefaults() {
+  kept = null;
+  try { window.localStorage.removeItem(DEFAULTS_KEY); } catch { /* nothing to remove */ }
+}
+export const hasKeptDefaults = () => kept !== null;
 const envColor = (hex: string, l: number, warmth: number): readonly [number, number, number] => {
   const tint = [0.975 + 0.045 * warmth, 1, 1.02 - 0.045 * warmth];
   const c = hexRgb(hex);
@@ -1988,11 +2044,14 @@ export interface VesselPreviewProps {
 }
 
 export function VesselPreview({ initial, onChange, onBack, backLabel = "back", yaw: yawProp, photos = PHOTOS }: VesselPreviewProps = {}) {
-  const [tune, setTune] = useState<VesselTune>(initial?.tune ?? VESSEL_TUNE_DEFAULT);
-  const [mode, setMode] = useState<GlassMode>(initial?.mode ?? GLASS_MODE);
-  const [sheetMode, setSheetMode] = useState<SheetMode>(initial?.sheetMode ?? SHEET_MODE);
-  const [face, setFace] = useState<SheetFace>(initial?.face ?? SHEET_FACE);
-  const [room, setRoom] = useState<Room>(initial?.room ?? ROOM_DEFAULT);
+  const [opening] = useState(vesselDefaults);
+  const [tune, setTune] = useState<VesselTune>(initial?.tune ?? opening.tune);
+  const [mode, setMode] = useState<GlassMode>(initial?.mode ?? opening.mode);
+  const [sheetMode, setSheetMode] = useState<SheetMode>(initial?.sheetMode ?? opening.sheetMode);
+  const [face, setFace] = useState<SheetFace>(initial?.face ?? opening.face);
+  const [room, setRoom] = useState<Room>(initial?.room ?? opening.room);
+  const [keptOwn, setKeptOwn] = useState(hasKeptDefaults);
+  const [justKept, setJustKept] = useState(false);
   const [show, setShow] = useState<Show>(SHOW);
   const refract = mode === "refract";
   const backdrop = backdropFor(tune, mode, room);
@@ -2040,6 +2099,23 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch { /* clipboard refused — the values are still on screen */ }
+  };
+  // one press makes the panel's settling the default this lab opens with, here on this machine
+  const keep = () => {
+    keepVesselDefaults({ tune, mode, sheetMode, face, room });
+    setKeptOwn(true);
+    setJustKept(true);
+    window.setTimeout(() => setJustKept(false), 1600);
+  };
+  const forget = () => {
+    forgetVesselDefaults();
+    setKeptOwn(false);
+    const d = vesselDefaults();
+    setTune(d.tune); setMode(d.mode); setSheetMode(d.sheetMode); setFace(d.face); setRoom(d.room);
+  };
+  const reset = () => {
+    const d = vesselDefaults();
+    setTune(d.tune); setRoom(d.room);
   };
 
   const release = () => { held.current = false; };
@@ -2240,9 +2316,16 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
         ))}
         <div style={{ display: "flex", gap: 18, marginTop: 14, flexWrap: "wrap" }}>
           <TextButton label="another strip" onClick={() => setSeed(Math.random() * 10)} style={{ fontSize: NOTE_SIZE }} />
-          <TextButton label="reset" onClick={() => { setTune(VESSEL_TUNE_DEFAULT); setRoom(ROOM_DEFAULT); }} style={{ fontSize: NOTE_SIZE }} />
+          <TextButton label="reset" onClick={reset} style={{ fontSize: NOTE_SIZE }} />
           <TextButton label={copied ? "copied" : "copy values"} onClick={() => void copy()} style={{ fontSize: NOTE_SIZE }} />
+          <TextButton label={justKept ? "the default now" : "make this the default"} onClick={keep} style={{ fontSize: NOTE_SIZE }} />
+          {keptOwn && <TextButton label="back to the built-in default" onClick={forget} style={{ fontSize: NOTE_SIZE }} />}
         </div>
+        {keptOwn && !initial && (
+          <p style={{ margin: "10px 0 0", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.6, lineHeight: 1.5 }}>
+            opens with your default, kept on this machine
+          </p>
+        )}
       </aside>
 
       <style>{`
