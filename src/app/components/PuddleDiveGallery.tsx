@@ -1,11 +1,12 @@
 import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Link } from "react-router";
 import { SceneViewer } from "./SceneViewer";
 import { GalleryOverrideContext } from "../lib/galleryOverride";
 import { warmArtifactMeshes } from "../hooks/useArtifactGeometry";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
 import { CHROME_GRAY, COLOR_PALETTE } from "../lib/colors";
-import { SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
+import { SANS, SERIF, SERIF_CJK, SERIF_ITALIC_TRACKING } from "../lib/theme";
 import { DIVE_TUNING } from "../lib/puddle/dive";
 import type { ArchiveArtifact } from "../lib/archive";
 import { flowProgress, inkGrowth, inkWash, INK_POINTER_SIZE, type InkArrival } from "../lib/landingTransition";
@@ -967,6 +968,14 @@ export function PuddleDiveGallery({
         }}
       >
         <BackButton onClick={onExit} />
+        {/* a way into the vessel preview (/lab/gallery), beside the arrow; not shown inside the preview itself */}
+        {!override && (
+          <Link to="/lab/gallery" aria-label="see the memories as vessels"
+            style={{ position: "absolute", top: 36, left: 70, zIndex: 100, fontFamily: SANS, fontSize: 12, letterSpacing: "0.04em",
+              color: CHROME_GRAY, opacity: 0.55, textDecoration: "none" }}>
+            vessels
+          </Link>
+        )}
       </div>}
 
       <GalleryViewToggle
