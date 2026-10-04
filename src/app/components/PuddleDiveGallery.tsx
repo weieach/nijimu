@@ -41,7 +41,7 @@ const NEIGHBOR_IN_STAGGER_MS = 110;
 const NEIGHBOR_OUT_STAGGER_MS = 80;
 /** Caption block centre-ish, as a fraction of viewport height from the top —
     scales with the window instead of sitting a fixed px above the timescale. */
-const CAPTION_TOP_VH = 0.62;
+export const CAPTION_TOP_VH = 0.62;
 /** Extra downward sit of the title + year. Shared by the carousel and the
     naming step — both draw this caption from the same seat. */
 export const CAPTION_DOWN_VH = 0.07;

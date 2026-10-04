@@ -5,12 +5,22 @@ import { CHROME_GRAY } from "../lib/colors";
 import { POND_THOUGHTS, type PondPromptCue } from "../lib/pondPrompts";
 import { POND_TRAIL_SLOTS, POND_TRAIL_LIFETIME, samplePondTrail, type TrailPoint, type TrailAnchor } from "../lib/pondTrail";
 import { POND_DROP_SLOTS } from "../lib/voicePeaks";
+import { POND_LENS, pondCameraPose, type PondSinkTarget } from "../lib/pondCamera";
 
-export interface PondTouch { x: number; y: number; serial: number; strength?: number }
+export interface PondTouch {
+  x: number;
+  y: number;
+  serial: number;
+  strength?: number;
+  /** A flat body laid on the water rather than a point: its footprint, in pond world units. */
+  sheet?: { x: number; z: number; hw: number; hh: number; yaw: number };
+}
 
 const waves = /* glsl */ `
   uniform float uTime;
   uniform vec4 uDrops[${POND_DROP_SLOTS}];
+  uniform vec4 uSheetDrop;   // centre x, z, time laid down, strength
+  uniform vec4 uSheetShape;  // half width, half height, cos yaw, sin yaw
   uniform vec4 uTrails[${POND_TRAIL_SLOTS}];
   uniform vec4 uTrailControls[${POND_TRAIL_SLOTS}];
   uniform vec2 uTrailTimes[${POND_TRAIL_SLOTS}];
@@ -24,8 +34,8 @@ const waves = /* glsl */ `
   // rather than as a pattern.
   vec2 breath(vec2 p) {
     return vec2(
-      sin(p.x * .73 + uTime * .21) + sin(p.y * .52 - uTime * .17),
-      sin(p.y * .68 - uTime * .19) + sin(p.x * .44 + uTime * .23)
+      sin(p.x * .73 + uTime * .3) + sin(p.y * .52 - uTime * .24),
+      sin(p.y * .68 - uTime * .27) + sin(p.x * .44 + uTime * .33)
     ) * .5;
   }
   // One dispersive wave train per touch: a leading crest, a trough behind it,
@@ -47,28 +57,69 @@ const waves = /* glsl */ `
       vec2 delta = raw + wob * min(.07, .012 + rd * .022);
       float d = length(delta);
       vec2 dir = delta / max(d, .025);
+      // No two touches ring alike. Each is seeded by where it landed: the front
+      // runs a little ahead on some sides and behind on others — more so the
+      // farther it travels — and the crest is stronger where it runs ahead, so
+      // a ring breaks up as it spreads instead of staying a drawn circle.
+      float seed = hash(uDrops[i].xy) * 6.2831853;
+      float ang = atan(dir.y, dir.x);
+      float uneven = sin(ang * 3.0 + seed) * .55
+        + sin(ang * 5.0 - seed * 1.7 + age * .35) * .3
+        + sin(ang * 2.0 + seed * 2.3 - age * .2) * .15;
       // The front sprints away from the touch and then settles into a glide,
       // so the ripple reads on the next frame instead of creeping out of a dot.
-      float radius = age * 1.02 + .42 * (1.0 - exp(-age * 6.5));
+      float radius = (age * 1.02 + .42 * (1.0 - exp(-age * 6.5))) * (1.0 + uneven * (.015 + age * .025));
       float front = d - radius;
       float trail = max(0.0, -front);
       // The train lengthens behind the front as the slower waves fall back,
       // and fades quickly enough that three or four rings carry the whole
-      // event and the centre settles back to calm.
-      float wavelength = .30 + age * .10;
+      // event and the centre settles back to calm. Its spacing is the touch's
+      // own, within a tenth either way.
+      float wavelength = (.30 + age * .10) * (.9 + .2 * hash(uDrops[i].xy + 3.7));
       float train = cos(trail / wavelength * 6.2831853) * exp(-trail * 3.2 / (1.0 + age * .55));
       // Still water ahead of the front.
       float gate = exp(-pow(max(0.0, front) / (.045 + age * .015), 2.0));
       float birth = smoothstep(0.0, .03, age);
       // Energy shared over a growing circumference, and lost to the water.
       float amp = train * gate * birth * exp(-age * .33) / (1.0 + d * .55);
+      amp *= .8 + .3 * uneven;
       // The touch itself: a dimple under the finger, present on the same frame
       // and gone before the first ring has travelled far.
       float dimple = -exp(-pow(d / .15, 2.0)) * exp(-age * 8.0) * birth;
       field.x += (amp * .075 + dimple * .05) * uDrops[i].w;
       // Push the water's material coordinates along with the wave. This bends
       // existing currents and light ribbons instead of drawing atop them.
-      field.yz += dir * (amp * .62 + dimple * .3) * uDrops[i].w;
+      field.yz += dir * (amp * .8 + dimple * .3) * uDrops[i].w;
+    }
+    // A sheet laid on the water. The wave leaves from the whole edge at once,
+    // so the front keeps the sheet's outline — a rounded rectangle easing to a
+    // circle as it travels — and is gentler than a touch: broad, low, soon spent.
+    if (uSheetDrop.w > .001 && uTime >= uSheetDrop.z) {
+      float age = uTime - uSheetDrop.z;
+      if (age < 12.0) {
+        vec2 raw = p - uSheetDrop.xy;
+        vec2 wobble = breath(p) * .03;
+        vec2 local = vec2(
+          raw.x * uSheetShape.z - raw.y * uSheetShape.w,
+          raw.x * uSheetShape.w + raw.y * uSheetShape.z) + wobble;
+        float corner = .18;
+        vec2 q = abs(local) - uSheetShape.xy + corner;
+        float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - corner;
+        vec2 gLocal = q.x > 0.0 || q.y > 0.0 ? normalize(max(q, 0.0)) * sign(local) : sign(local) * step(q.yx, q.xy);
+        vec2 dir = vec2(gLocal.x * uSheetShape.z + gLocal.y * uSheetShape.w, -gLocal.x * uSheetShape.w + gLocal.y * uSheetShape.z);
+        float radius = age * .7 + .25 * (1.0 - exp(-age * 5.0));
+        float front = sd - radius;
+        float trail = max(0.0, -front);
+        float wavelength = .55 + age * .14;
+        float train = cos(trail / wavelength * 6.2831853) * exp(-trail * 2.0 / (1.0 + age * .5));
+        float gate = exp(-pow(max(0.0, front) / (.08 + age * .02), 2.0));
+        float birth = smoothstep(0.0, .05, age);
+        float amp = train * gate * birth * exp(-age * .42) / (1.0 + max(sd, 0.0) * .4);
+        // The water gives under the sheet as it settles, then comes back.
+        float press = -smoothstep(.25, -.15, sd) * exp(-age * 2.2) * birth;
+        field.x += (amp * .048 + press * .03) * uSheetDrop.w;
+        field.yz += dir * (amp * .45 + press * .2) * uSheetDrop.w;
+      }
     }
     // Treat the joined curves as ONE wake. Summing individual strokes made
     // their end caps brighten into short mechanical streaks.
@@ -115,18 +166,40 @@ const waves = /* glsl */ `
   }
   // The slow swell, with the ripple crests left out. Split from waterHeight so
   // a floating body can weigh the two apart; the water itself still takes both.
+  // One wind over the whole pond. Every scale of the surface — swell, chop,
+  // grain, the ribbons of light — is carried on the same flow coordinate in
+  // this direction, finer waves running a little faster than broad ones, so
+  // the water and whatever it reflects move as one body.
+  const vec2 WIND = vec2(.5435, .8399);
+  vec2 flowAt(vec3 ripple, vec2 p) {
+    // A passing ripple drags the surface along with it; otherwise the surface
+    // drifts downwind even when nothing has touched it. The drift is not
+    // rigid: the slow breath of the whole pond bends the flow, so the broad
+    // folds of the water shift and squeeze as they go rather than sliding
+    // past as one printed sheet.
+    return p - ripple.yz * 1.8 + WIND * uTime * .14 + breath(p) * .3;
+  }
   float swellFrom(vec3 ripple, vec2 p) {
-    vec2 flow = p - ripple.yz;
-    float h = sin(flow.x * 1.2 + flow.y * .55 + uTime * .48) * .013
-      + sin(flow.y * 1.9 - flow.x * .31 - uTime * .33) * .007;
+    vec2 flow = flowAt(ripple, p);
+    float h = sin(flow.x * 1.2 + flow.y * .55 + uTime * .48) * .014
+      + sin(flow.y * 1.9 - flow.x * .31 - uTime * .33) * .008;
     // A light wandering chop. The pond is never glass, and this is the water a
-    // new ripple has to spread across.
-    h += (noise(flow * 3.1 + vec2(uTime * .08, uTime * .055)) - .5) * .0075;
+    // new ripple has to spread across. Two octaves, so the surface never
+    // settles into one repeating texture.
+    h += (noise(flow * 3.1 + WIND * uTime * .12) - .5) * .011;
+    h += (noise(flow * 6.3 + WIND * uTime * .2 + 11.0) - .5) * .0045;
     return h;
   }
   float waterHeight(vec2 p) {
     vec3 ripple = rippleField(p);
     return swellFrom(ripple, p) + ripple.x;
+  }
+  // The finest grain of the same surface: too small for the ring to feel and
+  // too small to survive the horizon, so the fragment adds it on top of the
+  // swell where it can fade it with distance. Same flow, same wind.
+  float grainAt(vec2 flow) {
+    return (noise(flow * 12.0 + WIND * uTime * .35) - .5) * .0009
+      + (noise(flow * 24.0 + WIND * uTime * .55 + 7.0) - .5) * .00035;
   }
 `;
 
@@ -146,29 +219,56 @@ const fragmentShader = /* glsl */ `
   varying vec3 vWorld;
   void main() {
     vec2 p = vWorld.xz;
-    vec2 surface = p - rippleField(p).yz;
-    float h = waterHeight(p);
-    vec3 n = normalize(vec3((h - waterHeight(p + vec2(.035,0))) / .035, 1.0,
-      (h - waterHeight(p + vec2(0,.035))) / .035));
+    vec3 ripple = rippleField(p);
+    vec2 flow = flowAt(ripple, p);
+    // One surface, one normal. Swell, ripples and grain are a single height
+    // field, and everything the light does — the shading, the sun's
+    // reflection — follows from its shape. The grain fades before the horizon
+    // can turn it into shimmer, and a ripple crest stirs it up while the
+    // trough behind smooths it, so a ripple changes the texture it crosses.
+    float detail = 1.0 - smoothstep(.3, 1.1, length(fwidth(flow * 12.0)));
+    float stir = 1.0 + clamp(ripple.x * 40.0, -.7, 1.5);
+    float grain = detail * stir;
+    float h = swellFrom(ripple, p) + ripple.x + grainAt(flow) * grain;
+    float hx = waterHeight(p + vec2(.02, 0)) + grainAt(flow + vec2(.02, 0)) * grain;
+    float hz = waterHeight(p + vec2(0, .02)) + grainAt(flow + vec2(0, .02)) * grain;
+    vec3 n = normalize(vec3((h - hx) / .02, 1.0, (h - hz) / .02));
     vec3 eye = normalize(cameraPosition - vWorld);
     vec3 reflection = reflect(-eye, n);
     float fresnel = pow(1.0 - max(0.0, dot(n, eye)), 3.0);
+    // The page's own paper tone, and the water a shade below it: the pond is
+    // lit by the same sky it sits under, only deeper, never a colour of its own.
     vec3 sky = vec3(.888, .902, .897);
-    vec3 deep = vec3(.49, .59, .59);
-    vec3 color = mix(deep, sky, .36 + fresnel * .56);
-    float clouds = noise(reflection.xz * 3.0 + vec2(uTime * .009, 0));
-    color += (clouds - .5) * .085;
-    // A broad, broken sky reflection; the ripple normals make its silver edges.
-    float light = pow(max(0.0, dot(reflection, normalize(vec3(-.4, .65, -.8)))), 14.0);
-    color += light * vec3(.16, .15, .12);
-    color += (n.x * .6 + n.z) * .16;
-    // Subtle, water-anchored ribbons of reflected light and shadow. Warping
-    // breaks up parallel bands; fine striations soften before they can alias
-    // at the horizon. Keep the existing gray-green palette, not the reference hue.
-    vec2 drift = surface * vec2(.38, .65) + vec2(uTime * .018, -uTime * .012);
+    vec3 deep = sky * vec3(.76, .80, .80);
+    vec3 color = mix(deep, sky, .24 + fresnel * .66);
+    float clouds = noise(reflection.xz * 3.0 + WIND * uTime * .04);
+    color += (clouds - .5) * .06;
+    color += (n.x * .6 + n.z) * .14;
+    // Sunlight. A sun just risen, low ahead of the viewer, is mirrored in the
+    // surface wherever it tilts toward the light. The lobe is wide enough that
+    // the light gathers into patches the size of the swell rather than
+    // breaking into points, so the reflection has the same grain as the water
+    // and moves and breaks only as a ripple reshapes the surface beneath it.
+    // The path is brightest at its centre, where the sun itself sits, and the
+    // glow around it is the same reflection seen through the haze.
+    vec3 sunDir = normalize(vec3(0.0, .24, -1.0));
+    float toSun = max(0.0, dot(reflection, sunDir));
+    float light = pow(toSun, 220.0);
+    float glow = pow(toSun, 12.0);
+    // A long path: from the viewer's feet out to where the haze takes it.
+    float centre = exp(-(p.x * p.x / 16.0 + pow((p.y + 5.0) / 15.0, 2.0)));
+    float reach = (1.0 - smoothstep(-30.0, -60.0, p.y)) * (.25 + .75 * centre);
+    color += glow * reach * vec3(.05, .046, .036);
+    color += light * reach * (.45 + .55 * fresnel) * vec3(.38, .36, .32);
+    // Subtle, water-anchored ribbons of reflected light and shadow — the broad
+    // folds of the body of water, carried on the same flow as everything
+    // else. Warping breaks up parallel bands; fine striations soften before
+    // they can alias at the horizon. Keep the existing gray-green palette,
+    // not the reference hue.
+    vec2 drift = flow * vec2(.38, .65) + WIND * uTime * .06;
     float bend = noise(drift * .7) * 2.0 - 1.0;
     float ribbons = noise(vec2(drift.x * .7, drift.y * 2.4 + bend * 1.3));
-    vec2 fibersUV = vec2(surface.x * 1.8, surface.y * 24.0 + bend * 5.0 - uTime * .15);
+    vec2 fibersUV = vec2(flow.x * 1.8, flow.y * 24.0 + bend * 5.0 + WIND.y * uTime * .6);
     float fiberAA = 1.0 - smoothstep(.3, 1.3, length(fwidth(fibersUV)));
     float fibers = (noise(fibersUV) - .5) * fiberAA;
     // Constant scene-wide contrast. Ripples affect lighting only through
@@ -270,11 +370,16 @@ interface PondProps {
   /** Prompt ripples and the cursor ring wait until the invitation has settled. */
   lifeReady?: boolean;
   promptRipples?: boolean;
+  /** 0 = standing at the pond; 1 = gone down through the water. */
+  sinkRef?: RefObject<number>;
+  /** The spot the camera leans onto as it sinks. */
+  sinkTargetRef?: RefObject<PondSinkTarget | null>;
 }
 
-function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true, promptRipples = true }: PondProps) {
+function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true, promptRipples = true, sinkRef, sinkTargetRef }: PondProps) {
   const { camera, size, gl } = useThree();
   const time = useRef(0);
+  const lookAt = useMemo(() => new THREE.Vector3(), []);
   const ready = useRef(false);
   const touchIndex = useRef(0);
   const trailIndex = useRef(0);
@@ -295,6 +400,8 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     uTrails: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailControls: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailTimes: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector2(-99, 0)) },
+    uSheetDrop: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uSheetShape: { value: new THREE.Vector4(1, 1, 1, 0) },
   }), []);
   const ringUniforms = useMemo(() => ({
     uProgress: { value: 0 },
@@ -305,6 +412,8 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     uTrails: uniforms.uTrails,
     uTrailControls: uniforms.uTrailControls,
     uTrailTimes: uniforms.uTrailTimes,
+    uSheetDrop: uniforms.uSheetDrop,
+    uSheetShape: uniforms.uSheetShape,
     uCenter: { value: new THREE.Vector3() },
     uTap: { value: 0 },
   }), [uniforms]);
@@ -320,8 +429,8 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     uniforms.uTime.value = time.current;
     // This is a perspective camera, never a CSS-flattened overhead texture.
     const cameraArrival = reducedMotion ? 1 : arrival;
-    camera.position.set(0, 2.95 - cameraArrival * .15, 10 + (1 - cameraArrival) * .4);
-    camera.lookAt(0, .05, -24);
+    pondCameraPose(cameraArrival, sinkRef?.current ?? 0, sinkTargetRef?.current ?? null, camera.position, lookAt);
+    camera.lookAt(lookAt);
     camera.updateMatrixWorld();
     if (!ready.current) { ready.current = true; onReady(); }
     const cue = cueRef.current;
@@ -333,9 +442,15 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     if (touch && touch.serial !== seenTouch.current) {
       seenTouch.current = touch.serial;
       tapAt.current = time.current;
-      raycaster.setFromCamera(new THREE.Vector2(touch.x * 2 - 1, 1 - touch.y * 2), camera);
-      if (raycaster.ray.intersectPlane(plane, point) && onPond(point)) {
+      if (touch.sheet) {
+        const { x, z, hw, hh, yaw } = touch.sheet;
+        uniforms.uSheetDrop.value.set(x, z, time.current, touch.strength ?? 1);
+        uniforms.uSheetShape.value.set(hw, hh, Math.cos(yaw), Math.sin(yaw));
+      } else {
+        raycaster.setFromCamera(new THREE.Vector2(touch.x * 2 - 1, 1 - touch.y * 2), camera);
+        if (raycaster.ray.intersectPlane(plane, point) && onPond(point)) {
         uniforms.uDrops.value[1 + (touchIndex.current++ % (POND_DROP_SLOTS - 1))].set(point.x, point.z, time.current, touch.strength ?? 1.5);
+        }
       }
     }
     const nearX = size.width < 600 ? 0 : POND_THOUGHTS[0].x;
@@ -449,7 +564,7 @@ function StillPond({ onReady, cueRef }: Pick<PondProps, "onReady" | "cueRef">) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [cueRef]);
-  return <div aria-hidden style={{ position: "absolute", inset: 0, background: "linear-gradient(#e2e6e2 28%, #cbd5d2 49%, #91aaa8 100%)" }}>
+  return <div aria-hidden style={{ position: "absolute", inset: 0, background: "linear-gradient(#e2e6e2 28%, #d4dad7 49%, #b9c3c1 100%)" }}>
     <div ref={ripple} style={{ position: "absolute", inset: "38% -30% -50%", transformOrigin: "50% 30%", transform: "perspective(500px) rotateX(68deg) scale(.005)", background: "radial-gradient(ellipse at 50% 30%, transparent 26%, #e6edeb22 29%, transparent 32%, transparent 35%, #e6edeb33 38%, transparent 41%, transparent 44%, #e6edeb55 47%, transparent 50%)" }} />
   </div>;
 }
@@ -457,7 +572,7 @@ function StillPond({ onReady, cueRef }: Pick<PondProps, "onReady" | "cueRef">) {
 export function PerspectivePond(props: PondProps) {
   const fallback = <StillPond onReady={props.onReady} cueRef={props.cueRef} />;
   return <PondBoundary fallback={fallback}>
-    <Canvas camera={{ fov: 48, near: .1, far: 2400, position: [0, 2.8, 10] }}
+    <Canvas camera={{ fov: POND_LENS.fov, near: POND_LENS.near, far: POND_LENS.far, position: [0, 2.8, 10] }}
       dpr={[1, 1.5]} gl={{ antialias: true, alpha: true }} fallback={fallback}
       style={{ position: "absolute", inset: 0 }}>
       <Water {...props} />

@@ -27,12 +27,20 @@ function wrapHue(h: number): number {
   return ((h % 360) + 360) % 360;
 }
 
+/** How far the colour covers what is behind it — the water stays legible under it. */
+const SURROUND_OPACITY = 0.78;
+/** The colour arrives and leaves over this long, never as a cut. */
+export const SURROUND_FADE_MS = 1800;
+
 /**
- * The color-page air: a still periwinkle mist above, and a flowy
+ * The feeling step's air: a still periwinkle mist above, and a flowy
  * mesh of pastel clouds around the form. The pick tints the clouds;
  * chroma stays low so it reads as weather, not a lightbox.
+ *
+ * It is a veil over the water, not a room of its own: it fades in over the
+ * underwater backdrop when the step arrives and out again when it leaves.
  */
-export function AmbientSurround({ oklch }: { oklch: Oklch }) {
+export function AmbientSurround({ oklch, visible = true }: { oklch: Oklch; visible?: boolean }) {
   const h = oklch.h;
   const sky = oklchCss({
     l: 0.935,
@@ -59,7 +67,8 @@ export function AmbientSurround({ oklch }: { oklch: Oklch }) {
     filter: "blur(16px) saturate(0.57)",
     transform: "scale(1.08)",
     transformOrigin: "center bottom",
-    transition: "background-color 0.9s ease, background-image 0.9s ease",
+    opacity: visible ? SURROUND_OPACITY : 0,
+    transition: `background-color 0.9s ease, background-image 0.9s ease, opacity ${SURROUND_FADE_MS}ms ease`,
   };
 
   return (
@@ -70,7 +79,7 @@ export function AmbientSurround({ oklch }: { oklch: Oklch }) {
         style={{
           ...style,
           filter: "blur(36px) saturate(0.54)",
-          opacity: 0.7,
+          opacity: visible ? SURROUND_OPACITY * 0.7 : 0,
           transform: "scale(1.14) translateY(3%)",
         }}
       />

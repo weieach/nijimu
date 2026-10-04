@@ -5,6 +5,7 @@ import { HomePage } from "./components/HomePage";
 import { LandingPage } from "./components/LandingPage";
 import {
   CAROUSEL_PATH,
+  IMAGE_PATH,
   MEMORY_FIELD_PATH,
   MEMORY_POND_PATH,
   NAMING_PATH,
@@ -108,8 +109,8 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       {
-        /* Landing, the dive carousel, the pond, recording, transcript, and
-           naming share one layout: Enter preloads the gallery behind the ink,
+        /* Landing, the dive carousel, the pond, recording, transcript, image,
+           and naming share one layout: Enter preloads the gallery behind the ink,
            recording and transcript keep the pond mounted, and saving a memory
            turns the naming rim into that same gallery in place. The children
            render nothing themselves; LandingPage reads the path. */
@@ -120,6 +121,7 @@ const router = createBrowserRouter([
           { path: MEMORY_POND_PATH, element: null },
           { path: RECORD_START_PATH, element: null },
           { path: TRANSCRIPT_PATH, element: null },
+          { path: IMAGE_PATH, element: null },
           { path: NAMING_PATH, element: null },
         ],
       },

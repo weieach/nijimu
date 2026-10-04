@@ -1,27 +1,11 @@
-import {
-  AmbientFill,
-  DEFAULT_BUBBLE_AMBIENTS,
-  DEFAULT_BUBBLE_LIGHTS,
-  EditableLight,
-} from "./sceneLights";
 import { ArtifactForm, isArtifactForm } from "./superformula";
 
-// v2: the form replaced the GLB model path
-const KEY = "nijimu.formDraft.v2";
-
-const FALLBACK_MATERIAL = {
-  roughness: 0,
-  reflectivity: 0.2,
-  transparency: 0.9,
-  fog: 0,
-};
+// v3: the glass is the gallery's now; only the form and its growth are kept.
+const KEY = "nijimu.formDraft.v3";
 
 export type FormDraft = {
   form: ArtifactForm;
   morphProgress: number;
-  bubbleMaterial: typeof FALLBACK_MATERIAL;
-  lights: EditableLight[];
-  ambients: AmbientFill[];
 };
 
 export function saveFormDraft(draft: FormDraft): void {
@@ -42,14 +26,6 @@ export function loadFormDraft(): FormDraft | null {
       form: parsed.form,
       morphProgress:
         typeof parsed.morphProgress === "number" ? parsed.morphProgress : 0,
-      bubbleMaterial: {
-        ...FALLBACK_MATERIAL,
-        ...parsed.bubbleMaterial,
-      },
-      lights: Array.isArray(parsed.lights) ? parsed.lights : DEFAULT_BUBBLE_LIGHTS,
-      ambients: Array.isArray(parsed.ambients)
-        ? parsed.ambients
-        : DEFAULT_BUBBLE_AMBIENTS,
     };
   } catch {
     return null;

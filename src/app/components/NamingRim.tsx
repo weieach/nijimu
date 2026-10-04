@@ -52,12 +52,24 @@ export interface NameFlowState {
   transcript?: string;
   highlightedWords?: string[];
   matPresetIndex?: number;
+  /** The glass tint the feeling step settled on — shown until the memory is saved. */
+  matColor?: string;
   shape?: {
     form?: ArtifactForm;
     fluidity?: number;
     evolve?: number;
     bumpAmount?: number;
   };
+  /** Set by the shape scene: the eye is still under the water and comes up to this step. */
+  rise?: boolean;
+}
+
+/** What a host may take over from the rim: leaving, and what follows a save. */
+export interface NamingRimHandlers {
+  /** Back to the previous step. Defaults to the feeling step with the state as it came. */
+  onExit?: (state: NameFlowState) => void;
+  /** After the memory is in the store. Defaults to opening the gallery on it. */
+  onSaved?: (draftId: string) => void;
 }
 
 /** One visit to the naming step. The id is the memory's final id from the
@@ -253,8 +265,14 @@ export interface NamingRim {
  * the hook then costs nothing and returns null, so a component can host either
  * the naming rim or the settled gallery without changing shape.
  */
-export function useNamingRim(session: NamingSession | null, reducedMotion: boolean): NamingRim | null {
+export function useNamingRim(
+  session: NamingSession | null,
+  reducedMotion: boolean,
+  handlers: NamingRimHandlers = {},
+): NamingRim | null {
   const navigate = useNavigate();
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
   const state = session?.state ?? null;
   const draftId = session?.draftId ?? "";
   const [memoryName, setMemoryName] = useState("");
@@ -376,6 +394,10 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
         createdAt: new Date().toISOString(),
       });
 
+      if (handlersRef.current.onSaved) {
+        handlersRef.current.onSaved(draftId);
+        return;
+      }
       /* The gallery continues the rim that is already on screen: same memory at
          the apex, same neighbours, so only the water and the chrome arrive.
          The naming step is replaced in history: there is no draft to come back to. */
@@ -536,7 +558,12 @@ export function useNamingRim(session: NamingSession | null, reducedMotion: boole
     activeIdx,
     caption,
     neighborsVisible: yearSettled,
-    exit: () => navigate(SHAPE_FEELING_PATH, { state }),
+    exit: () => {
+      if (saving) return;
+      const flow = state ?? {};
+      if (handlersRef.current.onExit) handlersRef.current.onExit(flow);
+      else navigate(SHAPE_FEELING_PATH, { state: flow });
+    },
   };
 }
 

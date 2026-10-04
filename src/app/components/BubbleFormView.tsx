@@ -21,7 +21,6 @@ const setLine = (p: SuperParams) => `${fmt(p.m)}, ${fmt(p.n1)}, ${fmt(p.n2)}, ${
 /**
  * Bottom-left toggle + right panel for previewing superformula categories.
  * A memory's form is assigned, not chosen; this is for looking at the range.
- * Same chrome family as lights / material / photo.
  */
 export function BubbleFormView({
   open,
@@ -36,7 +35,7 @@ export function BubbleFormView({
         onClick={() => onOpenChange(!open)}
         style={{
           position: "fixed",
-          left: 312,
+          left: 24,
           bottom: 40,
           zIndex: 40,
           fontFamily: SANS,

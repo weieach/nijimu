@@ -1,21 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useHoldToCreate } from "../hooks/useHoldToCreate";
-import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { CHROME_GRAY } from "../lib/colors";
 import { INSTRUCTION_SIZE, SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 import { POND_THOUGHTS, hasSeenPondInstruction, markPondInstructionSeen, pondPromptCue } from "../lib/pondPrompts";
 import { PerspectivePond, type PondTouch } from "./PerspectivePond";
 import { PondRecordingOverlay } from "./PondRecordingOverlay";
 import { PuddleTranscriptPage } from "./PuddleTranscriptPage";
+import { PondImagePage } from "./PondImagePage";
+import { PondNamingOverlay } from "./PondNamingOverlay";
+import type { NamingSession } from "./NamingRim";
+import type { PondSinkTarget } from "../lib/pondCamera";
 
-export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, transcript = false, onReady, onLeave }: {
-  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; transcript?: boolean; onReady?: () => void; onLeave?: () => void;
+export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, transcript = false, image = false, naming = null, onReady, onLeave, onNamingSaved, namingBackRef }: {
+  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; transcript?: boolean; image?: boolean;
+  /** The naming step: the memory just made hangs over this same water. */
+  naming?: NamingSession | null;
+  onReady?: () => void; onLeave?: () => void;
+  /** The named memory is saved; the host takes the pond away and opens the gallery on it. */
+  onNamingSaved?: (draftId: string) => void;
+  /** Filled by the naming step with its way back down to the feeling step. */
+  namingBackRef?: RefObject<(() => void) | null>;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const overlaid = recording || transcript;
+  const overlaid = recording || transcript || image || !!naming;
   const [touch, setTouch] = useState<PondTouch | null>(null);
+  /* Leaving the picture step sinks the camera through the water. The water
+     and the sheet share one lens, so both read the same clock. */
+  const sinkRef = useRef(0);
+  const sinkTargetRef = useRef<PondSinkTarget | null>(null);
   const promptRefs = useRef<Array<HTMLDivElement | null>>([]);
   const cueRef = useRef(pondPromptCue(0));
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -121,13 +136,15 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     if (!active) return;
     const keys = (e: KeyboardEvent) => {
       if (e.key !== "Escape" && e.key !== "ArrowUp") return;
-      if (transcript) navigate(RECORD_START_PATH, { state: location.state });
+      if (naming) namingBackRef?.current?.();
+      else if (image) navigate(TRANSCRIPT_PATH, { state: location.state });
+      else if (transcript) navigate(RECORD_START_PATH, { state: location.state });
       else if (recording) navigate(MEMORY_POND_PATH);
       else back();
     };
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
-  }, [active, recording, transcript, back, navigate, location.state]);
+  }, [active, recording, transcript, image, naming, namingBackRef, back, navigate, location.state]);
   useEffect(() => {
     if (!enabled) return;
     buttonRef.current?.focus({ preventScroll: true });
@@ -152,13 +169,13 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     window.addEventListener("wheel", wheel, { passive: false });
     return () => window.removeEventListener("wheel", wheel);
   }, [enabled, reducedMotion, back]);
-  const pulseWater = useCallback((at: { x: number; y: number; strength: number }) => {
+  const pulseWater = useCallback((at: { x: number; y: number; strength: number; sheet?: PondTouch["sheet"] }) => {
     setTouch({ ...at, serial: performance.now() });
   }, []);
 
-  return <section aria-label={transcript ? "your spoken memory" : recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
+  return <section aria-label={naming ? "name your memory" : image ? "a picture for your memory" : transcript ? "your spoken memory" : recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
     style={{ position: "absolute", inset: 0, overflow: "hidden", background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}>
-    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} promptRipples={!overlaid} />
+    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} promptRipples={!overlaid} sinkRef={sinkRef} sinkTargetRef={sinkTargetRef} />
     <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)" }} />
     {POND_THOUGHTS.map((thought, i) => <div key={thought.text} ref={el => { promptRefs.current[i] = el; }} data-pond-prompt={i} aria-hidden="true"
       style={{ position: "absolute", top: 0, left: 0, width: "min(148px, 42vw)", textAlign: "center", pointerEvents: "none", opacity: 0, transform: "translate(-50%, -100%) translate(50vw, 58vh)", transformOrigin: "center bottom", color: CHROME_GRAY, fontFamily: SERIF_EXPOSURE, fontWeight: 400, fontSynthesis: "none", fontSize: INSTRUCTION_SIZE, lineHeight: 1.45, textShadow: "0 1px 16px #f3f4ece6", paddingBottom: 52 }}>
@@ -228,6 +245,8 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     </div>
     {recording && <PondRecordingOverlay reducedMotion={reducedMotion} onVoicePulse={pulseWater} />}
     {transcript && <PuddleTranscriptPage />}
+    {image && <PondImagePage reducedMotion={reducedMotion} onLand={pulseWater} sinkRef={sinkRef} sinkTargetRef={sinkTargetRef} />}
+    {naming && onNamingSaved && <PondNamingOverlay key={naming.draftId} session={naming} reducedMotion={reducedMotion} sinkRef={sinkRef} onSaved={onNamingSaved} backRef={namingBackRef} />}
     <span className="sr-only" role="status">{recording ? "ready to record" : ""}</span>
   </section>;
 }

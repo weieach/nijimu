@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { RECORD_START_PATH, SHAPE_GROW_PATH, TRANSCRIPT_PATH } from "../lib/routes";
+import { IMAGE_PATH, RECORD_START_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import type { ArtifactForm } from "../lib/superformula";
@@ -161,9 +161,13 @@ export function PuddleTranscriptPage() {
     } else {
       setFadeOutContent(true);
       setTimeout(() => {
-        navigate(SHAPE_GROW_PATH, {
+        navigate(IMAGE_PATH, {
           state: {
             ...state,
+            // The picture is always asked for anew; one carried back from the
+            // shape scene would otherwise skip straight to its sheet falling.
+            image: undefined,
+            rise: undefined,
             transcript,
             highlightedWords: Array.from(highlightedWords).map((i) => words[i]),
             highlightedWordIndices: Array.from(highlightedWords),

@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { MATERIAL_PRESETS } from "./SceneViewer";
-import { BubbleViewer, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
+import { BubbleViewer } from "./BubbleViewer";
 import { AmbientSurround } from "./AmbientSurround";
 import { OklchColorField, WASH_HEIGHT } from "./OklchColorField";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
@@ -11,14 +11,9 @@ import {
   DEFAULT_OKLCH,
   Oklch,
   meshCoreFromOklch,
-  rimFromOklch,
   sampleField,
   uvFromOklch,
 } from "../lib/oklch";
-import {
-  DEFAULT_BUBBLE_AMBIENTS,
-  DEFAULT_BUBBLE_LIGHTS,
-} from "../lib/sceneLights";
 import { asFiniteNumber, loadFormDraft, saveFormDraft } from "../lib/formDraft";
 import { createArtifactForm, formFromState, formKey } from "../lib/superformula";
 import memoryPhotoUrl from "../../assets/memory-photo.jpg";
@@ -41,10 +36,6 @@ export function ShapeColorPage() {
     asFiniteNumber(location.state?.morphProgress) ??
     asFiniteNumber(draft?.morphProgress) ??
     1;
-  const bubbleMaterial =
-    location.state?.bubbleMaterial ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL;
-  const lights = location.state?.lights ?? draft?.lights ?? DEFAULT_BUBBLE_LIGHTS;
-  const ambients = location.state?.ambients ?? draft?.ambients ?? DEFAULT_BUBBLE_AMBIENTS;
 
   const initialOklch: Oklch = location.state?.oklch ?? DEFAULT_OKLCH;
   const initialUv = uvFromOklch(initialOklch);
@@ -117,23 +108,19 @@ export function ShapeColorPage() {
     setTimeout(() => setSceneReady(true), 300);
   }, []);
 
-  const coreColor = meshCoreFromOklch(oklch);
-  const rimColor = rimFromOklch(oklch);
+  const matColor = meshCoreFromOklch(oklch);
 
   const formState = () => ({
     ...stripLegacyEvolveFromState(location.state),
     form,
     morphProgress,
-    bubbleMaterial,
-    lights,
-    ambients,
     oklch,
     cameraPermission:
       handMode && isTracking ? "granted" : location.state?.cameraPermission,
   });
 
   const handleBackToForm = () => {
-    saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
+    saveFormDraft({ form, morphProgress });
     navigate("/record/shape/grow", { state: formState() });
   };
 
@@ -141,8 +128,7 @@ export function ShapeColorPage() {
     navigate("/record/shape/texture", {
       state: {
         ...formState(),
-        coreColor,
-        rimColor,
+        matColor,
         matPresetIndex: Math.min(
           Math.round((((oklch.h % 360) + 360) % 360) / 360 * (MATERIAL_PRESETS.length - 1)),
           MATERIAL_PRESETS.length - 1,
@@ -174,14 +160,7 @@ export function ShapeColorPage() {
           morphProgress={morphProgress}
           ready={sceneReady}
           form={form}
-          coreColor={coreColor}
-          rimColor={rimColor}
-          roughness={bubbleMaterial.roughness}
-          reflectivity={bubbleMaterial.reflectivity}
-          transparency={bubbleMaterial.transparency}
-          fog={bubbleMaterial.fog}
-          lights={lights}
-          ambients={ambients}
+          matColor={matColor}
           memoryPhotoUrl={morphProgress < 0.98 ? memoryPhotoUrl : undefined}
         />
       </div>

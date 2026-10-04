@@ -7,6 +7,9 @@ import colorPinchUrl from "../../assets/gesture-color-pinch.png";
 
 export type GestureHintKind = "shape" | "feeling" | "distance" | "color";
 
+/** The round camera preview in the page corner; the hint sits on top of it. */
+export const CAMERA_PREVIEW = { bottom: 22, right: 22, size: 152 };
+
 export function GestureHint({
   kind,
   active,
@@ -20,10 +23,12 @@ export function GestureHint({
       aria-hidden
       data-kind={kind}
       style={{
+        /* Seated just above the camera preview, centred on it, so the hand
+           drawing reads as what the camera is looking for. */
         position: "absolute",
-        top: 210,
-        left: "50%",
-        transform: "translateX(-50%)",
+        bottom: CAMERA_PREVIEW.bottom + CAMERA_PREVIEW.size + 6,
+        right: CAMERA_PREVIEW.right + CAMERA_PREVIEW.size / 2,
+        transform: "translateX(50%)",
         zIndex: 20,
         pointerEvents: "none",
         display: "block",

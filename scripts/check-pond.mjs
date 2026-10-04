@@ -108,8 +108,15 @@ assert.ok(pondSource.includes("(ribbons - .5) * .022 + fibers * .006"), "ambient
 assert.ok(pondSource.includes("float train = cos(trail / wavelength"), "one dispersive train, not rings that each start again from nothing");
 assert.ok(pondSource.includes("float dimple ="), "the touch itself lands on the same frame as the press");
 assert.ok(!pondSource.includes("repeating-radial-gradient"), "the water is simulated, never a drawn-on pattern");
-assert.ok(pondSource.includes("vec2 surface = p - rippleField(p).yz"), "ripple displaces the water texture");
-assert.ok(pondSource.includes("vec2 flow = p - ripple.yz"), "the existing waves move with the same displacement");
+assert.ok(pondSource.includes("return p - ripple.yz * 1.8 + WIND * uTime * .14 + breath(p) * .3"), "ripple displaces the water texture; the surface drifts downwind and the breath bends the drift");
+assert.ok(pondSource.includes("vec2 drift = flow * vec2(.38, .65)") && pondSource.includes("vec2 fibersUV = vec2(flow.x * 1.8, flow.y * 24.0"), "the broad folds and fibres ride the same flow as the light");
+// The sun is reflected off the one surface the water has — swell, ripples and
+// grain in a single height field and normal, all carried on one flow
+// coordinate — never drawn on as a separate sparkle layer with its own motion.
+assert.ok(pondSource.includes("vec2 flow = flowAt(ripple, p)") && pondSource.includes("grainAt(flow) * grain"), "the grain rides the same flow as the swell");
+assert.ok(pondSource.includes("float toSun = max(0.0, dot(reflection, sunDir))"), "the sun is mirrored in the one surface normal");
+assert.ok(!pondSource.includes("nFine"), "no second normal for the highlights");
+assert.ok(pondSource.includes("clamp(ripple.x * 40.0"), "a ripple crest stirs the grain and its trough smooths it");
 const pondPageSource = readFileSync(new URL("../src/app/components/MemoryPondPage.tsx", import.meta.url), "utf8");
 assert.ok(!pondPageSource.includes('background: "#7d9290"'), "prompt dots are removed");
 assert.ok(!pondSource.includes("createFlowLake"), "the later flow-map engine is not active");

@@ -71,7 +71,7 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
 ];
 
 // Derive a darkened hex colour for fallback attenuation / sheen
-function scaledHex(hex: string, factor: number): string {
+export function scaledHex(hex: string, factor: number): string {
   if (!hex.startsWith("#") || hex.length < 7) return hex;
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -91,7 +91,7 @@ function scaledHex(hex: string, factor: number): string {
  * level the camera would only ever get the edge. The artifact leans its top
  * toward the camera and turns about its own axis.
  */
-export const ARTIFACT_TILT = 0.45;
+export const ARTIFACT_TILT = 0;
 
 /** The form is the whole model, so photo UVs read straight off its sphere. */
 export const MODEL_SPACE = new THREE.Matrix4();
@@ -177,6 +177,61 @@ const GLASS = {
   attenuationDistance: 0.55,
   sheenRoughness: 0.35,
 };
+
+/** The glass's body opacity everywhere an artifact is shown as itself. */
+export const ARTIFACT_GLASS_OPACITY = 0.4;
+
+/**
+ * The one glass every artifact is made of — the gallery's, the revisit
+ * pages', and the memory still being made. Attenuation and sheen follow the
+ * tint unless a preset names them.
+ */
+export function createArtifactGlassMaterial(
+  matColor: string,
+  matOpacity = ARTIFACT_GLASS_OPACITY,
+  matAttenuationColor = scaledHex(matColor, 0.85),
+  matSheenColor = scaledHex(matColor, 0.9),
+): THREE.MeshPhysicalMaterial {
+  return new THREE.MeshPhysicalMaterial({
+    ...GLASS,
+    color: new THREE.Color(matColor),
+    transparent: true,
+    opacity: matOpacity,
+    side: THREE.DoubleSide,
+    attenuationColor: new THREE.Color(matAttenuationColor),
+    sheenColor: new THREE.Color(matSheenColor),
+  });
+}
+
+/** Retint without a program rebuild — the colours are uniforms. */
+export function tintArtifactGlass(
+  material: THREE.MeshPhysicalMaterial,
+  matColor: string,
+  matOpacity = ARTIFACT_GLASS_OPACITY,
+  matAttenuationColor = scaledHex(matColor, 0.85),
+  matSheenColor = scaledHex(matColor, 0.9),
+): void {
+  material.color.set(matColor);
+  material.opacity = matOpacity;
+  material.attenuationColor.set(matAttenuationColor);
+  material.sheenColor.set(matSheenColor);
+}
+
+/** The light the glass is seen in, wherever it is seen. */
+export function ArtifactLighting() {
+  return (
+    <>
+      <ambientLight intensity={5} color="#758FDF" />
+      <ambientLight intensity={2} color="#989BE8" />
+      <directionalLight position={[6, 14, 8]} intensity={4.5} color="#ffffff" />
+      <directionalLight position={[-5, 2, -3]} intensity={0.1} color="#758FDF" />
+      <pointLight position={[-4, 2, 3]} intensity={1.75} color="#e2cece" distance={90} decay={0.1} />
+      <pointLight position={[3, -1, 2]} intensity={1.45} color="#b0a8c4" distance={90} decay={0.1} />
+      <pointLight position={[0, 4, -2]} intensity={1.15} color="#b0d0cc" distance={90} decay={0.1} />
+      <Environment preset="city" environmentIntensity={1.5} />
+    </>
+  );
+}
 
 /**
  * Bump-texture coordinates per mesh unit. Forms are normalised to ±1, and at
@@ -270,16 +325,7 @@ function Model({
 }: ModelProps) {
   const { geometry, rest } = useArtifactGeometry(form);
   const material = useMemo(
-    () =>
-      new THREE.MeshPhysicalMaterial({
-        ...GLASS,
-        color: new THREE.Color(matColor),
-        transparent: true,
-        opacity: matOpacity,
-        side: THREE.DoubleSide,
-        attenuationColor: new THREE.Color(matAttenuationColor),
-        sheenColor: new THREE.Color(matSheenColor),
-      }),
+    () => createArtifactGlassMaterial(matColor, matOpacity, matAttenuationColor, matSheenColor),
     [], // eslint-disable-line react-hooks/exhaustive-deps -- tints follow below
   );
   useEffect(() => () => material.dispose(), [material]);
@@ -366,10 +412,7 @@ function Model({
 
   // Tints are uniforms — no program rebuild, so no needsUpdate.
   useLayoutEffect(() => {
-    material.color.set(matColor);
-    material.opacity = matOpacity;
-    material.attenuationColor.set(matAttenuationColor);
-    material.sheenColor.set(matSheenColor);
+    tintArtifactGlass(material, matColor, matOpacity, matAttenuationColor, matSheenColor);
   }, [material, matColor, matAttenuationColor, matSheenColor, matOpacity]);
 
   useFrame((_, rawDelta) => {
@@ -821,40 +864,7 @@ export function SceneViewer({
         onPointerLeave={() => setIsDragging(false)}
       >
         <FitControlsTarget />
-        <ambientLight intensity={5} color="#758FDF" />
-        <ambientLight intensity={2} color="#989BE8" />
-        <directionalLight
-          position={[6, 14, 8]}
-          intensity={4.5}
-          color="#ffffff"
-        />
-        <directionalLight
-          position={[-5, 2, -3]}
-          intensity={0.1}
-          color="#758FDF"
-        />
-        <pointLight
-          position={[-4, 2, 3]}
-          intensity={1.75}
-          color="#e2cece"
-          distance={90}
-          decay={0.1}
-        />
-        <pointLight
-          position={[3, -1, 2]}
-          intensity={1.45}
-          color="#b0a8c4"
-          distance={90}
-          decay={0.1}
-        />
-        <pointLight
-          position={[0, 4, -2]}
-          intensity={1.15}
-          color="#b0d0cc"
-          distance={90}
-          decay={0.1}
-        />
-        <Environment preset="city" environmentIntensity={1.5} />
+        <ArtifactLighting />
         <Suspense fallback={<Loader />}>
           {memoryPhotoUrl ? (
             <MemoryPhotoTexture url={memoryPhotoUrl}>
