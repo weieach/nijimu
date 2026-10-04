@@ -56,8 +56,13 @@ import photoB from "../../assets/memory-photo-02.png";
  * strip turned over so its picture side faces the wall (inside is the default),
  * ?haze= (0–1) how far the memory has receded — the "distance" knob group: the
  * photo blurs (mip bias), the frame softens (a post blur), the cut and the rim
- * lines let go, the whole fades toward the air, and a mist of three shells
- * stands off the glass so the outline is a gradient rather than a line.
+ * lines let go, the whole fades toward the air, a mist of six shells stands
+ * off the glass so the outline is a gradient rather than a line, and the edge
+ * is luminous — the "glow" group: a pale band inside the silhouette of the
+ * glass and of every shell (one halo, breathing and flickering by
+ * `hazeMove`), streaks of light that run along one edge at a time and fade
+ * behind themselves (`streakN` and the rest), and a bloom in the post pass
+ * that lets the lights spill past the edge (`hazeBloom`).
  */
 
 const PHOTOS = [photoA, photoB];
@@ -112,6 +117,11 @@ export interface VesselTune {
   ground: number; warmth: number;
   // distance (the distance step: time blurs the edges — the whole thing recedes into the air)
   haze: number; hazeBlur: number; hazePhoto: number; hazeMist: number; hazeSpread: number; hazeWash: number; hazeEdge: number;
+  hazeGlow: number; hazeBloom: number; hazeMove: number;
+  // the glow's light: the halo under the streaks, and the streaks that run along the edges
+  glowBase: number;
+  streakN: number; streakGain: number; streakSpeed: number; streakTail: number; streakHead: number;
+  streakLife: number; streakDuty: number; streakRound: number; streakUp: number; streakFlicker: number;
 }
 
 /** The two glass looks: frost patches on a toned shell, or the frame behind refracted. */
@@ -149,6 +159,10 @@ export const VESSEL_TUNE_DEFAULT: VesselTune = {
   pitch: PITCH, distance: 9, turn: TURN,
   ground: 0.5, warmth: 0.4,
   haze: unitParam("haze", 0), hazeBlur: 7, hazePhoto: 2.6, hazeMist: 0.5, hazeSpread: 0.16, hazeWash: 0.5, hazeEdge: 0.85,
+  hazeGlow: 0.5, hazeBloom: 0.6, hazeMove: 0.6,
+  glowBase: 0.5,
+  streakN: 3, streakGain: 1.6, streakSpeed: 0.35, streakTail: 1.4, streakHead: 0.18,
+  streakLife: 9, streakDuty: 0.6, streakRound: 0.3, streakUp: 0.4, streakFlicker: 0.35,
 };
 
 /* ───────── the backdrop, as the page and the canvas both draw it ───────── */
@@ -802,7 +816,28 @@ const GLASS_COMMON_GLSL = /* glsl */ `
   uniform float uHazeWash;
   uniform float uHazeMist;
   uniform float uHazeSpread;
+  uniform float uHazeGlow;
   uniform vec3 uAir;
+  /* the glow's life: seconds, how much the halo itself moves (0 is still), and
+     how much of the halo is there at all under the streaks */
+  uniform float uTime;
+  uniform float uGlowMove;
+  uniform float uGlowBase;
+  /* the streaks: runners of light along the form's edges — how many, how bright,
+     their speed (rad/s), the tail they leave (rad) and the soft front, how long
+     one lives (s) and for what part of that it is lit, the chance one runs round
+     the form itself rather than round the silhouette, the chance it runs up or
+     down one lobe, and how much it flickers along its length */
+  uniform float uStreakN;
+  uniform float uStreakGain;
+  uniform float uStreakSpeed;
+  uniform float uStreakTail;
+  uniform float uStreakHead;
+  uniform float uStreakLife;
+  uniform float uStreakDuty;
+  uniform float uStreakRound;
+  uniform float uStreakUp;
+  uniform float uStreakFlicker;
   varying vec3 vNormalW;
   varying vec3 vViewW;
   varying vec3 vModel;
@@ -817,6 +852,107 @@ const GLASS_COMMON_GLSL = /* glsl */ `
       mix(mix(gHash(i + vec3(0, 0, 1)), gHash(i + vec3(1, 0, 1)), f.x), mix(gHash(i + vec3(0, 1, 1)), gHash(i + vec3(1, 1, 1)), f.x), f.y),
       f.z);
   }
+  /* The illumination at a distance: a pale band of light just inside a surface's
+     silhouette — as a long exposure under water leaves a body's edge luminous —
+     brighter on the side the key is on, 0…1 before uHazeGlow. The band is a
+     bump in facing (dot(n, v)) peaking well inside the silhouette: facing goes
+     as the square root of the distance to the edge on screen, so a band set
+     near 0 is a one-pixel line and one peaking around .3 is a soft swell some
+     way in — wide enough that the mist shells' bands overlap and sum to one
+     halo instead of a ring each. width (0…1, the outer shells) pushes the peak
+     in and lets it run further.
+     It is alive, by uGlowMove: a breath over eight seconds that swells the band
+     outward as it brightens; a flow — light moving along the edge, as caustics
+     wander over a body under water — from a noise field drifting slowly round
+     the form; and a shimmer, finer and quicker and faint, so it flickers
+     rather than pulses. All of it is a function of the clock, nothing is
+     stored, and at 0 it is the still band.
+     Over that, the streaks (streaksAt): the light running along one edge at a
+     time and fading behind itself. */
+  const float PI2 = 6.2831853;
+  float wrapAngle(float a) { return mod(a + 3.14159265, PI2) - 3.14159265; }
+  /* A comet along its path: s is the signed distance from the head along the
+     path, positive ahead. A short soft front, and behind it a tail that fades
+     as it is left — exp, so it never quite ends. */
+  float comet(float s) { return s > 0.0 ? exp(-s / max(uStreakHead, .01)) : exp(s / max(uStreakTail, .01)); }
+  /* The streaks. Each runner has a life of its own length (uStreakLife, varied),
+     lit for uStreakDuty of it and rising and dying softly inside that; every
+     life starts from a new place, in a new direction, on a path chosen by the
+     seed — round the silhouette as seen (theta, the angle on screen about the
+     form's centre, so it is always on the edge), round the form itself (phi,
+     the model's azimuth: it goes behind and comes back), or up or down the form
+     (psi, the elevation) within a window of azimuth, so one lobe's edge lights
+     and not the others. Where a point lies on the path relative to the head
+     gives the comet; a slow noise along the length makes it flicker. Nothing
+     is stored: all of it is read off the clock. */
+  float streaksAt(float theta, float phi, float psi) {
+    float sum = 0.0;
+    for (int i = 0; i < 8; i++) {
+      if (float(i) >= uStreakN) break;
+      float fi = float(i) * 3.7 + uSeed * 11.0;
+      float period = uStreakLife * (.7 + .6 * gHash(vec3(fi, 1.3, 2.7)));
+      float tt = uTime / period + gHash(vec3(fi, 5.1, .4));
+      float life = floor(tt), u = fract(tt);
+      if (u > uStreakDuty) continue;
+      float p = u / max(uStreakDuty, .01);
+      float env = smoothstep(0.0, .18, p) * (1.0 - smoothstep(.55, 1.0, p));
+      // this life's draw: where it starts, which way, how fast, which path
+      float h0 = gHash(vec3(fi, life, 4.4)), h1 = gHash(vec3(fi, life, 8.8)), h2 = gHash(vec3(fi, life, 2.2));
+      float h3 = gHash(vec3(fi, life, 6.6)), h4 = gHash(vec3(fi, life, 9.9));
+      float dir = h1 < .5 ? -1.0 : 1.0;
+      float speed = uStreakSpeed * (.7 + .6 * h2);
+      float head = h0 * PI2 + dir * speed * u * period;
+      float along, window = 1.0;
+      if (h3 < uStreakUp) {
+        along = psi;
+        // up or down: start from the bottom or the top, and stay on one side of the form
+        head = -dir * 3.0 + dir * speed * 2.0 * u * period;
+        window = 1.0 - smoothstep(.45, 1.3, abs(wrapAngle(phi - h4 * PI2)));
+      } else if (h4 < uStreakRound) {
+        along = phi;
+      } else {
+        along = theta;
+      }
+      float s = wrapAngle(along - head) * dir;
+      float c = comet(s) * env * window;
+      // a flicker along the trail, slow and uneven, so the light is not one smooth comet
+      c *= 1.0 - uStreakFlicker * .8 * gNoise(vec3(along * 2.5, uTime * .6 + fi, psi * 1.5));
+      sum += c;
+    }
+    return sum;
+  }
+  float glowAt(float facing, vec3 n, float width) {
+    float m = uGlowMove;
+    float breath = sin(uTime * 0.785); // 2π / 8 s
+    float peak = mix(.3, .45, width) + m * .05 * breath;
+    float band = smoothstep(0.0, peak, facing) * (1.0 - smoothstep(peak, mix(.8, 1.0, width) + m * .06 * breath, facing));
+    // where the surface is seen nearly edge-on (a flat top from eye level) the band
+    // is only a pixel or two wide and the nested shells draw as stacked rings; the
+    // derivative of facing says how wide the band is on screen, and it lets go
+    // below a few pixels. Measured on the smooth normal: the mist's facing is
+    // flat per triangle near the edge, and its derivative would cut the band
+    // along every triangle's edge.
+    float smoothFacing = max(0.0, dot(n, normalize(vViewW)));
+    band *= 1.0 - smoothstep(.06, .2, fwidth(smoothFacing));
+    float lit = .6 + .6 * smoothstep(-.4, 1.0, dot(n, uKey)) * uKeyIntensity;
+    float flow = gNoise(vModel * 1.9 + vec3(uTime * .09, uTime * .05, -uTime * .07) + uSeed);
+    float shimmer = gNoise(vModel * 5.5 + vec3(0.0, uTime * .7, uTime * .4) + uSeed * 3.0);
+    float life = 1.0 + m * (.14 * breath + .7 * (flow - .5) + .3 * (shimmer - .5));
+    float halo = uGlowBase * max(0.0, life);
+    float streak = 0.0;
+    if (uStreakN > .5 && uStreakGain > 0.0) {
+      // the point's angle on screen about the form's centre, and its azimuth and elevation on the form
+      vec3 d = mat3(viewMatrix) * (vWorld - vCentre);
+      float theta = atan(d.y, d.x);
+      float phi = atan(vModel.z, vModel.x);
+      vec3 md = normalize(vModel);
+      float psi = asin(clamp(md.y, -1.0, 1.0)) * 2.0;
+      streak = streaksAt(theta, phi, psi) * uStreakGain;
+    }
+    return band * lit * uHazeGlow * (halo + streak);
+  }
+  /* What the glow is made of: whiter than the air, a touch cool. */
+  vec3 glowColor() { return mix(vec3(1.0, 1.0, 1.0), uAir, .25) * vec3(.985, 1.0, 1.01); }
   // how much frost sits here, 0–1
   float frostAt(vec3 dir) {
     float breath = 0.0;
@@ -862,6 +998,10 @@ export const glassFragment = /* glsl */ `
     alpha += spec * .7;
     color = mix(color, uAir, uHazeWash * .5);
     alpha *= 1.0 - uHazeWash * .25;
+    // the luminous edge
+    float glow = glowAt(facing, n, 0.0);
+    color = mix(color, glowColor(), clamp(glow * .6, 0.0, 1.0));
+    alpha += glow * .4;
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
@@ -980,17 +1120,24 @@ export const glassRefractFragment = /* glsl */ `
     // and the body fades toward the air
     color = mix(color, uAir, uHazeWash * .5);
     alpha *= 1.0 - uHazeWash * .25;
+    // the luminous edge, on the facing wall
+    float glow = glowAt(1.0 - g, n, 0.0) * (1.0 - back);
+    color = mix(color, glowColor(), clamp(glow * .6, 0.0, 1.0));
+    alpha += glow * .4;
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
 
-/* The mist: what gives the outline its softness at a distance. Three copies of
+/* The mist: what gives the outline its softness at a distance. Six copies of
    the glass stand off it along its normals, each a little further out
-   (uShell 0, .5, 1 → .3, .65, 1 of the reach), drawn as a pale veil the air's
-   colour that is thickest looking through the middle of each shell and thins to
-   nothing at its own edge — so the silhouette is no longer a line but a
-   gradient reaching past the glass, uneven as breath is. Drawn over the glass,
-   facing side only. Alpha carries the haze: nothing is drawn at 0. */
+   (uShell 0…1 → .2…1 of the reach), drawn as a pale veil the air's colour that
+   is thickest looking through the middle of each shell and thins to nothing at
+   its own edge — so the silhouette is no longer a line but a gradient reaching
+   past the glass, uneven as breath is. The shells also carry the glow, each a
+   band at its own edge weaker than the one inside it: six is enough that the
+   bands overlap on screen and sum to one halo (three left three rings). Drawn
+   over the glass, facing side only. Alpha carries the haze: nothing is drawn
+   at 0. */
 export const mistVertex = /* glsl */ `
   uniform float uHazeSpread;
   uniform float uShell;
@@ -1000,7 +1147,7 @@ export const mistVertex = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vCentre;
   void main() {
-    vec3 p = position + normal * uHazeSpread * mix(.3, 1.0, uShell);
+    vec3 p = position + normal * uHazeSpread * mix(.2, 1.0, uShell);
     vec4 world = modelMatrix * vec4(p, 1.0);
     vModel = position;
     vWorld = world.xyz;
@@ -1016,17 +1163,31 @@ export const mistFragment = /* glsl */ `
   void main() {
     vec3 n = normalize(vNormalW);
     vec3 v = normalize(vViewW);
-    float facing = max(0.0, dot(n, v));
+    // A shell swollen along smooth normals is not quite parallel to the glass where
+    // the form creases, so its real silhouette falls where the smooth normal still
+    // faces the eye a little — and the band, cut there, drew a hard contour round
+    // every shell. Near the edge the facing is taken from the surface as drawn
+    // (its screen-space derivatives), which does reach 0 at the silhouette.
+    vec3 nFlat = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    float flatFacing = abs(dot(nFlat, v));
+    float facing = mix(flatFacing, max(0.0, dot(n, v)), smoothstep(.1, .4, flatFacing));
     // flat through the middle, thinning to nothing toward the shell's own edge; the outer shells thin sooner
     float body = pow(smoothstep(0.0, .75, facing), 1.0 + uShell);
-    float uneven = .6 + .64 * (gNoise(vModel * 1.3 + uSeed + uShell * 5.0) * .7 + gNoise(vModel * 3.6 - uSeed) * .3);
+    // the fog drifts slowly round the form with the glow's movement
+    vec3 drift = vec3(uTime * .03, uTime * .02, 0.0) * uGlowMove;
+    float uneven = .6 + .64 * (gNoise(vModel * 1.3 + uSeed + uShell * 5.0 + drift) * .7 + gNoise(vModel * 3.6 - uSeed - drift) * .3);
     vec3 milk = uAir * (.97 + .05 * max(0.0, dot(n, uKey)) * uKeyIntensity) + .015;
-    float alpha = uHazeMist * .4 * body * uneven * mix(1.0, .5, uShell);
-    gl_FragColor = vec4(milk, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
+    float alpha = uHazeMist * .2 * body * uneven * mix(1.0, .5, uShell);
+    // each shell carries the luminous band toward its own edge — wider and fainter on
+    // the outer shells — so together they are a halo graded outward from the glass
+    float glow = glowAt(facing, n, uShell) * .5 * pow(1.0 - uShell * .92, 1.3) * (.8 + .2 * uneven);
+    vec3 color = mix(milk, glowColor(), clamp(glow * 1.2, 0.0, 1.0));
+    alpha += glow * .55;
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
 /** Where each shell stands, 0 nearest the glass. */
-export const MIST_SHELLS = [0, 0.5, 1] as const;
+export const MIST_SHELLS = [0, 0.2, 0.4, 0.6, 0.8, 1] as const;
 
 /* The frame behind everything, drawn in the canvas so the glass can refract
    it: three stops down the screen (the paper), or two meeting at a soft
@@ -1064,19 +1225,72 @@ export const blitFragment = /* glsl */ `
 /* The softness at a distance: the finished frame blurred, once across and once
    down (a 13-tap Gaussian, sigma 2.5 taps, uStep one tap in uv). The backdrop
    is a gradient and the ground is already soft, so only the vessel changes. */
-const blurFragment = /* glsl */ `
+const BLUR_TAPS_GLSL = /* glsl */ `
   uniform sampler2D tScene;
   uniform vec2 uStep;
   varying vec2 vUv;
+  const float W0 = .161, W1 = .1486, W2 = .1169, W3 = .0784, W4 = .0448, W5 = .0217, W6 = .0090;
+  vec4 blur13(vec2 uv) {
+    vec4 c = texture2D(tScene, uv) * W0;
+    c += (texture2D(tScene, uv + uStep) + texture2D(tScene, uv - uStep)) * W1;
+    c += (texture2D(tScene, uv + uStep * 2.0) + texture2D(tScene, uv - uStep * 2.0)) * W2;
+    c += (texture2D(tScene, uv + uStep * 3.0) + texture2D(tScene, uv - uStep * 3.0)) * W3;
+    c += (texture2D(tScene, uv + uStep * 4.0) + texture2D(tScene, uv - uStep * 4.0)) * W4;
+    c += (texture2D(tScene, uv + uStep * 5.0) + texture2D(tScene, uv - uStep * 5.0)) * W5;
+    c += (texture2D(tScene, uv + uStep * 6.0) + texture2D(tScene, uv - uStep * 6.0)) * W6;
+    return c;
+  }
+`;
+const blurFragment = /* glsl */ `
+  ${BLUR_TAPS_GLSL}
+  void main() { gl_FragColor = blur13(vUv); }
+`;
+
+/* The bleed at a distance, as a long exposure leaves a body's brights spilling
+   past its edge: what is lighter than the backdrop behind it (the stock, the
+   highlights, the glow) is taken out, blurred wide — once across here, once
+   down in the composite — and added back over the soft frame. The backdrop
+   is known (the same stops the backdrop quad draws), so on a pale frame the
+   bleed still belongs to the vessel and not to the paper. */
+const bloomExtractFragment = /* glsl */ `
+  ${BLUR_TAPS_GLSL}
+  uniform vec3 uStop0;
+  uniform vec3 uStop1;
+  uniform vec3 uStop2;
+  uniform float uAt1;
+  uniform float uAt2;
+  vec3 backdropAt(vec2 uv) {
+    float t = 1.0 - uv.y;
+    return t < uAt1
+      ? mix(uStop0, uStop1, clamp(t / max(uAt1, 1e-4), 0.0, 1.0))
+      : mix(uStop1, uStop2, clamp((t - uAt1) / max(uAt2 - uAt1, 1e-4), 0.0, 1.0));
+  }
+  vec3 excess(vec2 uv) {
+    vec3 c = texture2D(tScene, uv).rgb, b = backdropAt(uv);
+    float over = dot(c - b, vec3(.2126, .7152, .0722));
+    // a soft knee, so only what is clearly lighter than the air behind it bleeds
+    return max(c - b, 0.0) * smoothstep(.02, .12, over);
+  }
   void main() {
-    vec4 c = texture2D(tScene, vUv) * .161;
-    c += (texture2D(tScene, vUv + uStep) + texture2D(tScene, vUv - uStep)) * .1486;
-    c += (texture2D(tScene, vUv + uStep * 2.0) + texture2D(tScene, vUv - uStep * 2.0)) * .1169;
-    c += (texture2D(tScene, vUv + uStep * 3.0) + texture2D(tScene, vUv - uStep * 3.0)) * .0784;
-    c += (texture2D(tScene, vUv + uStep * 4.0) + texture2D(tScene, vUv - uStep * 4.0)) * .0448;
-    c += (texture2D(tScene, vUv + uStep * 5.0) + texture2D(tScene, vUv - uStep * 5.0)) * .0217;
-    c += (texture2D(tScene, vUv + uStep * 6.0) + texture2D(tScene, vUv - uStep * 6.0)) * .0090;
-    gl_FragColor = c;
+    vec3 c = excess(vUv) * W0;
+    c += (excess(vUv + uStep) + excess(vUv - uStep)) * W1;
+    c += (excess(vUv + uStep * 2.0) + excess(vUv - uStep * 2.0)) * W2;
+    c += (excess(vUv + uStep * 3.0) + excess(vUv - uStep * 3.0)) * W3;
+    c += (excess(vUv + uStep * 4.0) + excess(vUv - uStep * 4.0)) * W4;
+    c += (excess(vUv + uStep * 5.0) + excess(vUv - uStep * 5.0)) * W5;
+    c += (excess(vUv + uStep * 6.0) + excess(vUv - uStep * 6.0)) * W6;
+    gl_FragColor = vec4(c, 1.0);
+  }
+`;
+const bloomCompositeFragment = /* glsl */ `
+  ${BLUR_TAPS_GLSL}
+  uniform sampler2D tBase;
+  uniform float uBloom;
+  void main() {
+    vec4 base = texture2D(tBase, vUv);
+    vec3 bleed = blur13(vUv).rgb * vec3(.985, 1.0, 1.01);
+    // screened in, not added: the lights go toward white and do not clip
+    gl_FragColor = vec4(1.0 - (1.0 - base.rgb) * (1.0 - clamp(bleed * uBloom, 0.0, 1.0)), base.a);
   }
 `;
 
@@ -1200,7 +1414,21 @@ export function createGlassUniformSet(scene: THREE.Texture) {
     uHazeWash: { value: 0 },
     uHazeMist: { value: 0 },
     uHazeSpread: { value: 0 },
+    uHazeGlow: { value: 0 },
     uAir: { value: new THREE.Vector3(0.9, 0.9, 0.9) },
+    uTime: { value: 0 },
+    uGlowMove: { value: 0 },
+    uGlowBase: { value: 1 },
+    uStreakN: { value: 0 },
+    uStreakGain: { value: 0 },
+    uStreakSpeed: { value: 0 },
+    uStreakTail: { value: 1 },
+    uStreakHead: { value: 0.1 },
+    uStreakLife: { value: 8 },
+    uStreakDuty: { value: 0.5 },
+    uStreakRound: { value: 0 },
+    uStreakUp: { value: 0 },
+    uStreakFlicker: { value: 0 },
   };
 }
 export type GlassUniformSet = ReturnType<typeof createGlassUniformSet>;
@@ -1273,6 +1501,19 @@ export function writeGlassUniforms(u: GlassUniformSet, w: GlassWrite) {
   u.uHazeWash.value = tune.haze * tune.hazeWash;
   u.uHazeMist.value = tune.haze * tune.hazeMist;
   u.uHazeSpread.value = tune.hazeSpread;
+  u.uHazeGlow.value = tune.haze * tune.hazeGlow;
+  u.uGlowMove.value = tune.hazeMove;
+  u.uGlowBase.value = tune.glowBase;
+  u.uStreakN.value = Math.round(tune.streakN);
+  u.uStreakGain.value = tune.streakGain;
+  u.uStreakSpeed.value = tune.streakSpeed;
+  u.uStreakTail.value = tune.streakTail;
+  u.uStreakHead.value = tune.streakHead;
+  u.uStreakLife.value = tune.streakLife;
+  u.uStreakDuty.value = tune.streakDuty;
+  u.uStreakRound.value = tune.streakRound;
+  u.uStreakUp.value = tune.streakUp;
+  u.uStreakFlicker.value = tune.streakFlicker;
   u.uAir.value.set(w.air[0], w.air[1], w.air[2]);
   u.uKey.value.copy(w.key);
   u.uKeyIntensity.value = tune.keyIntensity;
@@ -1371,30 +1612,36 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
      drawn straight. The backdrop is a quad in the scene so it is in the
      target too. At a distance (haze × hazeBlur > 0) the finished frame goes
      to a second target instead and reaches the screen through the blur, once
-     across into `pong` and once down. */
+     across into `pong` and once down; with a bloom as well the soft frame
+     lands in `soft`, what is lighter than the backdrop is taken out of it and
+     blurred three times as wide, and the two are screened together. */
+  const backdropUniforms = useMemo(() => ({
+    uStop0: { value: new THREE.Color() }, uStop1: { value: new THREE.Color() }, uStop2: { value: new THREE.Color() },
+    uAt1: { value: 0.5 }, uAt2: { value: 1 },
+  }), []);
   const pass = useMemo(() => {
     const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
     const frame = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
     const pong = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false, stencilBuffer: false });
-    const blit = new THREE.ShaderMaterial({
-      vertexShader: backdropVertex, fragmentShader: blitFragment,
-      uniforms: { tScene: { value: target.texture } },
-      depthTest: false, depthWrite: false, blending: THREE.NoBlending,
-    });
-    const blur = new THREE.ShaderMaterial({
-      vertexShader: backdropVertex, fragmentShader: blurFragment,
-      uniforms: { tScene: { value: frame.texture }, uStep: { value: new THREE.Vector2() } },
-      depthTest: false, depthWrite: false, blending: THREE.NoBlending,
-    });
+    const soft = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false, stencilBuffer: false });
+    const flat = { depthTest: false, depthWrite: false, blending: THREE.NoBlending, vertexShader: backdropVertex };
+    const blit = new THREE.ShaderMaterial({ ...flat, fragmentShader: blitFragment, uniforms: { tScene: { value: target.texture } } });
+    const blur = new THREE.ShaderMaterial({ ...flat, fragmentShader: blurFragment,
+      uniforms: { tScene: { value: frame.texture }, uStep: { value: new THREE.Vector2() } } });
+    const extract = new THREE.ShaderMaterial({ ...flat, fragmentShader: bloomExtractFragment,
+      uniforms: { ...backdropUniforms, tScene: { value: frame.texture }, uStep: { value: new THREE.Vector2() } } });
+    const composite = new THREE.ShaderMaterial({ ...flat, fragmentShader: bloomCompositeFragment,
+      uniforms: { tScene: { value: pong.texture }, tBase: { value: frame.texture }, uStep: { value: new THREE.Vector2() }, uBloom: { value: 0 } } });
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blit);
     quad.frustumCulled = false;
     const scene = new THREE.Scene();
     scene.add(quad);
     const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    return { target, frame, pong, blit, blur, quad, scene, ortho };
-  }, []);
+    return { target, frame, pong, soft, blit, blur, extract, composite, quad, scene, ortho };
+  }, [backdropUniforms]);
   useEffect(() => () => {
-    pass.target.dispose(); pass.frame.dispose(); pass.pong.dispose(); pass.blit.dispose(); pass.blur.dispose(); pass.quad.geometry.dispose();
+    pass.target.dispose(); pass.frame.dispose(); pass.pong.dispose(); pass.soft.dispose();
+    pass.blit.dispose(); pass.blur.dispose(); pass.extract.dispose(); pass.composite.dispose(); pass.quad.geometry.dispose();
   }, [pass]);
   useEffect(() => {
     const dpr = gl.getPixelRatio();
@@ -1402,12 +1649,16 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     pass.target.setSize(w, h);
     pass.frame.setSize(w, h);
     pass.pong.setSize(w, h);
+    pass.soft.setSize(w, h);
   }, [pass, gl, size]);
   const blurPx = tune.haze * tune.hazeBlur;
+  const bloom = tune.haze * tune.hazeBloom;
   useFrame(({ gl: renderer, scene, camera: view }) => {
     // the softness in device pixels; under a quarter pixel the frame goes straight to the screen
-    const px = blurPx * renderer.getPixelRatio();
-    const out = px > 0.25 ? pass.frame : null;
+    const dpr = renderer.getPixelRatio();
+    const px = blurPx * dpr;
+    const soften = px > 0.25, bleed = bloom > 0.005;
+    const out = soften || bleed ? pass.frame : null;
     if (mode !== "refract") {
       view.layers.enableAll();
       renderer.setRenderTarget(out);
@@ -1427,26 +1678,42 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
       renderer.autoClear = true;
       view.layers.enableAll();
     }
-    if (out) {
+    const w = pass.frame.width, h = pass.frame.height;
+    // the soft frame: blurred into `soft` when a bloom follows, else straight to the screen
+    let base: THREE.Texture = pass.frame.texture;
+    if (soften) {
       const step = px / 6;
       pass.quad.material = pass.blur;
       pass.blur.uniforms.tScene.value = pass.frame.texture;
-      pass.blur.uniforms.uStep.value.set(step / pass.frame.width, 0);
+      pass.blur.uniforms.uStep.value.set(step / w, 0);
       renderer.setRenderTarget(pass.pong);
       renderer.render(pass.scene, pass.ortho);
       pass.blur.uniforms.tScene.value = pass.pong.texture;
-      pass.blur.uniforms.uStep.value.set(0, step / pass.frame.height);
+      pass.blur.uniforms.uStep.value.set(0, step / h);
+      renderer.setRenderTarget(bleed ? pass.soft : null);
+      renderer.render(pass.scene, pass.ortho);
+      base = pass.soft.texture;
+    }
+    if (bleed) {
+      // the bleed reaches three times as far as the softness, and at least a dozen pixels
+      const step = Math.max(px, 4 * dpr) * 3 / 6;
+      pass.quad.material = pass.extract;
+      pass.extract.uniforms.tScene.value = base;
+      pass.extract.uniforms.uStep.value.set(step / w, 0);
+      renderer.setRenderTarget(pass.pong);
+      renderer.render(pass.scene, pass.ortho);
+      pass.quad.material = pass.composite;
+      pass.composite.uniforms.tScene.value = pass.pong.texture;
+      pass.composite.uniforms.tBase.value = base;
+      pass.composite.uniforms.uStep.value.set(0, step / h);
+      pass.composite.uniforms.uBloom.value = bloom;
       renderer.setRenderTarget(null);
       renderer.render(pass.scene, pass.ortho);
-      pass.quad.material = pass.blit;
     }
+    pass.quad.material = pass.blit;
     renderer.setRenderTarget(null);
   }, 1);
 
-  const backdropUniforms = useMemo(() => ({
-    uStop0: { value: new THREE.Color() }, uStop1: { value: new THREE.Color() }, uStop2: { value: new THREE.Color() },
-    uAt1: { value: 0.5 }, uAt2: { value: 1 },
-  }), []);
   backdrop.stops.forEach((s, i) => (backdropUniforms[`uStop${i}` as "uStop0"].value as THREE.Color).setRGB(s[0] / 255, s[1] / 255, s[2] / 255));
   backdropUniforms.uAt1.value = backdrop.at[0];
   backdropUniforms.uAt2.value = backdrop.at[1];
@@ -1509,7 +1776,9 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
      through and then against the light. Yaw is the slow turn plus the drag;
      pitch and distance are knobs (the drag writes pitch too). */
   const { turn, pitch, distance, ground } = tune;
-  useFrame((_, dt) => {
+  useFrame(({ clock }, dt) => {
+    // the glow's clock; the lab's frame loop is always running, so it breathes while everything else is still
+    for (const g of glassUniformSets) g.uTime.value = clock.elapsedTime;
     let y = yaw.current;
     if (!held.current) y += turn * Math.min(dt, 0.1);
     y += drag.current ?? 0;
@@ -1549,7 +1818,7 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
           vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={g} />
       </mesh>}
       {/* the mist stands off the glass, over everything, and only at a distance */}
-      {show !== "sheet" && <Mist geometry={glass.geometry} uniforms={g} layer={refract ? FRONT_LAYER : 0} renderOrder={base + 3} on={tune.haze * tune.hazeMist > 0} />}
+      {show !== "sheet" && <Mist geometry={glass.geometry} uniforms={g} layer={refract ? FRONT_LAYER : 0} renderOrder={base + 3} on={tune.haze * (tune.hazeMist + tune.hazeGlow) > 0} />}
     </>;
   };
 
@@ -1586,6 +1855,24 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "hazeSpread", label: "mist reach", min: 0, max: 0.5, step: 0.005 },
     { key: "hazeWash", label: "fades into the air", min: 0, max: 1, step: 0.01 },
     { key: "hazeEdge", label: "edges let go  (rim lines, cuts, gloss)", min: 0, max: 1, step: 0.01 },
+  ] },
+  // the light at the edges of a receded memory: a halo, and streaks of light that
+  // run along one edge at a time and fade behind themselves. All of it scaled by the haze.
+  { group: "glow", knobs: [
+    { key: "hazeGlow", label: "glow  (the light at the edges; 0 is none)", min: 0, max: 1, step: 0.01 },
+    { key: "glowBase", label: "halo  (the steady band under the streaks)", min: 0, max: 1, step: 0.01 },
+    { key: "hazeMove", label: "halo moves  (breath, flow, shimmer; 0 is still)", min: 0, max: 1, step: 0.01 },
+    { key: "hazeBloom", label: "bleed  (the lights spill past the edge)", min: 0, max: 2, step: 0.01 },
+    { key: "streakN", label: "streaks  (runners of light along the edges)", min: 0, max: 8, step: 1 },
+    { key: "streakGain", label: "streak brightness", min: 0, max: 4, step: 0.05 },
+    { key: "streakSpeed", label: "streak speed  rad/s", min: 0.05, max: 2, step: 0.01 },
+    { key: "streakTail", label: "tail  rad  (how far behind it the light lingers)", min: 0.1, max: 3.2, step: 0.02 },
+    { key: "streakHead", label: "front  rad  (how soft its leading edge is)", min: 0.02, max: 0.8, step: 0.01 },
+    { key: "streakLife", label: "one life  s", min: 2, max: 24, step: 0.5 },
+    { key: "streakDuty", label: "lit for  (the part of a life it is seen; the rest is dark)", min: 0.1, max: 1, step: 0.01 },
+    { key: "streakUp", label: "runs up or down one lobe  (chance)", min: 0, max: 1, step: 0.01 },
+    { key: "streakRound", label: "else runs round the form, not the silhouette  (chance)", min: 0, max: 1, step: 0.01 },
+    { key: "streakFlicker", label: "flicker along the trail", min: 0, max: 1, step: 0.01 },
   ] },
   { group: "glass", knobs: [
     { key: "frostPatches", label: "frost patches", min: 0, max: 3, step: 1 },

@@ -192,8 +192,10 @@ function VesselObject({
   }, [photoUrl, sheetU, invalidate]);
 
   const refract = glassMode === "refract";
-  useFrame(({ gl: renderer, scene, camera: view }, dt) => {
+  useFrame(({ gl: renderer, scene, camera: view, clock }, dt) => {
     if (focused && !still) yaw.current += tune.turn * Math.min(dt, 0.1);
+    // the glow's clock: it moves only while the seat's frameloop runs (focused or moving); a still seat holds its frame
+    glassU.uTime.value = clock.elapsedTime;
     const y = yaw.current, p = (pitch.current * Math.PI) / 180, d = built.distance;
     camera.position.set(-Math.sin(y) * Math.cos(p) * d, LOOK_Y + Math.sin(p) * d, Math.cos(y) * Math.cos(p) * d);
     camera.lookAt(0, LOOK_Y, 0);
@@ -230,7 +232,7 @@ function VesselObject({
         vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={glassU} />
     </mesh>
     {/* the distance's mist, as the editor shows it (the editor's post blur is the lab's own and is not drawn here) */}
-    <Mist geometry={built.glass.geometry} uniforms={glassU} layer={refract ? FRONT_LAYER : 0} renderOrder={3} on={tune.haze * tune.hazeMist > 0} />
+    <Mist geometry={built.glass.geometry} uniforms={glassU} layer={refract ? FRONT_LAYER : 0} renderOrder={3} on={tune.haze * (tune.hazeMist + tune.hazeGlow) > 0} />
   </>;
 }
 

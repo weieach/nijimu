@@ -374,7 +374,7 @@ second target and reaches the screen through a separable 13-tap Gaussian,
 `blurFragment`, `frame` → `pong` → screen), `hazePhoto` (mip levels added to
 `filmLook`'s bias on both faces; `lookFor` also pushes the dye's `soft` to 1
 with it and, with the wash, lowers contrast and saturation and lifts the
-blacks), `hazeMist` / `hazeSpread` (the mist: three copies of the glass stood
+blacks), `hazeMist` / `hazeSpread` (the mist: six copies of the glass stood
 off it along its normals, `mistVertex`/`mistFragment`, `MIST_SHELLS`, the
 `Mist` component — a veil the air's colour, flat through each shell's middle
 and thinning to nothing at its own edge, uneven as breath, drawn FrontSide
@@ -397,6 +397,85 @@ defaults (blur 7, photo 2.6, mist .5, reach .16, wash .5, edge .85), whether
 the mist should be denser toward the surface or more even, and whether a
 hazed memory in the gallery wants the post blur too (a premultiplied blur on
 the seat's transparent canvas; not built).
+
+**The illumination (2026-10-04, night).** The user's reference: a long
+exposure of fish under water — the body's edge luminous, the brights
+bleeding past a soft outline — asked for as a faint pale glow in a layer or
+ring outside the 3D, and then asked to move: flicker, breath, flow. Three
+knobs in the distance group, each scaled by the haze. `hazeGlow`: a band of
+light inside the silhouette of the glass (both looks, the facing wall) and of
+every mist shell — `glowAt(facing, n, width)` in `GLASS_COMMON_GLSL`, a bump
+in `facing` peaking at .3 (.45 on the outer shells), `glowColor()` whiter
+than the air and a touch cool, lit toward the key. Two things learned
+building it: facing goes as the square root of the screen distance to the
+edge, so a band set near facing 0 is a one-pixel line and each shell drew a
+ring (three rings at first) — peaking it well inside the edge, where the
+shells overlap, sums them to one halo, and six shells (`MIST_SHELLS`, the
+per-shell mist alpha halved to keep the fog the same) are enough for that;
+and a shell swollen along smooth normals is not parallel to a creased form,
+so its real silhouette fell where the smooth normal still faced the eye and
+the band was cut there into a hard contour — `mistFragment` now takes its
+facing near the edge from the surface as drawn (`dFdx`/`dFdy` of `vWorld`),
+which does reach 0 at the silhouette; a sphere was clean either way, the
+flower showed it. `hazeMove` (0 is still): inside `glowAt`, by `uTime` and
+`uGlowMove` — a breath over eight seconds that swells the band outward as it
+brightens (±.14, the peak ±.05), a flow (value noise over the model drifting
+slowly, ±.35 — light wandering along the edge as caustics do), a shimmer
+(finer, quicker, ±.15), and the mist's unevenness drifting with it; a pure
+function of the clock. The lab's orbit loop writes the clock every frame; the
+seat writes it in its own loop, so in the gallery the glow moves only while
+the seat's frameloop runs (focused or moving) and a still seat holds its
+frame. `hazeBloom` (lab only): a post pass after the blur —
+`bloomExtractFragment` takes what is brighter than the known backdrop
+gradient at each pixel (`excess`, so the frame itself never blooms) and
+blurs it wide, `bloomCompositeFragment` screens it back over the soft frame
+(`frame` → `pong` → `soft` → `pong` → screen; `BLUR_TAPS_GLSL` is the shared
+13-tap kernel). The seat draws the glow and its movement but not the bloom.
+Seen: at the defaults (glow .5, move .6, bloom .6) on the sphere a single
+soft halo brightest at the edge, on the flower the same once the contour fix
+was in; the first frames compared 2.5 s apart differ, so it breathes. Not yet
+judged by the user: the defaults, the breath's eight seconds, whether the
+shimmer is too quick for the room, and whether the gallery wants the bloom
+(it would be the same two passes per seat canvas).
+
+**The streaks (2026-10-04, later that night).** The user asked for the light
+to be finer and richer: light seen running along the form's different edges,
+not all edges at once — some places, at random, with a trail that fades
+behind it. The glow has its own knob group now ("glow", after "distance":
+`hazeGlow`, `glowBase`, `hazeMove`, `hazeBloom` moved there, and the
+streaks). `glowAt` is `band · lit · uHazeGlow · (glowBase · halo + streaks)`:
+`glowBase` is how much of the steady halo is there under the streaks (0
+leaves only the runners), and `streaksAt(theta, phi, psi)` in
+`GLASS_COMMON_GLSL` is up to eight runners (`streakN`), each with a life of
+its own length (`streakLife` s, varied ±30%) lit for `streakDuty` of it and
+rising and dying softly inside that, every life drawn fresh from the clock —
+a new start, direction, speed and path — so nothing is stored and the seat's
+demand frameloop can hold or resume it. The path is one of three, chosen per
+life: round the silhouette as seen (theta, the angle on screen about the
+form's centre from `viewMatrix`, so it is always on the edge), round the form
+itself (phi, the model azimuth: it goes behind and comes back; chance
+`streakRound`), or up or down the form (psi, the elevation, started from the
+bottom or top) inside a window of azimuth, so one lobe's edge lights and not
+the others (chance `streakUp`, tried first). Along the path each point is a
+`comet(s)`: a short soft front ahead of the head (`streakHead` rad) and an
+exponential tail behind it (`streakTail` rad) — the fade after it has
+passed; `streakSpeed` rad/s; `streakFlicker` a slow noise along the trail;
+`streakGain` its brightness over the halo (it can pass 1, the mixes are
+clamped). Two fixes came with it: where a surface is seen nearly edge-on
+(the flower's flat top from eye level) the band is a pixel wide and the six
+shells drew as stacked rings when a streak passed — the band now lets go
+where `fwidth` of the smooth facing says it is under a few pixels wide
+(measured on the smooth normal: the mist's flat facing is constant per
+triangle and its derivative cut the band along every triangle edge the first
+time). Defaults: base .5, 3 streaks, gain 1.6, speed .35, tail 1.4, front
+.18, life 9 s, duty .6, up .4, round .3, flicker .35. Seen in two CDP
+captures 10 s apart: one edge lit and the rest dark, then the light moved on
+and another runner began at the foot. The user was tuning the panel live
+(tail to its maximum, lit-for 1) as this was written; nothing of theirs is
+in the defaults yet. Not judged: the defaults, whether three paths are the
+right three, the Cursor browser could not confirm motion by canvas
+read-back (frames read identical while rAF ran at 52/s; `Page.captureScreenshot`
+could).
 
 The lab is one shot, not the live route. Do not wire it in until asked.
 
