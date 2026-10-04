@@ -1,0 +1,1577 @@
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import * as THREE from "three";
+import { CHROME_GRAY } from "../lib/colors";
+import { META, NOTE_SIZE, SANS, SERIF, TITLE } from "../lib/theme";
+import { TextButton } from "../components/TextButton";
+import { FILM_LOOK_DEFAULT, FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto, setFilmLook, type FilmLook } from "../lib/filmLook";
+import { SHEET_GLSL, STOCKS, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, setStock, sheetUniforms, stockHex } from "./filmStrip";
+import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
+import {
+  ARTIFACT_CATEGORIES, computeMeshNormals, createArtifactForm, type ArtifactCategory, type ArtifactForm,
+} from "../lib/superformula";
+import photoA from "../../assets/memory-photo.jpg";
+import photoB from "../../assets/memory-photo-02.png";
+
+/*
+ * Lab: the memory as a glass vessel, with the film tucked inside. A still
+ * life of the end state under a new idea — one form of thin, almost clear
+ * glass, and pressed loosely along its inner wall the 35mm strip from the
+ * film lab, carrying the photo. Nothing moves but a slow turn; hold to stop
+ * it, drag to turn it yourself. The photo is a thing inside the glass, not a
+ * map on its surface. Sliders down the right; "copy values" puts them on the
+ * clipboard as VESSEL_TUNE_DEFAULT would be written.
+ *
+ * Five layers, outside to inside, each doing one thing: the glass shell
+ * (Fresnel rim, uneven thickness, frost in two or three patches, a seed
+ * bubble or two); the gap (air pockets where the sheet touches the wall); the
+ * sheet (the film lab's strip on the curved wall, a fold or two, one end
+ * lifting); the image (the photo as dye through filmLook, deeper than the
+ * film lab has it, bled at one corner; mirrored and dimmer from behind); and
+ * one key light behind-above, shared by glass and sheet. One diffuser per
+ * stack: the glass softens, so the sheet is clearer and harder-edged here.
+ *
+ * The sheet has two builds, switched in the panel (?sheet=pressed|draped):
+ * pressed is the glass's own wall as a decal (arc, band, lift, fold scale);
+ * draped is its own cloth — a strip of true mm hung from one place on the
+ * wall, pressed for `contact` mm, then peeling toward the inside over `sag`
+ * by `peel` degrees, curling across and twisting, settled as soft cloth
+ * against the wall with `gap` of air (buildDrapedSheet, the "drape" knob
+ * group; `soft` is its bending stiffness, 0 crisp), and drawn as gauze or
+ * soaked paper rather than film (the "feel" group: sheer, furred edge,
+ * sheen, gloss, grain — neutral when pressed).
+ *
+ * ?morph= (0–1) sets how far the form has grown from its sphere, ?frost= the
+ * strength the frost knob opens at, ?form= the seed the form is drawn from,
+ * ?category= its category, ?yaw= the turn it opens at in degrees (180 is
+ * the far face), ?turn= the turn speed (0 holds it still), ?photo=0|1 the
+ * bundled still, or an image URL, ?glass=frost the first glass look (the
+ * refracting one is the default), ?show=glass|sheet one layer alone,
+ * ?sheet=draped the hanging sheet (pressed is the default), ?face=glass the
+ * strip turned over so its picture side faces the wall (inside is the default).
+ */
+
+const PHOTOS = [photoA, photoB];
+
+const PARAMS = new URLSearchParams(window.location.search);
+const unitParam = (key: string, fallback: number) => {
+  const v = Number(PARAMS.get(key));
+  return PARAMS.has(key) && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback;
+};
+const MORPH = unitParam("morph", 0.6);
+const FORM_SEED = PARAMS.get("form") ?? "vessel";
+const CATEGORY = (ARTIFACT_CATEGORIES as readonly string[]).includes(PARAMS.get("category") ?? "")
+  ? (PARAMS.get("category") as ArtifactCategory) : undefined;
+/** The turn the form opens at, degrees; 0 faces the strip, 180 shows its far face. */
+const YAW = ((Number(PARAMS.get("yaw")) || 0) * Math.PI) / 180;
+/** The turn speed the lab opens at, rad/s; ?turn=0 holds it still for a comparison. */
+const TURN = PARAMS.has("turn") && Number.isFinite(Number(PARAMS.get("turn"))) ? Math.max(0, Number(PARAMS.get("turn"))) : 0.06;
+
+export interface VesselTune {
+  // glass
+  frostPatches: number; frostSize: number; frostStrength: number; rim: number; thickness: number; bubbles: number;
+  // sheet
+  inset: number; arc: number; band: number; lift: number; foldScale: number; stock: number;
+  stockThick: number; stockThin: number; wear: number; backFace: number; holeRim: number;
+  // drape (the second sheet: its own cloth, hung from the wall)
+  sheetSize: number; anchorAngle: number; anchorHeight: number; tilt: number; contact: number;
+  sag: number; peel: number; curl: number; twist: number; gap: number; soft: number;
+  // feel (the draped sheet's material: gauze or soaked paper rather than film)
+  sheer: number; softRim: number; sheen: number; gloss: number; grain: number;
+  // dye
+  dyeLift: number; dyeContrast: number; dyeShoulder: number; dyeSaturation: number; dyeGrain: number;
+  dyeSoft: number; dyeExposure: number; dyeLeak: number; photoOpacity: number; bleed: number;
+  // refraction (the second glass look)
+  envAbove: number; envBelow: number; horizon: number; horizonSoft: number;
+  bend: number; glassSoft: number; bodyAlpha: number; thickDark: number; highlight: number;
+  // light
+  keyAzimuth: number; keyElevation: number; keyIntensity: number;
+  // scene
+  turn: number; ground: number; warmth: number;
+}
+
+/** The two glass looks: frost patches on a toned shell, or the frame behind refracted. */
+export type GlassMode = "frost" | "refract";
+const GLASS_MODE: GlassMode = PARAMS.get("glass") === "frost" ? "frost" : "refract";
+/** Which layers are drawn, to judge the vessel and the sheet apart before together. */
+export type Show = "both" | "glass" | "sheet";
+const SHOW: Show = PARAMS.get("show") === "glass" || PARAMS.get("show") === "sheet" ? (PARAMS.get("show") as Show) : "both";
+/** The two sheets: pressed along the wall (the glass inset, a relief of folds), or
+    draped — its own cloth, hung from a line of contact, curling away from the wall. */
+export type SheetMode = "pressed" | "draped";
+const SHEET_MODE: SheetMode = PARAMS.get("sheet") === "draped" ? "draped" : "pressed";
+/** Which side of the sheet carries the emulsion — the near face (sharp, lit, the
+    picture the right way round): facing the inside of the vessel, or turned
+    over to face the glass wall. */
+export type SheetFace = "inside" | "glass";
+const SHEET_FACE: SheetFace = PARAMS.get("face") === "glass" ? "glass" : "inside";
+
+/** What the lab opens with. */
+export const VESSEL_TUNE_DEFAULT: VesselTune = {
+  frostPatches: 2, frostSize: 0.85, frostStrength: unitParam("frost", GLASS_MODE === "refract" ? 0.15 : 0.4), rim: 1.0, thickness: 0.5, bubbles: 1,
+  inset: 0.92, arc: 211, band: 1.2, lift: 0.048, foldScale: 1.7, stock: 0,
+  stockThick: 0.6, stockThin: 0.4, wear: 1.16, backFace: 0.44, holeRim: 0.55,
+  sheetSize: 2.26, anchorAngle: 180, anchorHeight: 1.0, tilt: 2, contact: 30.5,
+  sag: 21, peel: 69, curl: 0.35, twist: 15, gap: 0.03, soft: 0.7,
+  sheer: 0.8, softRim: 0.35, sheen: 0.35, gloss: 0.15, grain: 0.04,
+  dyeLift: 0.04, dyeContrast: 0.96, dyeShoulder: 0.5, dyeSaturation: 0.9, dyeGrain: 0.03,
+  dyeSoft: 0.3, dyeExposure: 0.01, dyeLeak: 0.3, photoOpacity: 0.8, bleed: 0.53,
+  envAbove: 0.3, envBelow: 0.9, horizon: 0.06, horizonSoft: 0.35,
+  bend: 0.8, glassSoft: 0.6, bodyAlpha: 0.85, thickDark: 0.5, highlight: 0.7,
+  keyAzimuth: -32, keyElevation: 64, keyIntensity: 1.08,
+  turn: TURN, ground: 0.5, warmth: 0.4,
+};
+
+/* ───────── the backdrop, as the page and the canvas both draw it ───────── */
+
+const mixHex = (a: string, b: string, t: number) => {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (s: number) => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t);
+  return [ch(16), ch(8), ch(0)] as const;
+};
+const rgb = (c: readonly [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+const envGrey = (l: number, warmth: number): readonly [number, number, number] => {
+  const tint = [0.975 + 0.045 * warmth, 1, 1.02 - 0.045 * warmth];
+  return [0, 1, 2].map((i) => Math.round(Math.min(1, l * tint[i]) * 255)) as unknown as readonly [number, number, number];
+};
+/* Where a ray at the horizon's slope lands on screen follows from the camera
+   (y .6 looking at −.05, fov 18). */
+const CAMERA_Z = 9.0;
+const CAMERA_TILT = Math.atan2(-0.05 - 0.6, CAMERA_Z);
+const HALF_TAN = Math.tan((18 / 2) * (Math.PI / 180));
+
+interface Backdrop { stops: [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]]; at: [number, number] }
+/** The film lab's paper, leaning warmer with the knob; or the refraction look's room. */
+function backdropFor(t: VesselTune, mode: GlassMode): Backdrop {
+  if (mode === "refract") {
+    const above = envGrey(t.envAbove, t.warmth), below = envGrey(t.envBelow, t.warmth);
+    const centre = 0.5 - (Math.asin(Math.max(-1, Math.min(1, t.horizon))) - CAMERA_TILT) / (2 * HALF_TAN);
+    const soft = t.horizonSoft / (2 * HALF_TAN);
+    return { stops: [above, above, below], at: [Math.max(0, centre - soft), Math.min(1, centre + soft)] };
+  }
+  const w = t.warmth;
+  return { stops: [mixHex("#ededE8", "#efebe6", w), mixHex("#e4e6e3", "#e8e4df", w), mixHex("#d6dcd9", "#ddd8d2", w)], at: [0.5, 1] };
+}
+const backdropCss = ({ stops, at }: Backdrop) =>
+  `linear-gradient(${rgb(stops[0])}, ${rgb(stops[1])} ${(at[0] * 100).toFixed(1)}%, ${rgb(stops[2])} ${(at[1] * 100).toFixed(1)}%)`;
+
+/** The film lab's look with the vessel's dye knobs written over it. */
+function lookFor(t: VesselTune): FilmLook {
+  return {
+    ...FILM_LOOK_DEFAULT,
+    bloom: 0.3, halation: 0.1, mottle: 0.25, vignette: 0.1,
+    lift: t.dyeLift, contrast: t.dyeContrast, shoulder: t.dyeShoulder, saturation: t.dyeSaturation,
+    grain: t.dyeGrain, soft: t.dyeSoft, exposure: t.dyeExposure, leak: t.dyeLeak,
+  };
+}
+
+/* ───────── geometry ───────── */
+
+const easeMorph = (m: number) => m * m * (3 - 2 * m);
+const smooth01 = (t: number) => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
+const hash2 = (x: number, y: number) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+function vnoise(x: number, y: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  let fx = x - ix, fy = y - iy;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+}
+
+interface Glass {
+  geometry: THREE.BufferGeometry;
+  positions: Float32Array;
+  normals: Float32Array;
+  index: ArrayLike<number>;
+  lo: number;
+  hi: number;
+}
+
+/** The form grown to `morph` from its sphere, as the descent writes it. */
+function buildGlass(form: ArtifactForm, morph: number): Glass {
+  const { geometry, rest } = createArtifactGeometry(form);
+  const pos = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const positions = pos.array as Float32Array;
+  const e = easeMorph(morph);
+  for (let i = 0; i < positions.length; i++) positions[i] = rest.sphere[i] + (rest.positions[i] - rest.sphere[i]) * e;
+  pos.needsUpdate = true;
+  const nrm = geometry.getAttribute("normal") as THREE.BufferAttribute;
+  const normals = nrm.array as Float32Array;
+  computeMeshNormals(positions, rest.index, normals);
+  nrm.needsUpdate = true;
+  let lo = Infinity, hi = -Infinity;
+  for (let k = 1; k < positions.length; k += 3) { lo = Math.min(lo, positions[k]); hi = Math.max(hi, positions[k]); }
+  return { geometry, positions, normals, index: rest.index, lo, hi };
+}
+
+/* How far the sheet stands off the wall at a point of the strip, 0–1, in mm
+   space: a fold or two where a slow noise rises past a threshold, and one
+   short end lifting away, most at one corner. The seed picks the end. */
+function liftAt(mx: number, my: number, foldScale: number, seed: number): number {
+  const fold = vnoise(mx * 0.055 * foldScale + seed * 1.7, my * 0.08 * foldScale - seed);
+  const f = smooth01((fold - 0.58) / 0.42);
+  const sx = mx * (hash2(seed, 2.3) < 0.5 ? 1 : -1);
+  const end = smooth01((sx - 9) / 14);
+  const corner = 0.45 + 0.55 * smooth01((my + 6) / 23.5);
+  return Math.min(1, f * 0.55 + end * end * corner);
+}
+
+interface Sheet { geometry: THREE.BufferGeometry; arc: number; yScale: number; mmAttr: boolean }
+
+/** The inner shell: the glass inset, mapped cylindrically to the strip's mm,
+    displaced inward where the sheet lifts, with the rest position, the lift
+    and the crease (how steep the lift is) carried as attributes. */
+function buildSheet(glass: Glass, inset: number, arcDeg: number, band: number, lift: number, foldScale: number, seed: number): Sheet {
+  const { positions, normals, index } = glass;
+  const n = positions.length;
+  const out = new Float32Array(n);
+  const rest = new Float32Array(n);
+  const liftA = new Float32Array(n / 3);
+  const crease = new Float32Array(n / 3);
+  const arc = (arcDeg * Math.PI) / 180;
+  // mm per unit along the arc, from the shell's mean radius through its middle band
+  const mid = (glass.lo + glass.hi) * 0.5, span = (glass.hi - glass.lo) * inset;
+  let rSum = 0, rCount = 0;
+  for (let k = 0; k < n; k += 3) {
+    if (Math.abs(positions[k + 1] * inset - mid) < span * 0.2) { rSum += Math.hypot(positions[k], positions[k + 2]) * inset; rCount++; }
+  }
+  const rMean = rCount ? rSum / rCount : 1;
+  const xScale = STRIP_MM.length / arc;
+  const yScale = xScale / rMean / band;
+  const e = 0.6;
+  for (let v = 0, k = 0; k < n; v++, k += 3) {
+    const x = positions[k] * inset, y = positions[k + 1] * inset, z = positions[k + 2] * inset;
+    rest[k] = x; rest[k + 1] = y; rest[k + 2] = z;
+    const mx = Math.atan2(x, z) * xScale, my = y * yScale;
+    const l = liftAt(mx, my, foldScale, seed);
+    const gx = (liftAt(mx + e, my, foldScale, seed) - liftAt(mx - e, my, foldScale, seed)) / (2 * e);
+    const gy = (liftAt(mx, my + e, foldScale, seed) - liftAt(mx, my - e, foldScale, seed)) / (2 * e);
+    liftA[v] = l;
+    crease[v] = Math.min(1, Math.max(0, (Math.hypot(gx, gy) - 0.12) * 5));
+    const d = lift * l;
+    out[k] = x - normals[k] * d;
+    out[k + 1] = y - normals[k + 1] * d;
+    out[k + 2] = z - normals[k + 2] * d;
+  }
+  const nrm = new Float32Array(n);
+  computeMeshNormals(out, index, nrm);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(new THREE.BufferAttribute(index as Uint16Array | Uint32Array, 1));
+  geometry.setAttribute("position", new THREE.BufferAttribute(out, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+  geometry.setAttribute("aRest", new THREE.BufferAttribute(rest, 3));
+  geometry.setAttribute("aLift", new THREE.BufferAttribute(liftA, 1));
+  geometry.setAttribute("aCrease", new THREE.BufferAttribute(crease, 1));
+  geometry.setAttribute("aMm", new THREE.BufferAttribute(new Float32Array((n / 3) * 2), 2));
+  geometry.boundingSphere = glass.geometry.boundingSphere;
+  return { geometry, arc, yScale, mmAttr: false };
+}
+
+/* ───────── the draped sheet ───────── */
+
+/** The wall as a radius per direction, binned from the glass's own vertices, so a
+    point can be asked how far out it may go: the form is star-shaped about its
+    centre (the superformula is radial), so inside is |p| < wallR(dir). */
+function buildWallMap(glass: Glass): (x: number, y: number, z: number) => number {
+  const LON = 96, LAT = 48;
+  const sum = new Float64Array(LON * LAT), count = new Float64Array(LON * LAT);
+  const p = glass.positions;
+  for (let k = 0; k < p.length; k += 3) {
+    const x = p[k], y = p[k + 1], z = p[k + 2];
+    const r = Math.hypot(x, y, z);
+    if (r < 1e-6) continue;
+    const i = Math.min(LON - 1, Math.floor(((Math.atan2(x, z) + Math.PI) / (2 * Math.PI)) * LON));
+    const j = Math.min(LAT - 1, Math.floor(((Math.asin(Math.max(-1, Math.min(1, y / r))) + Math.PI / 2) / Math.PI) * LAT));
+    sum[i + j * LON] += r;
+    count[i + j * LON]++;
+  }
+  const map = new Float64Array(LON * LAT);
+  for (let c = 0; c < map.length; c++) map[c] = count[c] ? sum[c] / count[c] : NaN;
+  // bins no vertex fell in (the poles, the coarse forms) take the mean of their filled neighbours
+  for (let pass = 0; pass < LON; pass++) {
+    let holes = 0;
+    for (let j = 0; j < LAT; j++) for (let i = 0; i < LON; i++) {
+      const c = i + j * LON;
+      if (!Number.isNaN(map[c])) continue;
+      holes++;
+      let s = 0, n = 0;
+      for (const nb of [((i + 1) % LON) + j * LON, ((i - 1 + LON) % LON) + j * LON, j > 0 ? i + (j - 1) * LON : -1, j < LAT - 1 ? i + (j + 1) * LON : -1]) {
+        if (nb >= 0 && !Number.isNaN(map[nb])) { s += map[nb]; n++; }
+      }
+      if (n) map[c] = s / n;
+    }
+    if (!holes) break;
+  }
+  // soften the map a little: the cloth is soft, so it need not know every facet of the wall
+  const tmp = new Float64Array(map.length);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let j = 0; j < LAT; j++) for (let i = 0; i < LON; i++) {
+      let s = 0, n = 0;
+      for (let dj = -1; dj <= 1; dj++) {
+        const jj = j + dj;
+        if (jj < 0 || jj >= LAT) continue;
+        for (let di = -1; di <= 1; di++) { s += map[((i + di + LON) % LON) + jj * LON]; n++; }
+      }
+      tmp[i + j * LON] = s / n;
+    }
+    map.set(tmp);
+  }
+  return (x, y, z) => {
+    const r = Math.hypot(x, y, z) || 1;
+    const fi = ((Math.atan2(x, z) + Math.PI) / (2 * Math.PI)) * LON - 0.5;
+    const fj = Math.min(LAT - 1, Math.max(0, ((Math.asin(Math.max(-1, Math.min(1, y / r))) + Math.PI / 2) / Math.PI) * LAT - 0.5));
+    const i0 = Math.floor(fi), j0 = Math.floor(fj);
+    const tx = fi - i0, ty = fj - j0;
+    const ia = ((i0 % LON) + LON) % LON, ib = (ia + 1) % LON;
+    const ja = j0, jb = Math.min(LAT - 1, j0 + 1);
+    const a = map[ia + ja * LON] * (1 - tx) + map[ib + ja * LON] * tx;
+    const b = map[ia + jb * LON] * (1 - tx) + map[ib + jb * LON] * tx;
+    return a * (1 - ty) + b * ty;
+  };
+}
+
+type V3 = [number, number, number];
+const v3norm = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+const v3cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const v3dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+/** Rotate v (perpendicular to the unit axis) about the axis by angle. */
+const v3turn = (v: V3, axis: V3, angle: number): V3 => {
+  const c = Math.cos(angle), s = Math.sin(angle), x = v3cross(axis, v);
+  return [v[0] * c + x[0] * s, v[1] * c + x[1] * s, v[2] * c + x[2] * s];
+};
+
+interface Drape {
+  sheetSize: number; anchorAngle: number; anchorHeight: number; tilt: number; contact: number;
+  sag: number; peel: number; curl: number; twist: number; gap: number; soft: number;
+}
+
+/**
+ * The other sheet: a cloth of its own, not the wall's relief. A grid in the
+ * strip's mm is hung from a point on the inner wall (anchorAngle around the
+ * axis, anchorHeight up it); turned by tilt (0 hangs the picture upright from
+ * its long edge, 90 hangs the strip from one end as film dries). Its spine
+ * runs down the wall, pressed, for `contact` mm, then peels: the direction
+ * turns from the wall's tangent toward the inside by `peel` degrees over
+ * `sag` mm, and the frame twists about the spine. Across the spine the sheet
+ * curls (`curl`, signed, toward or away from the wall), flat where pressed.
+ * Then it is settled as soft cloth (see the settle below): the grid keeps
+ * its mm spacing loosely, the wall is met with a blurred correction, the
+ * sheet is smoothed each pass by `soft`, and nothing ends up through the
+ * glass. Where it curves differently from the wall it only touches along a
+ * line, and the air between is the point. aLift carries that air; aMm the
+ * place on the strip, so the face is drawn as in the film lab.
+ */
+function buildDrapedSheet(glass: Glass, inset: number, d: Drape): Sheet {
+  const wallR = buildWallMap(glass);
+  const rIn = (x: number, y: number, z: number) => wallR(x, y, z) * inset;
+  const k = d.sheetSize / STRIP_MM.length;
+  const t = (d.tilt * Math.PI) / 180, ct = Math.cos(t), st = Math.sin(t);
+  const hu = STRIP_MM.length / 2, hw = STRIP_MM.width / 2;
+  const halfA = hw * Math.abs(ct) + hu * Math.abs(st);
+  const halfB = hu * Math.abs(ct) + hw * Math.abs(st);
+  const A = 2 * halfA;
+  const th = (d.anchorAngle * Math.PI) / 180;
+  const hx = Math.sin(th), hz = Math.cos(th);
+  const h: V3 = [hx, 0, hz];
+  const yLo = glass.lo * inset, yHi = glass.hi * inset;
+  const y0 = yLo + d.anchorHeight * (yHi - yLo);
+  // the point of the inner wall at height y, out along h
+  const wallAt = (y: number): V3 => {
+    const yy = Math.min(yHi - 1e-3, Math.max(yLo + 1e-3, y));
+    let a = 0, b = 4;
+    for (let i = 0; i < 30; i++) {
+      const m = (a + b) / 2;
+      if (Math.hypot(m, yy) < rIn(m * hx, yy, m * hz)) a = m; else b = m;
+    }
+    return [a * hx, yy, a * hz];
+  };
+
+  // the spine, tabulated every half millimetre down the sheet
+  const STEP = 0.5;
+  const N = Math.ceil(A / STEP) + 2;
+  const contact = Math.min(d.contact, A);
+  const S: V3[] = [], T: V3[] = [], Nn: V3[] = [], B: V3[] = [];
+  let nc = 0;
+  for (; nc < N && nc * STEP <= contact; nc++) S.push(wallAt(y0 - nc * STEP * k));
+  for (let i = 0; i < nc; i++) {
+    const p0 = S[Math.max(0, i - 1)], p1 = S[Math.min(nc - 1, i + 1)];
+    let tg: V3 = nc > 1 ? v3norm([p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]]) : [0, -1, 0];
+    if (nc === 1) { const q = wallAt(y0 - k); tg = v3norm([q[0] - S[0][0], q[1] - S[0][1], q[2] - S[0][2]]); }
+    const away: V3 = [-hx, 0, -hz];
+    const dt = v3dot(away, tg);
+    const nn = v3norm([away[0] - tg[0] * dt, away[1] - tg[1] * dt, away[2] - tg[2] * dt]);
+    T.push(tg); Nn.push(nn); B.push(v3cross(nn, tg));
+  }
+  const Tc = T[nc - 1], Nc = Nn[nc - 1];
+  const peel = (d.peel * Math.PI) / 180, twist = (d.twist * Math.PI) / 180;
+  const free = Math.max(1e-3, A - contact);
+  for (let i = nc; i < N; i++) {
+    const s = i * STEP - contact;
+    const beta = peel * smooth01(s / Math.max(1e-3, d.sag));
+    const cb = Math.cos(beta), sb = Math.sin(beta);
+    const dir: V3 = [Tc[0] * cb + Nc[0] * sb, Tc[1] * cb + Nc[1] * sb, Tc[2] * cb + Nc[2] * sb];
+    let nn: V3 = [-Tc[0] * sb + Nc[0] * cb, -Tc[1] * sb + Nc[1] * cb, -Tc[2] * sb + Nc[2] * cb];
+    const prev = S[i - 1];
+    S.push([prev[0] + dir[0] * STEP * k, prev[1] + dir[1] * STEP * k, prev[2] + dir[2] * STEP * k]);
+    const tau = twist * smooth01(s / free);
+    nn = v3turn(nn, dir, tau);
+    T.push(dir); Nn.push(nn); B.push(v3cross(nn, dir));
+  }
+
+  // the grid: about a millimetre a cell, so the folds are curves and not polylines
+  const NU = 96, NW = 48;
+  const count = NU * NW;
+  const pos = new Float32Array(count * 3);
+  const mm = new Float32Array(count * 2);
+  const along = new Float32Array(count);
+  for (let iw = 0, v = 0; iw < NW; iw++) {
+    const w = -hw + (iw / (NW - 1)) * STRIP_MM.width;
+    for (let iu = 0; iu < NU; iu++, v++) {
+      const u = -hu + (iu / (NU - 1)) * STRIP_MM.length;
+      const a = -w * ct + u * st + halfA;
+      const b = u * ct + w * st;
+      mm[v * 2] = u; mm[v * 2 + 1] = w;
+      along[v] = a;
+      const fi = Math.min(N - 1.001, Math.max(0, a / STEP));
+      const i0 = Math.floor(fi), f = fi - i0;
+      const lerp3 = (arr: V3[]): V3 => [arr[i0][0] + (arr[i0 + 1][0] - arr[i0][0]) * f, arr[i0][1] + (arr[i0 + 1][1] - arr[i0][1]) * f, arr[i0][2] + (arr[i0 + 1][2] - arr[i0][2]) * f];
+      const sp = lerp3(S), bb = v3norm(lerp3(B)), nn = v3norm(lerp3(Nn));
+      const s = Math.max(0, a - contact);
+      const curlOff = d.curl * (b / halfB) * (b / halfB) * halfB * k * smooth01(s / Math.max(1e-3, d.sag));
+      pos[v * 3] = sp[0] + bb[0] * b * k + nn[0] * curlOff;
+      pos[v * 3 + 1] = sp[1] + bb[1] * b * k + nn[1] * curlOff;
+      pos[v * 3 + 2] = sp[2] + bb[2] * b * k + nn[2] * curlOff;
+    }
+  }
+
+  // settle, as soft cloth: the grid keeps its spacing loosely; the wall is met
+  // with a correction that is blurred across the sheet before it is applied,
+  // so a lobe of the glass bows the cloth over a width instead of printing a
+  // kink; and each pass a Taubin smooth (a Laplacian step and a slightly
+  // larger step back, so the sheet does not shrink) stands in for the bending
+  // stiffness that keeps gauze or soaked paper in rounded folds. `soft` is how
+  // much of that smoothing; 0 is the crisp version.
+  const du = (STRIP_MM.length / (NU - 1)) * k, dw = (STRIP_MM.width / (NW - 1)) * k, dd = Math.hypot(du, dw);
+  const edges: [number, number, number][] = [];
+  for (let iw = 0; iw < NW; iw++) for (let iu = 0; iu < NU; iu++) {
+    const v = iu + iw * NU;
+    if (iu + 1 < NU) edges.push([v, v + 1, du]);
+    if (iw + 1 < NW) edges.push([v, v + NU, dw]);
+    if (iu + 1 < NU && iw + 1 < NW) { edges.push([v, v + NU + 1, dd]); edges.push([v + 1, v + NU, dd]); }
+  }
+  // how firmly a row is pressed: 1 along `contact`, easing off over a few millimetres after
+  const press = new Float32Array(count);
+  const pressFade = Math.max(3, d.sag * 0.5);
+  for (let v = 0; v < count; v++) press[v] = 1 - smooth01((along[v] - contact) / pressFade);
+
+  const air = new Float32Array(count);
+  const radius = new Float32Array(count);
+  const corr = new Float32Array(count), blurred = new Float32Array(count);
+  const blur = (src: Float32Array, dst: Float32Array) => {
+    for (let iw = 0; iw < NW; iw++) for (let iu = 0; iu < NU; iu++) {
+      let s = 0, n = 0;
+      for (let dj = -1; dj <= 1; dj++) {
+        const jw = iw + dj;
+        if (jw < 0 || jw >= NW) continue;
+        for (let di = -1; di <= 1; di++) {
+          const ju = iu + di;
+          if (ju < 0 || ju >= NU) continue;
+          s += src[ju + jw * NU]; n++;
+        }
+      }
+      dst[iu + iw * NU] = s / n;
+    }
+  };
+  const hold = (gain: number, spread: number) => {
+    for (let v = 0; v < count; v++) {
+      const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
+      const r = Math.hypot(x, y, z) || 1e-6;
+      const lim = rIn(x, y, z);
+      const inside = Math.min(r, lim - d.gap);
+      radius[v] = r;
+      corr[v] = inside + (lim - inside) * press[v] - r;
+    }
+    for (let i = 0; i < spread; i++) { blur(corr, blurred); corr.set(blurred); }
+    for (let v = 0; v < count; v++) {
+      const f = (radius[v] + corr[v] * gain) / radius[v];
+      pos[v * 3] *= f; pos[v * 3 + 1] *= f; pos[v * 3 + 2] *= f;
+    }
+  };
+  const nb: Int32Array[] = [];
+  for (let iw = 0; iw < NW; iw++) for (let iu = 0; iu < NU; iu++) {
+    const list: number[] = [];
+    if (iu > 0) list.push(iu - 1 + iw * NU);
+    if (iu + 1 < NU) list.push(iu + 1 + iw * NU);
+    if (iw > 0) list.push(iu + (iw - 1) * NU);
+    if (iw + 1 < NW) list.push(iu + (iw + 1) * NU);
+    nb.push(Int32Array.from(list));
+  }
+  const next = new Float32Array(count * 3);
+  const laplace = (step: number) => {
+    for (let v = 0; v < count; v++) {
+      const list = nb[v];
+      let ax = 0, ay = 0, az = 0;
+      for (let i = 0; i < list.length; i++) { const q = list[i]; ax += pos[q * 3]; ay += pos[q * 3 + 1]; az += pos[q * 3 + 2]; }
+      const inv = 1 / list.length;
+      // the pressed rows belong to the wall, not to the cloth's own curve
+      const s = step * (1 - press[v] * 0.85);
+      next[v * 3] = pos[v * 3] + (ax * inv - pos[v * 3]) * s;
+      next[v * 3 + 1] = pos[v * 3 + 1] + (ay * inv - pos[v * 3 + 1]) * s;
+      next[v * 3 + 2] = pos[v * 3 + 2] + (az * inv - pos[v * 3 + 2]) * s;
+    }
+    pos.set(next);
+  };
+  const soft = Math.min(1, Math.max(0, d.soft));
+  const lambda = 0.6 * soft, mu = -(lambda + 0.03 * soft);
+  const spread = 1 + Math.round(soft * 3);
+  hold(1, spread);
+  for (let it = 0; it < 24; it++) {
+    for (const [p, q, rest] of edges) {
+      const dx = pos[q * 3] - pos[p * 3], dy = pos[q * 3 + 1] - pos[p * 3 + 1], dz = pos[q * 3 + 2] - pos[p * 3 + 2];
+      const len = Math.hypot(dx, dy, dz) || 1e-6;
+      const c = ((len - rest) / len) * 0.4 * 0.5;
+      pos[p * 3] += dx * c; pos[p * 3 + 1] += dy * c; pos[p * 3 + 2] += dz * c;
+      pos[q * 3] -= dx * c; pos[q * 3 + 1] -= dy * c; pos[q * 3 + 2] -= dz * c;
+    }
+    if (lambda > 0) { laplace(lambda); laplace(mu); }
+    hold(0.7, spread);
+  }
+  // last: nothing through the glass, whatever the smoothing left
+  for (let v = 0; v < count; v++) {
+    const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
+    const r = Math.hypot(x, y, z) || 1e-6;
+    const lim = rIn(x, y, z);
+    const target = Math.min(r, lim - d.gap * (1 - press[v]) * 0.5);
+    const f = target / r;
+    pos[v * 3] = x * f; pos[v * 3 + 1] = y * f; pos[v * 3 + 2] = z * f;
+    air[v] = Math.min(1, Math.max(0, (lim - target) / 0.08));
+  }
+
+  const index = new Uint16Array((NU - 1) * (NW - 1) * 6);
+  for (let iw = 0, o = 0; iw < NW - 1; iw++) for (let iu = 0; iu < NU - 1; iu++) {
+    const v = iu + iw * NU;
+    index[o++] = v; index[o++] = v + 1; index[o++] = v + NU + 1;
+    index[o++] = v; index[o++] = v + NU + 1; index[o++] = v + NU;
+  }
+  const nrm = new Float32Array(count * 3);
+  computeMeshNormals(pos, index, nrm);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(new THREE.BufferAttribute(index, 1));
+  geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+  geometry.setAttribute("aRest", new THREE.BufferAttribute(pos, 3));
+  geometry.setAttribute("aLift", new THREE.BufferAttribute(air, 1));
+  geometry.setAttribute("aCrease", new THREE.BufferAttribute(new Float32Array(count), 1));
+  geometry.setAttribute("aMm", new THREE.BufferAttribute(mm, 2));
+  geometry.boundingSphere = glass.geometry.boundingSphere;
+  return { geometry, arc: 1, yScale: 1, mmAttr: true };
+}
+
+/* ───────── shaders ───────── */
+
+/* Shared by glass and sheet: a mirrored copy under the ground fades with its
+   depth below the table (uReflect is its strength; 0 is the thing itself). */
+const REFLECT_GLSL = /* glsl */ `
+  uniform float uReflect;
+  uniform float uGroundY;
+  float reflectFade(vec3 world) {
+    return uReflect > 0.0 ? uReflect * (1.0 - smoothstep(0.0, 1.3, uGroundY - world.y)) : 1.0;
+  }
+`;
+
+const sheetVertex = /* glsl */ `
+  attribute vec3 aRest;
+  attribute float aLift;
+  attribute float aCrease;
+  attribute vec2 aMm;
+  varying vec3 vRest;
+  varying float vLift;
+  varying float vCrease;
+  varying vec2 vMm;
+  varying vec3 vNormalW;
+  varying vec3 vWorld;
+  void main() {
+    vRest = aRest;
+    vLift = aLift;
+    vCrease = aCrease;
+    vMm = aMm;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    vNormalW = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+/* The strip on the inner wall. Its place on the strip comes from where the
+   fragment sits around the form's axis and up its height; outside the torn
+   outline it is discarded, as the descent's film is. Then the film lab's
+   face, and what only the vessel adds: the dye bled past one corner, creases
+   reading whiter, air pockets where the sheet touches the wall, one key
+   light that the sheet is mostly lit through, and the far face. */
+const sheetFragment = /* glsl */ `
+  ${STRIP_GLSL}
+  ${FILM_LOOK_GLSL}
+  ${SHEET_GLSL}
+  ${STRIP_FACE_GLSL}
+  ${REFLECT_GLSL}
+  uniform sampler2D uPhoto;
+  uniform sampler2D uEdgePrint;
+  uniform float uImageAspect;
+  uniform float uSeed;
+  uniform float uArc;
+  uniform float uYScale;
+  uniform float uWear;
+  uniform float uBackFace;
+  uniform float uBleed;
+  uniform float uMmAttr;
+  uniform float uFlip;
+  uniform float uSheer;
+  uniform float uSoftRim;
+  uniform float uSheen;
+  uniform float uGloss;
+  uniform float uGrain;
+  uniform vec3 uKey;
+  uniform float uKeyIntensity;
+  varying vec3 vRest;
+  varying float vLift;
+  varying float vCrease;
+  varying vec2 vMm;
+  varying vec3 vNormalW;
+  varying vec3 vWorld;
+  void main() {
+    // pressed: the place on the strip from where the fragment sits around the axis;
+    // draped: the cloth carries its own mm
+    float theta = atan(vRest.x, vRest.z + 1e-6);
+    vec2 mm = uMmAttr > .5 ? vMm : vec2(theta * STRIP.x / uArc, vRest.y * uYScale);
+    // uFlip turns the strip over: the emulsion faces the other side, so that side
+    // gets the near face (sharp, lit) and reads the picture the right way round
+    bool facing = gl_FrontFacing != (uFlip > .5);
+    if (uFlip > .5) mm.x = -mm.x;
+    float d = stripTornOutline(mm, uSeed);
+    float dh = stripHole(mm);
+    float alpha = stripCoverage(mm, uSeed, d, dh, uWear);
+    if (alpha < .01) discard;
+
+    // the window, and one corner where the dye has bled past it into the stock
+    float inFrame = sheetWindow(mm, uSeed);
+    vec2 corner = WINDOW * vec2(sign(fract(uSeed * .37) - .5), sign(fract(uSeed * .61) - .5));
+    float toCorner = length(mm - corner) + (filmNoise(mm * .45 + uSeed * 8.0) - .5) * 7.0;
+    inFrame = max(inFrame, (1.0 - smoothstep(2.0, 9.0, toCorner)) * uBleed);
+
+    float bias = facing ? 0.0 : 1.6;
+    vec3 color;
+    float a;
+    stripFace(mm, uSeed, d, dh, inFrame, uPhoto, uImageAspect, bias, uEdgePrint, 1.45, color, a);
+
+    // creases read whiter; where the sheet lies on the wall, a trapped pocket of air is a shade lighter
+    color += vCrease * .10;
+    a += vCrease * .10;
+    float pocket = smoothstep(.72, .92, filmNoise(mm * .3 + uSeed * 9.0)) * (1.0 - smoothstep(0.0, .25, vLift));
+    color += pocket * .045;
+    a -= pocket * .08;
+
+    // one key, behind-above: the sheet is lit mostly through, so it is brightest where the light comes through it
+    vec3 n = normalize(vNormalW);
+    vec3 eye = normalize(cameraPosition - vWorld);
+    if (dot(n, eye) < 0.0) n = -n;
+    float through = max(0.0, dot(-n, uKey));
+    float on = max(0.0, dot(n, uKey));
+    color *= .9 + (.16 * through + .05 * on) * uKeyIntensity;
+    // film has a hard little highlight; gauze has almost none (uGloss), and instead a
+    // broad velvet light where the key grazes the weave (uSheen)
+    color += pow(max(0.0, dot(reflect(-eye, n), uKey)), 24.0) * .07 * uGloss * uKeyIntensity;
+    float graze = 1.0 - abs(dot(n, eye));
+    color += uSheen * graze * graze * (.5 + .5 * dot(n, uKey)) * .14 * uKeyIntensity;
+    // at a grazing edge the weave thins: lighter, and letting more through, so the
+    // outline furs instead of drawing a line
+    float fres = graze * graze * graze;
+    color = mix(color, vec3(.97, .965, .955), uSoftRim * fres * .6);
+    a *= 1.0 - uSoftRim * fres * .55;
+
+    if (!facing) {
+      // the far face: the same image mirrored, dimmer, softer (the bias above), a touch cooler
+      color = mix(vec3(.80, .82, .84), color, uBackFace) * vec3(.975, .99, 1.015);
+      a *= .85;
+    }
+    // a fine screen-space grain, so the flats are not plastic
+    float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - .5;
+    color += grain * uGrain;
+    gl_FragColor = vec4(color, alpha * clamp(a * uSheer, 0.0, 1.0) * reflectFade(vWorld));
+  }
+`;
+
+const glassVertex = /* glsl */ `
+  varying vec3 vNormalW;
+  varying vec3 vViewW;
+  varying vec3 vModel;
+  varying vec3 vWorld;
+  varying vec3 vCentre;
+  void main() {
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vModel = position;
+    vWorld = world.xyz;
+    vCentre = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vNormalW = normalize(mat3(modelMatrix) * normal);
+    vViewW = normalize(cameraPosition - world.xyz);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+/* What both glass looks share: the uniforms, the noise, the frost in two or
+   three soft patches (breath on a cold window, placed by the seed), and a
+   seed bubble or two where the glass was poured. */
+const GLASS_COMMON_GLSL = /* glsl */ `
+  ${REFLECT_GLSL}
+  uniform vec3 uKey;
+  uniform float uKeyIntensity;
+  uniform float uRim;
+  uniform float uFrostN;
+  uniform float uFrostSize;
+  uniform float uFrostStrength;
+  uniform float uThickness;
+  uniform float uBubbles;
+  uniform float uSeed;
+  uniform float uWarmth;
+  uniform vec3 uPatch[3];
+  uniform vec3 uBubble[2];
+  varying vec3 vNormalW;
+  varying vec3 vViewW;
+  varying vec3 vModel;
+  varying vec3 vWorld;
+  varying vec3 vCentre;
+  float gHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float gNoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(gHash(i), gHash(i + vec3(1, 0, 0)), f.x), mix(gHash(i + vec3(0, 1, 0)), gHash(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(gHash(i + vec3(0, 0, 1)), gHash(i + vec3(1, 0, 1)), f.x), mix(gHash(i + vec3(0, 1, 1)), gHash(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z);
+  }
+  // how much frost sits here, 0–1
+  float frostAt(vec3 dir) {
+    float breath = 0.0;
+    for (int i = 0; i < 3; i++) {
+      if (float(i) < uFrostN - .5) {
+        float dd = length(dir - uPatch[i]) + (gNoise(vModel * 3.0 + float(i) * 7.0 + uSeed) - .5) * .35;
+        breath += 1.0 - smoothstep(uFrostSize * .25, uFrostSize * .6, dd);
+      }
+    }
+    return clamp(breath, 0.0, 1.0) * uFrostStrength * (.7 + .3 * gNoise(vModel * 9.0 - uSeed));
+  }
+  // the ring of a seed bubble, 0–1
+  float bubbleAt(vec3 dir) {
+    float ring = 0.0;
+    for (int i = 0; i < 2; i++) {
+      if (float(i) < uBubbles - .5) {
+        float db = length(dir - uBubble[i]);
+        ring += smoothstep(.018, .028, db) * (1.0 - smoothstep(.034, .05, db));
+      }
+    }
+    return ring;
+  }
+`;
+
+/* Thin clear glass, from the descent's formFragment: the rim is light and
+   the facing surface nearly disappears. Its thickness is not quite even, so
+   the rim is heavier in places; the frost patches; one soft highlight from
+   the key; the bubbles. */
+const glassFragment = /* glsl */ `
+  ${GLASS_COMMON_GLSL}
+  void main() {
+    vec3 n = normalize(vNormalW);
+    vec3 v = normalize(vViewW);
+    if (dot(n, v) < 0.0) n = -n;
+    float facing = max(0.0, dot(n, v));
+    float fresnel = pow(1.0 - facing, 2.4);
+    float thickness = mix(1.0, .55 + .9 * gNoise(vModel * 1.6 + uSeed), uThickness);
+    // against the paper the rim is a cool grey, as the landing blobs are; the body a paler one
+    vec3 rimColor = mix(vec3(.64, .69, .72), vec3(.70, .68, .66), uWarmth);
+    vec3 body = mix(vec3(.84, .87, .88), vec3(.87, .86, .85), uWarmth);
+    vec3 color = mix(body, rimColor, fresnel);
+    float alpha = (.09 + .6 * fresnel * uRim) * thickness;
+
+    vec3 dir = normalize(vModel);
+    float frost = frostAt(dir);
+    vec3 milk = vec3(.885, .90, .905) * (.95 + .07 * n.y);
+    color = mix(color, milk, frost * .85);
+    alpha = mix(alpha, .5 + .3 * fresnel, frost);
+
+    float spec = pow(max(0.0, dot(reflect(-v, n), uKey)), 28.0) * .28 * uKeyIntensity;
+    color += spec;
+    alpha += spec * .7;
+
+    float ring = bubbleAt(dir);
+    color += ring * .18;
+    alpha += ring * .45;
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
+  }
+`;
+
+/* The other look: softness from refraction, not frost (after two glass drops
+   on a white table against black). The glass has no tone of its own; it
+   shows what is behind it, refracted and smeared. What is behind it is the
+   frame itself — the backdrop, the table, the sheet inside — drawn first to
+   a target (tScene); the facing surface then samples that frame displaced
+   along its own normal, the way a solid body pulls the view in toward its
+   axis and turns it over at the edge, and smeared by thickness. Thick parts
+   darken (the drops' feet). The rim follows the live bubble form: a dark
+   line just inside the silhouette, a thin bright film ring inside that where
+   the surface turns toward a large soft key, no pow(…, 40) spot. Frost stays
+   to its patches and may go to zero. The sheet inside is what the facing side
+   mostly refracts, so its lightness shows through as a pale wash. */
+const glassRefractFragment = /* glsl */ `
+  ${GLASS_COMMON_GLSL}
+  uniform sampler2D tScene;
+  uniform vec2 uResolution;
+  uniform float uEnvAbove;
+  uniform float uEnvBelow;
+  uniform float uHorizon;
+  uniform float uHorizonSoft;
+  uniform float uBend;
+  uniform float uGlassSoft;
+  uniform float uBodyAlpha;
+  uniform float uThickDark;
+  uniform float uHighlight;
+  // the room as the shader knows it, for what the surface reflects at a grazing angle
+  vec3 env(float y) {
+    float t = smoothstep(uHorizon - uHorizonSoft, uHorizon + uHorizonSoft, y);
+    vec3 tint = mix(vec3(.975, 1.0, 1.02), vec3(1.02, 1.0, .975), uWarmth);
+    return mix(vec3(uEnvBelow), vec3(uEnvAbove), t) * tint;
+  }
+  // the frame behind, smeared over a small radius
+  vec3 behind(vec2 uv, float radius) {
+    vec2 r = vec2(radius * uResolution.y / uResolution.x, radius);
+    vec3 c = texture2D(tScene, uv).rgb * 2.0;
+    c += texture2D(tScene, uv + vec2(r.x, 0.0)).rgb;
+    c += texture2D(tScene, uv - vec2(r.x, 0.0)).rgb;
+    c += texture2D(tScene, uv + vec2(0.0, r.y)).rgb;
+    c += texture2D(tScene, uv - vec2(0.0, r.y)).rgb;
+    c += texture2D(tScene, uv + r * .7).rgb;
+    c += texture2D(tScene, uv - r * .7).rgb;
+    c += texture2D(tScene, uv + vec2(r.x, -r.y) * .7).rgb;
+    c += texture2D(tScene, uv - vec2(r.x, -r.y) * .7).rgb;
+    return c / 10.0;
+  }
+  void main() {
+    // the far wall is drawn too, quieter; the view leaves the glass there and
+    // bends back the other way
+    // (not gl_FrontFacing: three flips the winding for a BackSide material,
+    // so the far wall would pass as facing)
+    vec3 n = normalize(vNormalW);
+    vec3 v = normalize(vViewW);
+    float back = dot(n, v) < 0.0 ? 1.0 : 0.0;
+    if (back > .5) n = -n;
+    float facing = max(0.0, dot(n, v));
+    float g = 1.0 - facing;
+    float fresnel = pow(g, 2.4);
+    float uneven = mix(1.0, .55 + .9 * gNoise(vModel * 1.6 + uSeed), uThickness);
+    // a walled vessel: the eye looks through the most glass at the silhouette,
+    // where the wall turns edge-on, and low down where the glass gathers to stand
+    float low = smoothstep(.3, -.6, vModel.y);
+    float thick = clamp(mix(g, 1.0, .6 * low), 0.0, 1.0) * uneven;
+
+    // where this fragment sits on the frame, and where the glass bends the view to:
+    // along the surface normal as the eye sees it, hardly at all face-on, more
+    // toward the edge, so what is behind is drawn in toward the axis
+    vec2 suv = gl_FragCoord.xy / uResolution;
+    vec3 nv = normalize((viewMatrix * vec4(n, 0.0)).xyz);
+    vec2 shift = -nv.xy * uBend * (.004 + .05 * g * g) * vec2(uResolution.y / uResolution.x, 1.0);
+    // the far wall sits behind the sheet, so it must not bend the sheet: no shift there
+    shift *= 1.0 - back;
+    float smear = uGlassSoft * (.002 + .05 * thick * thick);
+    vec3 body = behind(clamp(suv + shift, .002, .998), smear);
+    // the feet: the glass is thickest low down where it stands
+    float foot = smoothstep(.25, 1.0, thick) * (.35 + .65 * low) * mix(1.0, .5, back);
+    body *= 1.0 - uThickDark * .7 * foot;
+    // at a grazing angle the surface reflects the room instead
+    vec3 refl = env(reflect(-v, n).y);
+    float mirror = pow(g, 4.0) * uRim * .6;
+    vec3 color = mix(body, refl, mirror);
+    // the live bubble's rim: a dark line just inside the silhouette (its rimPower
+    // 3.3) — here the frame itself, darkened, so it still reads as glass
+    float rimLine = pow(g, 3.3) * uRim;
+    color = mix(color, body * .55, rimLine * .5);
+    // the view is fully through the glass; what the alpha carries is how much the
+    // glass itself asserts over the frame — more toward the edge, and in the feet
+    float alpha = uBodyAlpha * mix(.35, 1.0, g * g) * uneven + uThickDark * .25 * foot + rimLine * .35 + mirror * .5;
+
+    vec3 dir = normalize(vModel);
+    float frost = frostAt(dir);
+    vec3 milk = vec3(.885, .90, .905) * (.95 + .07 * n.y);
+    color = mix(color, milk, frost * .85);
+    alpha = mix(alpha, .5 + .3 * fresnel, frost);
+
+    // the bubble's film ring: a thin bright line just inside the silhouette (its
+    // filmPower 20), where the surface turns toward a large soft key
+    float film = pow(g, 20.0) * (1.0 - smoothstep(.93, 1.0, g));
+    float toward = smoothstep(-.4, .8, dot(n, uKey));
+    float line = film * toward * uHighlight * uKeyIntensity * mix(1.0, .3, back);
+    color += line * .9;
+    alpha += line * .6;
+
+    float ring = bubbleAt(dir) * (1.0 - back);
+    color += ring * .18;
+    alpha += ring * .45;
+    alpha *= mix(1.0, .55, back);
+    gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
+  }
+`;
+
+/* The frame behind everything, drawn in the canvas so the glass can refract
+   it: three stops down the screen (the paper), or two meeting at a soft
+   horizon (the room). Linear between stops, as the page's own gradient is. */
+const backdropVertex = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.9999, 1.0);
+  }
+`;
+const backdropFragment = /* glsl */ `
+  uniform vec3 uStop0;
+  uniform vec3 uStop1;
+  uniform vec3 uStop2;
+  uniform float uAt1;
+  uniform float uAt2;
+  varying vec2 vUv;
+  void main() {
+    float t = 1.0 - vUv.y;
+    vec3 c = t < uAt1
+      ? mix(uStop0, uStop1, clamp(t / max(uAt1, 1e-4), 0.0, 1.0))
+      : mix(uStop1, uStop2, clamp((t - uAt1) / max(uAt2 - uAt1, 1e-4), 0.0, 1.0));
+    gl_FragColor = vec4(c, 1.0);
+  }
+`;
+
+/* The copy: the target to the screen, as it is. */
+const blitFragment = /* glsl */ `
+  uniform sampler2D tScene;
+  varying vec2 vUv;
+  void main() { gl_FragColor = texture2D(tScene, vUv); }
+`;
+
+/* The table: a faint contact shadow and a tone under the object that fades
+   out, so it has a place without a drawn horizon. */
+const groundVertex = /* glsl */ `
+  varying vec2 vLocal;
+  uniform float uSize;
+  void main() {
+    vLocal = position.xy * uSize;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const groundFragment = /* glsl */ `
+  uniform float uGround;
+  uniform float uWarmth;
+  uniform float uRadius;
+  varying vec2 vLocal;
+  void main() {
+    float r = length(vLocal / (uRadius * vec2(1.1, .85)));
+    float shadow = (1.0 - smoothstep(.3, 1.5, r)) * .16;
+    float table = (1.0 - smoothstep(1.0, 4.5, length(vLocal))) * .035;
+    vec3 shade = mix(vec3(.60, .63, .66), vec3(.66, .63, .60), uWarmth);
+    gl_FragColor = vec4(shade, (shadow + table) * uGround);
+  }
+`;
+
+/* ───────── the scene ───────── */
+
+const loader = new THREE.TextureLoader();
+
+/** Unexposed stock until the photo arrives. */
+const BLANK_PHOTO = (() => {
+  const texture = new THREE.DataTexture(new Uint8Array([236, 239, 239, 255]), 1, 1);
+  texture.needsUpdate = true;
+  return texture;
+})();
+
+/** Directions on the form for the frost patches and bubbles, from the seed. */
+function seedDirections(seed: number, count: number, salt: number): THREE.Vector3[] {
+  return Array.from({ length: count }, (_, i) => {
+    const u = hash2(seed * 3.1 + i, salt), v = hash2(seed * 1.7 - i, salt + 4.2);
+    const phi = u * Math.PI * 2, y = (v - 0.5) * 1.5;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    return new THREE.Vector3(Math.sin(phi) * r, y, Math.cos(phi) * r);
+  });
+}
+
+function keyFrom(azimuthDeg: number, elevationDeg: number): THREE.Vector3 {
+  const az = (azimuthDeg * Math.PI) / 180, el = (elevationDeg * Math.PI) / 180;
+  // behind-above: azimuth 0 is straight behind the form from the camera's side
+  return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
+}
+
+interface StageProps {
+  tune: VesselTune;
+  mode: GlassMode;
+  sheetMode: SheetMode;
+  face: SheetFace;
+  show: Show;
+  backdrop: Backdrop;
+  url: string;
+  seed: number;
+  form: ArtifactForm;
+  held: RefObject<boolean>;
+  drag: RefObject<number>;
+}
+
+/** The glass's facing surface draws on its own layer so it can refract the rest. */
+const FRONT_LAYER = 1;
+
+function Stage({ tune, mode, sheetMode, face, show, backdrop, url, seed, form, held, drag }: StageProps) {
+  const { camera, gl, size } = useThree();
+  const group = useRef<THREE.Group>(null);
+  const mirror = useRef<THREE.Group>(null);
+  const yaw = useRef(YAW);
+  useEffect(() => { camera.lookAt(0, -0.05, 0); }, [camera]);
+
+  /* The refraction pass: everything but the glass's facing surface is drawn
+     to a target, the target is copied to the screen, and the facing surface
+     is drawn over it sampling the target. Under the frost look the scene is
+     drawn straight. The backdrop is a quad in the scene so it is in the
+     target too. */
+  const pass = useMemo(() => {
+    const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
+    const blit = new THREE.ShaderMaterial({
+      vertexShader: backdropVertex, fragmentShader: blitFragment,
+      uniforms: { tScene: { value: target.texture } },
+      depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blit);
+    quad.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(quad);
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    return { target, blit, quad, scene, ortho };
+  }, []);
+  useEffect(() => () => { pass.target.dispose(); pass.blit.dispose(); pass.quad.geometry.dispose(); }, [pass]);
+  useEffect(() => {
+    const dpr = gl.getPixelRatio();
+    pass.target.setSize(Math.round(size.width * dpr), Math.round(size.height * dpr));
+  }, [pass, gl, size]);
+  useFrame(({ gl: renderer, scene, camera: view }) => {
+    if (mode !== "refract") {
+      view.layers.enableAll();
+      renderer.render(scene, view);
+      return;
+    }
+    for (const u of glassUniformSets) u.uResolution.value.set(pass.target.width, pass.target.height);
+    view.layers.set(0);
+    renderer.setRenderTarget(pass.target);
+    renderer.render(scene, view);
+    renderer.setRenderTarget(null);
+    renderer.render(pass.scene, pass.ortho);
+    renderer.clearDepth();
+    view.layers.set(FRONT_LAYER);
+    renderer.autoClear = false;
+    renderer.render(scene, view);
+    renderer.autoClear = true;
+    view.layers.enableAll();
+  }, 1);
+
+  const backdropUniforms = useMemo(() => ({
+    uStop0: { value: new THREE.Color() }, uStop1: { value: new THREE.Color() }, uStop2: { value: new THREE.Color() },
+    uAt1: { value: 0.5 }, uAt2: { value: 1 },
+  }), []);
+  backdrop.stops.forEach((s, i) => (backdropUniforms[`uStop${i}` as "uStop0"].value as THREE.Color).setRGB(s[0] / 255, s[1] / 255, s[2] / 255));
+  backdropUniforms.uAt1.value = backdrop.at[0];
+  backdropUniforms.uAt2.value = backdrop.at[1];
+
+  const glass = useMemo(() => buildGlass(form, MORPH), [form]);
+  useEffect(() => () => glass.geometry.dispose(), [glass]);
+  const { inset, arc, band, lift, foldScale } = tune;
+  const { sheetSize, anchorAngle, anchorHeight, tilt, contact, sag, peel, curl, twist, gap, soft } = tune;
+  const sheet = useMemo(() => sheetMode === "draped"
+    ? buildDrapedSheet(glass, inset, { sheetSize, anchorAngle, anchorHeight, tilt, contact, sag, peel, curl, twist, gap, soft })
+    : buildSheet(glass, inset, arc, band, lift, foldScale, seed),
+  [glass, sheetMode, inset, arc, band, lift, foldScale, seed, sheetSize, anchorAngle, anchorHeight, tilt, contact, sag, peel, curl, twist, gap, soft]);
+  useEffect(() => () => sheet.geometry.dispose(), [sheet]);
+  const groundY = glass.lo - 0.02;
+  const radius = (glass.hi - glass.lo) * 0.5;
+
+  const edgePrint = useMemo(() => createEdgePrint(1 + Math.floor(hash2(seed, 7.7) * 36)), [seed]);
+  const look = lookFor(tune);
+  const key = keyFrom(tune.keyAzimuth, tune.keyElevation);
+  const patches = useMemo(() => seedDirections(seed, 3, 1.1), [seed]);
+  const bubbles = useMemo(() => seedDirections(seed, 2, 9.3), [seed]);
+
+  // the sheet and the glass each twice: the thing and its reflection under the table
+  const sheetUniformSets = useMemo(() => [0, 1].map(() => ({
+    ...filmLookUniforms(),
+    uFilmSeed: { value: 0 },
+    ...sheetUniforms(),
+    uPhoto: { value: BLANK_PHOTO as THREE.Texture },
+    uEdgePrint: { value: edgePrint },
+    uImageAspect: { value: 1.5 },
+    uSeed: { value: 0 },
+    uArc: { value: 1 },
+    uYScale: { value: 1 },
+    uWear: { value: 1 },
+    uBackFace: { value: 1 },
+    uBleed: { value: 0 },
+    uMmAttr: { value: 0 },
+    uFlip: { value: 0 },
+    uSheer: { value: 1 },
+    uSoftRim: { value: 0 },
+    uSheen: { value: 0 },
+    uGloss: { value: 1 },
+    uGrain: { value: 0 },
+    uKey: { value: new THREE.Vector3() },
+    uKeyIntensity: { value: 1 },
+    uReflect: { value: 0 },
+    uGroundY: { value: 0 },
+  })), [edgePrint]);
+  const glassUniformSets = useMemo(() => [0, 1].map(() => ({
+    uKey: { value: new THREE.Vector3() },
+    uKeyIntensity: { value: 1 },
+    uRim: { value: 1 },
+    uFrostN: { value: 0 },
+    uFrostSize: { value: 1 },
+    uFrostStrength: { value: 0 },
+    uThickness: { value: 0 },
+    uBubbles: { value: 0 },
+    uSeed: { value: 0 },
+    uWarmth: { value: 0 },
+    uPatch: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
+    uBubble: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+    uEnvAbove: { value: 0 },
+    uEnvBelow: { value: 1 },
+    uHorizon: { value: 0 },
+    uHorizonSoft: { value: 0.1 },
+    uBend: { value: 0 },
+    uGlassSoft: { value: 0 },
+    uBodyAlpha: { value: 0 },
+    uThickDark: { value: 0 },
+    uHighlight: { value: 0 },
+    tScene: { value: pass.target.texture },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uReflect: { value: 0 },
+    uGroundY: { value: 0 },
+  })), [pass]);
+  const groundUniforms = useMemo(() => ({
+    uGround: { value: 0 }, uWarmth: { value: 0 }, uRadius: { value: 1 }, uSize: { value: 12 },
+  }), []);
+
+  // the knobs are written straight into the uniforms on every render
+  const stock = STOCKS[Math.min(STOCKS.length - 1, Math.max(0, Math.round(tune.stock)))];
+  sheetUniformSets.forEach((u, i) => {
+    setFilmLook(u, look);
+    setStock(u, stock);
+    u.uFilmSeed.value = seed;
+    u.uSeed.value = seed;
+    u.uPhotoOpacity.value = tune.photoOpacity;
+    u.uStockThick.value = tune.stockThick;
+    u.uStockThin.value = tune.stockThin;
+    u.uHoleRim.value = tune.holeRim;
+    u.uArc.value = sheet.arc;
+    u.uYScale.value = sheet.yScale;
+    u.uWear.value = tune.wear / 1.6;
+    u.uBackFace.value = tune.backFace;
+    u.uBleed.value = tune.bleed;
+    u.uMmAttr.value = sheet.mmAttr ? 1 : 0;
+    u.uFlip.value = face === "glass" ? 1 : 0;
+    // the feel belongs to the draped sheet; the pressed film keeps its own look
+    const draped = sheetMode === "draped";
+    u.uSheer.value = draped ? tune.sheer : 1;
+    u.uSoftRim.value = draped ? tune.softRim : 0;
+    u.uSheen.value = draped ? tune.sheen : 0;
+    u.uGloss.value = draped ? tune.gloss : 1;
+    u.uGrain.value = draped ? tune.grain : 0;
+    u.uKey.value.copy(key);
+    u.uKeyIntensity.value = tune.keyIntensity;
+    u.uReflect.value = i === 0 ? 0 : 0.22 * tune.ground;
+    u.uGroundY.value = groundY;
+    u.uEdgePrint.value = edgePrint;
+  });
+  glassUniformSets.forEach((u, i) => {
+    u.uKey.value.copy(key);
+    u.uKeyIntensity.value = tune.keyIntensity;
+    u.uRim.value = tune.rim;
+    u.uFrostN.value = tune.frostPatches;
+    u.uFrostSize.value = tune.frostSize;
+    u.uFrostStrength.value = tune.frostStrength;
+    u.uThickness.value = tune.thickness;
+    u.uBubbles.value = tune.bubbles;
+    u.uSeed.value = seed;
+    u.uWarmth.value = tune.warmth;
+    u.uPatch.value.forEach((p, j) => p.copy(patches[j]));
+    u.uBubble.value.forEach((b, j) => b.copy(bubbles[j]));
+    u.uEnvAbove.value = tune.envAbove;
+    u.uEnvBelow.value = tune.envBelow;
+    u.uHorizon.value = tune.horizon;
+    u.uHorizonSoft.value = tune.horizonSoft;
+    u.uBend.value = tune.bend;
+    u.uGlassSoft.value = tune.glassSoft;
+    u.uBodyAlpha.value = tune.bodyAlpha;
+    u.uThickDark.value = tune.thickDark;
+    u.uHighlight.value = tune.highlight;
+    u.uReflect.value = i === 0 ? 0 : 0.22 * tune.ground;
+    u.uGroundY.value = groundY;
+  });
+  groundUniforms.uGround.value = tune.ground;
+  groundUniforms.uWarmth.value = tune.warmth;
+  groundUniforms.uRadius.value = radius;
+
+  useEffect(() => {
+    let live = true;
+    let texture: THREE.Texture | null = null;
+    loader.loadAsync(url).then((t) => {
+      if (!live) { t.dispose(); return; }
+      texture = t;
+      const image = t.image as { width: number; height: number };
+      const prepared = prepareFilmPhoto(t);
+      for (const u of sheetUniformSets) {
+        u.uPhoto.value = prepared;
+        u.uImageAspect.value = image.width / image.height;
+      }
+    }).catch(() => undefined);
+    return () => { live = false; texture?.dispose(); };
+  }, [url, sheetUniformSets]);
+
+  const turn = tune.turn;
+  useFrame((_, dt) => {
+    if (!group.current || !mirror.current) return;
+    let y = yaw.current;
+    if (!held.current) y += turn * Math.min(dt, 0.1);
+    y += drag.current ?? 0;
+    drag.current = 0;
+    yaw.current = y;
+    group.current.rotation.y = y;
+    mirror.current.rotation.y = y;
+  });
+
+  // the material is keyed by the look so the shader is rebuilt on a switch; the far
+  // wall of the glass never refracts (it is behind the sheet), only the facing one
+  const refract = mode === "refract";
+  const layers = (reflect: boolean) => {
+    const s = sheetUniformSets[reflect ? 1 : 0];
+    const g = glassUniformSets[reflect ? 1 : 0];
+    const base = reflect ? -3 : 0;
+    return <>
+      {show !== "sheet" && <mesh geometry={glass.geometry} renderOrder={base} frustumCulled={false} layers={refract ? FRONT_LAYER : 0}>
+        <shaderMaterial key={mode} transparent depthWrite={false} side={THREE.BackSide}
+          vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={g} />
+      </mesh>}
+      {show !== "glass" && <mesh geometry={sheet.geometry} renderOrder={base + 1} frustumCulled={false}>
+        <shaderMaterial transparent depthWrite={false} side={THREE.DoubleSide}
+          vertexShader={sheetVertex} fragmentShader={sheetFragment} uniforms={s} />
+      </mesh>}
+      {show !== "sheet" && <mesh geometry={glass.geometry} renderOrder={base + 2} frustumCulled={false} layers={refract ? FRONT_LAYER : 0}>
+        <shaderMaterial key={mode} transparent depthWrite={false} side={THREE.FrontSide}
+          vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={g} />
+      </mesh>}
+    </>;
+  };
+
+  return <>
+    <mesh renderOrder={-10} frustumCulled={false}>
+      <planeGeometry args={[2, 2]} />
+      <shaderMaterial depthTest={false} depthWrite={false} vertexShader={backdropVertex} fragmentShader={backdropFragment} uniforms={backdropUniforms} />
+    </mesh>
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, groundY, 0]} renderOrder={-4}>
+      <planeGeometry args={[1, 1]} />
+      <shaderMaterial transparent depthWrite={false} vertexShader={groundVertex} fragmentShader={groundFragment} uniforms={groundUniforms} />
+    </mesh>
+    {/* the reflection: the same meshes mirrored in the table, fading with depth */}
+    <group ref={mirror} scale={[1, -1, 1]} position={[0, 2 * groundY, 0]}>{layers(true)}</group>
+    <group ref={group}>{layers(false)}</group>
+  </>;
+}
+
+/* ───────── the panel ───────── */
+
+interface Knob { key: keyof VesselTune; label: string; min: number; max: number; step: number; only?: SheetMode }
+const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
+  { group: "glass", knobs: [
+    { key: "frostPatches", label: "frost patches", min: 0, max: 3, step: 1 },
+    { key: "frostSize", label: "frost size", min: 0.4, max: 2.5, step: 0.05 },
+    { key: "frostStrength", label: "frost strength", min: 0, max: 1, step: 0.01 },
+    { key: "rim", label: "rim", min: 0, max: 1.5, step: 0.01 },
+    { key: "thickness", label: "thickness variation", min: 0, max: 1, step: 0.01 },
+    { key: "bubbles", label: "seed bubbles", min: 0, max: 2, step: 1 },
+  ] },
+  // shown only under the refraction look
+  { group: "refraction", knobs: [
+    { key: "envAbove", label: "backdrop  above the horizon", min: 0, max: 1, step: 0.01 },
+    { key: "envBelow", label: "ground  below it", min: 0, max: 1, step: 0.01 },
+    { key: "horizon", label: "horizon  (0 is eye level)", min: -0.5, max: 0.3, step: 0.005 },
+    { key: "horizonSoft", label: "horizon softness", min: 0.01, max: 0.6, step: 0.005 },
+    { key: "bend", label: "bend  (pulls the view in)", min: 0, max: 2, step: 0.01 },
+    { key: "glassSoft", label: "smear by thickness", min: 0, max: 2, step: 0.01 },
+    { key: "bodyAlpha", label: "body", min: 0, max: 1, step: 0.01 },
+    { key: "thickDark", label: "thick parts darken", min: 0, max: 1, step: 0.01 },
+    { key: "highlight", label: "silhouette highlight", min: 0, max: 1.5, step: 0.01 },
+  ] },
+  { group: "sheet", knobs: [
+    { key: "inset", label: "inset", min: 0.8, max: 0.98, step: 0.005 },
+    { key: "arc", label: "arc °", min: 60, max: 220, step: 1, only: "pressed" },
+    { key: "band", label: "band  (1 = true scale)", min: 0.5, max: 1.6, step: 0.01, only: "pressed" },
+    { key: "lift", label: "lift", min: 0, max: 0.15, step: 0.002, only: "pressed" },
+    { key: "foldScale", label: "fold scale", min: 0.4, max: 3, step: 0.05, only: "pressed" },
+    { key: "stockThick", label: "stock alpha  thick", min: 0.2, max: 1, step: 0.01 },
+    { key: "stockThin", label: "stock alpha  thin", min: 0.1, max: 0.95, step: 0.01 },
+    { key: "wear", label: "edge wear  mm", min: 0.05, max: 1.6, step: 0.01 },
+    { key: "holeRim", label: "perforation rim", min: 0, max: 1, step: 0.01 },
+    { key: "backFace", label: "far face", min: 0, max: 1, step: 0.01 },
+  ] },
+  // shown only under the draped sheet: how it hangs
+  { group: "drape", only: "draped", knobs: [
+    { key: "sheetSize", label: "size  (strip length)", min: 0.6, max: 3, step: 0.02 },
+    { key: "anchorAngle", label: "hung from  around °", min: -180, max: 180, step: 1 },
+    { key: "anchorHeight", label: "hung from  height", min: 0.3, max: 1, step: 0.01 },
+    { key: "tilt", label: "tilt °  (90 hangs from one end)", min: -90, max: 90, step: 1 },
+    { key: "contact", label: "pressed for  mm", min: 0, max: 46, step: 0.5 },
+    { key: "sag", label: "peels over  mm", min: 2, max: 46, step: 0.5 },
+    { key: "peel", label: "peels away °", min: -40, max: 160, step: 1 },
+    { key: "curl", label: "curl across", min: -1, max: 1, step: 0.01 },
+    { key: "twist", label: "twist °", min: -90, max: 90, step: 1 },
+    { key: "gap", label: "air from the wall", min: 0, max: 0.15, step: 0.002 },
+    { key: "soft", label: "softness  (0 is crisp)", min: 0, max: 1, step: 0.01 },
+  ] },
+  { group: "feel", only: "draped", knobs: [
+    { key: "sheer", label: "sheer  (how much shows through)", min: 0.3, max: 1, step: 0.01 },
+    { key: "softRim", label: "furred edge", min: 0, max: 1, step: 0.01 },
+    { key: "sheen", label: "sheen", min: 0, max: 1, step: 0.01 },
+    { key: "gloss", label: "gloss  (1 is film)", min: 0, max: 1, step: 0.01 },
+    { key: "grain", label: "grain", min: 0, max: 0.15, step: 0.005 },
+  ] },
+  { group: "dye", knobs: [
+    { key: "dyeLift", label: "black lift", min: 0, max: 0.25, step: 0.005 },
+    { key: "dyeContrast", label: "contrast", min: 0.5, max: 1.2, step: 0.01 },
+    { key: "dyeShoulder", label: "shoulder", min: 0, max: 1, step: 0.01 },
+    { key: "dyeExposure", label: "exposure", min: -1, max: 1, step: 0.01 },
+    { key: "dyeSaturation", label: "saturation", min: 0, max: 1.2, step: 0.01 },
+    { key: "dyeSoft", label: "softness", min: 0, max: 1, step: 0.01 },
+    { key: "dyeGrain", label: "grain", min: 0, max: 0.1, step: 0.001 },
+    { key: "dyeLeak", label: "light leak", min: 0, max: 1, step: 0.01 },
+    { key: "photoOpacity", label: "photo opacity", min: 0.3, max: 1, step: 0.01 },
+    { key: "bleed", label: "bled corner", min: 0, max: 1, step: 0.01 },
+  ] },
+  { group: "light", knobs: [
+    { key: "keyAzimuth", label: "key azimuth °", min: -180, max: 180, step: 1 },
+    { key: "keyElevation", label: "key elevation °", min: 0, max: 90, step: 1 },
+    { key: "keyIntensity", label: "intensity", min: 0, max: 2, step: 0.01 },
+  ] },
+  { group: "scene", knobs: [
+    { key: "turn", label: "turn  rad/s", min: 0, max: 0.4, step: 0.005 },
+    { key: "ground", label: "ground", min: 0, max: 1, step: 0.01 },
+    { key: "warmth", label: "background warmth", min: 0, max: 1, step: 0.01 },
+  ] },
+];
+
+/** /lab/vessel — the memory as a glass vessel with the film inside, with its knobs. */
+export function VesselPreview() {
+  const [tune, setTune] = useState<VesselTune>(VESSEL_TUNE_DEFAULT);
+  const [mode, setMode] = useState<GlassMode>(GLASS_MODE);
+  const [sheetMode, setSheetMode] = useState<SheetMode>(SHEET_MODE);
+  const [face, setFace] = useState<SheetFace>(SHEET_FACE);
+  const [show, setShow] = useState<Show>(SHOW);
+  const refract = mode === "refract";
+  const backdrop = backdropFor(tune, mode);
+  // the title sits on the backdrop, which is dark under the refraction look
+  const ink = refract && tune.envAbove < 0.55 ? "rgba(226, 228, 228, 0.82)" : CHROME_GRAY;
+  // ?photo= is one of the bundled stills by index, or any image URL
+  const [url, setUrl] = useState<string>(() => {
+    const p = PARAMS.get("photo") ?? "";
+    if (/^\d+$/.test(p)) return PHOTOS[Math.min(PHOTOS.length - 1, Number(p))];
+    return p || PHOTOS[0];
+  });
+  const [seed, setSeed] = useState(() => 3.7);
+  const [copied, setCopied] = useState(false);
+  const [form] = useState(() => createArtifactForm({ seed: FORM_SEED, category: CATEGORY }));
+  const held = useRef(false);
+  const drag = useRef(0);
+  const lastX = useRef(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const takeFile = (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setUrl(URL.createObjectURL(file));
+  };
+  const onDrop = (e: DragEvent) => { e.preventDefault(); takeFile(e.dataTransfer.files?.[0]); };
+
+  const copy = async () => {
+    const lines = (Object.keys(VESSEL_TUNE_DEFAULT) as (keyof VesselTune)[]).map((k) => `  ${k}: ${Number(tune[k].toFixed(3))},`);
+    try {
+      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}\n// glass: ${mode}, sheet: ${sheetMode}, face: ${face}, show: ${show}, stock: ${STOCKS[tune.stock]?.name ?? tune.stock}, seed: ${seed.toFixed(3)}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch { /* clipboard refused — the values are still on screen */ }
+  };
+
+  const release = () => { held.current = false; };
+  const onPointerDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic events have no pointer to capture */ }
+    held.current = true;
+    lastX.current = e.clientX;
+  };
+  const onPointerMove = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!held.current) return;
+    drag.current += (e.clientX - lastX.current) * 0.008;
+    lastX.current = e.clientX;
+  };
+
+  return (
+    <main onDragOver={(e) => e.preventDefault()} onDrop={onDrop}
+      style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: backdropCss(backdrop) }}>
+      {/* a long lens, as the still-life references are shot: the far wall projects nearly as large as the near one */}
+      <Canvas camera={{ position: [0, 0.6, CAMERA_Z], fov: 18, near: 0.1, far: 50 }}
+        dpr={[1, 2]} gl={{ antialias: true, alpha: true }}
+        style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: "calc(100% - 260px)" }}>
+        <Stage tune={tune} mode={mode} sheetMode={sheetMode} face={face} show={show} backdrop={backdrop} url={url} seed={seed} form={form} held={held} drag={drag} />
+      </Canvas>
+
+      <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20, color: ink }}>lab — vessel</p>
+
+      <div style={{ position: "absolute", left: "calc(50% - 130px)", top: 56, transform: "translateX(-50%)", width: "min(30em, 70vw)",
+        textAlign: "center", pointerEvents: "none" }}>
+        <p style={{ ...TITLE, margin: 0, color: ink }}>the memory, as a vessel</p>
+        <p style={{ margin: "8px 0 0", fontFamily: SERIF, fontSize: NOTE_SIZE, lineHeight: 1.45, color: ink }}>
+          drop a photo anywhere, or choose one below. hold to stop the turn; drag to turn it yourself.
+        </p>
+      </div>
+
+      {/* hold to stop the turn, drag to turn */}
+      <button type="button" aria-label="hold to stop the turn, drag to turn"
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+        onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ position: "absolute", left: 0, top: 0, bottom: 0, right: 260, border: "none", outline: "none",
+          background: "transparent", touchAction: "none", cursor: "default", zIndex: 5 }} />
+
+      <div style={{ position: "absolute", left: "calc(50% - 130px)", bottom: 34, transform: "translateX(-50%)", display: "flex",
+        alignItems: "center", gap: 14, zIndex: 10 }}>
+        <TextButton label="choose a photo" onClick={() => inputRef.current?.click()} />
+        <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.6, marginLeft: 10 }}>or one of these</span>
+        {PHOTOS.map((p) => (
+          <button key={p} type="button" aria-label="select photo" aria-pressed={url === p} onClick={() => setUrl(p)}
+            style={{ width: 44, height: 44, flex: "0 0 44px", padding: 0, overflow: "hidden", borderRadius: "50%",
+              border: `1px solid rgba(123, 123, 135, ${url === p ? 0.6 : 0.25})`, background: "#e7e7e8",
+              boxShadow: "0 6px 18px rgba(40, 36, 48, 0.1)", cursor: "pointer", opacity: 0.85 }}>
+            <img src={p} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }} />
+          </button>
+        ))}
+      </div>
+      <input ref={inputRef} type="file" accept="image/*" aria-label="choose a photo" style={{ display: "none" }}
+        onChange={(e) => takeFile(e.target.files?.[0])} />
+
+      <aside aria-label="vessel knobs" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 260, padding: "64px 28px 28px 24px",
+        boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 8, zIndex: 10, overflowY: "auto",
+        borderLeft: "1px solid rgba(123, 123, 135, 0.14)", background: `rgba(236, 237, 236, ${refract ? 0.88 : 0.5})`, backdropFilter: "blur(6px)" }}>
+        {KNOBS.filter(({ group, only }) => (group !== "refraction" || refract) && (!only || only === sheetMode)).map(({ group, knobs }) => (
+          <section key={group} style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+            <p style={{ ...META, margin: "0 0 2px", color: CHROME_GRAY }}>{group}</p>
+            {group === "sheet" && (
+              <div role="radiogroup" aria-label="sheet" style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                {(["pressed", "draped"] as const).map((m) => {
+                  const on = m === sheetMode;
+                  return (
+                    <button key={m} type="button" role="radio" aria-checked={on} onClick={() => setSheetMode(m)}
+                      style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                        color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                      {m === "pressed" ? "pressed to the wall" : "draped"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {group === "sheet" && (
+              <div role="radiogroup" aria-label="picture faces" style={{ display: "flex", gap: 16, alignItems: "baseline", marginBottom: 4 }}>
+                <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.5 }}>picture faces</span>
+                {(["inside", "glass"] as const).map((f) => {
+                  const on = f === face;
+                  return (
+                    <button key={f} type="button" role="radio" aria-checked={on} onClick={() => setFace(f)}
+                      style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                        color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                      {f === "inside" ? "the inside" : "the glass"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {group === "glass" && (
+              <div role="radiogroup" aria-label="glass look" style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                {(["frost", "refract"] as const).map((m) => {
+                  const on = m === mode;
+                  return (
+                    <button key={m} type="button" role="radio" aria-checked={on} onClick={() => setMode(m)}
+                      style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                        color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                      {m === "frost" ? "frost" : "refraction"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {group === "scene" && (
+              <div role="radiogroup" aria-label="layers shown" style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                {(["both", "glass", "sheet"] as const).map((s) => {
+                  const on = s === show;
+                  return (
+                    <button key={s} type="button" role="radio" aria-checked={on} onClick={() => setShow(s)}
+                      style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                        color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                      {s === "both" ? "both" : s === "glass" ? "glass only" : "sheet only"}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {group === "sheet" && (
+              <div style={{ marginBottom: 4 }}>
+                <span style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY }}>
+                  <span>stock</span>
+                  <span style={{ opacity: 0.6 }}>{STOCKS[tune.stock]?.name}</span>
+                </span>
+                <div role="radiogroup" aria-label="stock" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                  {STOCKS.map((s, i) => {
+                    const on = i === tune.stock;
+                    return (
+                      <button key={s.name} type="button" role="radio" aria-checked={on} aria-label={s.name}
+                        onClick={() => setTune((t) => ({ ...t, stock: i }))}
+                        style={{ width: 44, height: 22, padding: 0, borderRadius: 3, cursor: "pointer",
+                          border: `1px solid rgba(123, 123, 135, ${on ? 0.7 : 0.22})`,
+                          boxShadow: on ? "0 0 0 2px rgba(236, 237, 236, 1), 0 0 0 3px rgba(123, 123, 135, 0.35)" : "none",
+                          background: `linear-gradient(100deg, ${stockHex(s.low)}, ${stockHex(s.base)} 45%, ${stockHex(s.high)})` }} />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {knobs.filter(({ only }) => !only || only === sheetMode).map(({ key, label, min, max, step }) => (
+              <label key={key} style={{ display: "block" }}>
+                <span style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY }}>
+                  <span>{label}</span>
+                  <span style={{ opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>
+                    {tune[key].toFixed(step >= 1 ? 0 : step < 0.01 ? 3 : 2)}
+                  </span>
+                </span>
+                <input type="range" className="vessel-range" min={min} max={max} step={step} value={tune[key]}
+                  onChange={(e) => setTune((t) => ({ ...t, [key]: Number(e.target.value) }))} />
+              </label>
+            ))}
+          </section>
+        ))}
+        <div style={{ display: "flex", gap: 18, marginTop: 14, flexWrap: "wrap" }}>
+          <TextButton label="another strip" onClick={() => setSeed(Math.random() * 10)} style={{ fontSize: NOTE_SIZE }} />
+          <TextButton label="reset" onClick={() => setTune(VESSEL_TUNE_DEFAULT)} style={{ fontSize: NOTE_SIZE }} />
+          <TextButton label={copied ? "copied" : "copy values"} onClick={() => void copy()} style={{ fontSize: NOTE_SIZE }} />
+        </div>
+      </aside>
+
+      <style>{`
+        .vessel-range { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; margin: 0; background: transparent; cursor: pointer; display: block; }
+        .vessel-range::-webkit-slider-runnable-track { height: 1px; background: rgba(123, 123, 135, 0.4); }
+        .vessel-range::-moz-range-track { height: 1px; background: rgba(123, 123, 135, 0.4); }
+        .vessel-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 9px; height: 9px; border-radius: 50%; margin-top: -4px; background: #7b7b87; border: none; }
+        .vessel-range::-moz-range-thumb { width: 9px; height: 9px; border-radius: 50%; background: #7b7b87; border: none; }
+        .vessel-range:focus-visible { outline: none; }
+        .vessel-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(123, 123, 135, 0.25); }
+      `}</style>
+    </main>
+  );
+}

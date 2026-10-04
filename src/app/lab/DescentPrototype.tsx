@@ -1,7 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useNavigate } from "react-router";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { CHROME_GRAY } from "../lib/colors";
+import { CAROUSEL_PATH } from "../lib/routes";
+import { saveMemory } from "../lib/memoryStore";
+import {
+  createGestureGate,
+  handCenter,
+  handOpenness,
+  landmarkDistance,
+  useHandTracking,
+} from "../hooks/useHandTracking";
+import { GestureHint } from "../components/GestureHint";
+import { MATERIAL_PRESETS } from "../components/SceneViewer";
+import { draftColorIndex } from "../components/NamingRim";
 import { INSTRUCTION_SIZE, META, NOTE_SIZE, SANS, SERIF, TITLE } from "../lib/theme";
 import { flowProgress, smoothProgress } from "../lib/landingTransition";
 import { POND_DROP_SLOTS } from "../lib/voicePeaks";
@@ -16,11 +29,16 @@ import {
   MEMORY_PHOTO_FILTER_DEFAULTS,
   buildPhotoUv,
   createMemoryPhotoMaterial,
-  setMemoryPhotoFade,
 } from "../components/MemoryPhotoLayer";
 import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
-import { computeMeshNormals, createArtifactForm } from "../lib/superformula";
+import { computeMeshNormals, createArtifactForm, type ArtifactForm } from "../lib/superformula";
 import { DEFAULT_OKLCH, meshCoreFromOklch, oklchToHex, rimFromOklch, sampleField, uvFromOklch, type Oklch } from "../lib/oklch";
+import { FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto } from "../lib/filmLook";
+import { SHEET_GLSL, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, sheetUniforms } from "./filmStrip";
+import {
+  CLOUD_KNOBS, CLOUD_TRACKS, CLOUD_TUNE_DEFAULT, buildCloudGeometry, cloudPhaseBlocks, createCloudMaterial, createCloudUniforms,
+  setCloudUniforms, type CloudTune, type PhaseBlock, type TuneKnob,
+} from "./wrapCloud";
 import photoA from "../../assets/memory-photo.jpg";
 import photoB from "../../assets/memory-photo-02.png";
 
@@ -30,9 +48,11 @@ import photoB from "../../assets/memory-photo-02.png";
  * The photo falls onto the pond as a strip of film and floats; the view sinks
  * through it into the water, where the form surfaces and is shaped (shape,
  * distance, color — pointer-driven here, the same three signals the gesture
- * pages produce). On confirm the film overhead dissolves into particles that
- * settle onto the form as its photo; the form then rises, breaks the surface,
- * and is named where it floats.
+ * pages produce). On confirm the view draws back, the film's emulsion lets
+ * go, and the photo develops on the form — darks first, as on paper in the
+ * tray; the form then rises, breaks the surface, and is named where it
+ * floats. (With `?cloud=1` the photo instead leaves the film as a point
+ * cloud that falls onto the form — `wrapCloud.ts`, kept out of the shot.)
  *
  * The water is the pond's own wave field (POND_WAVES_GLSL) with an underside
  * added. While the form is being handled the water loses color and
@@ -50,13 +70,16 @@ const POND_LOOK = new THREE.Vector3(0, 0.05, -24);
 /** Where the film comes to rest — lower third of the pond view. */
 const FILM_AT = new THREE.Vector3(0, 0, 2);
 const FILM_YAW = 0.14;
-/** A cut of 35mm: one 36×24 frame and a little of its neighbours, in mm. */
-const STRIP_MM = { length: 46, width: 35 };
 const FILM_LENGTH = 2.0;
 const FILM_WIDTH = FILM_LENGTH * STRIP_MM.width / STRIP_MM.length;
-/** The film starts this far in front of the lens, matched to the thumbnail. */
-const START_DEPTH = 2.4;
-const FALL_S = 2.4;
+/** While a photo is chosen the empty strip hangs this far in front of the lens. */
+const CHOOSE_DEPTH = 3.7;
+/** It surfaces grain by grain over the first moments of the page. */
+const EMERGE_S: [number, number] = [0.2, 2.0];
+/** The chosen photo develops into the window, and the strip is let go a beat later. */
+const DEVELOP_S = 1.4;
+const LET_GO_S = 2.1;
+const FALL_S = 3.0;
 const SETTLE_S = 0.9;
 const HOLD_S = 1.1;
 const DESCENT_S = 6.2;
@@ -67,20 +90,62 @@ const WATER_WASH = 1.0;
 /** The wash comes in as the form surfaces out of the water, seconds into the descent. */
 const WASH_IN_S: [number, number] = [4.6, 9.0];
 
-/* The wrap: the view draws back so the film overhead and the form are both in
-   frame, and the form lifts a little toward the light. */
-const WRAP_CAMERA = new THREE.Vector3(0, -2.6, 7.6);
-const WRAP_LOOK = new THREE.Vector3(0, -2.0, 1.0);
-const WRAP_FORM_AT = new THREE.Vector3(0, -3.1, -0.2);
+/* The wrap: the view draws back and tilts up so the film overhead and the
+   form below are both in frame, and the form lifts a little toward the light;
+   the film's emulsion lets go and the print develops on the form. Everything
+   about the wrap that is a matter of judgement is a knob here, live on the
+   lab's panel; these are the values it opens with. Write back what the
+   sliders settle on. The point cloud (the photo leaving the film as points
+   that fall onto the form) is kept whole in `wrapCloud.ts` and is **not part
+   of the shot** unless `?cloud=1` is on the URL; its knobs extend these. */
+interface WrapTune extends CloudTune {
+  // framing: the camera and its look while the print develops; the form's seat (formZ under the film, which rests at z 2);
+  // how far the view sinks over the wrap
+  cameraY: number; cameraZ: number; lookY: number; lookZ: number; formY: number; formZ: number; viewSink: number;
+  // the view turned about the look point, in degrees — to watch the fall from another side; the shot itself does not change
+  orbitYaw: number; orbitPitch: number;
+  // the rise has its own turn: taken up over the first part of the rise, held while the form is in the water,
+  // and let go between riseViewUntil and riseViewBack (fractions of the rise) as it comes up to the pond view
+  riseYaw: number; risePitch: number; riseViewUntil: number; riseViewBack: number;
+  /** How much the form grows for the wrap, as a fraction of its size: .3 is 1.3× across, ~2.2× the volume. */
+  grow: number;
+  /** Seen from under the water the film is backlit; this is how much of its image still shows (was .42). */
+  filmBelow: number;
+  // timing: the emulsion lets go over releaseS (the cloud's release spread is fixed when it is built — on "again"); the wrap ends at fallS
+  releaseS: number; fallS: number;
+  // the print develops on the form over overlayIn…overlayOut (seconds after the emulsion begins to let go):
+  // the darks lead by developDarks, the top of the image by developSweep, each part coming up over developSoft
+  overlayIn: number; overlayOut: number; developDarks: number; developSweep: number; developSoft: number;
+}
+const WRAP_TUNE_DEFAULT: WrapTune = {
+  ...CLOUD_TUNE_DEFAULT,
+  cameraY: -3.0, cameraZ: 8.6, lookY: -1.1, lookZ: 2.0, formY: -2.8, formZ: 2.0, viewSink: 0.45,
+  orbitYaw: 0, orbitPitch: 0,
+  riseYaw: -18, risePitch: -49, riseViewUntil: 0.45, riseViewBack: 0.85,
+  grow: 0.3,
+  filmBelow: 0.6,
+  releaseS: 2.2, fallS: 8.0,
+  overlayIn: 3.2, overlayOut: 7.0, developDarks: 0.8, developSweep: 0.6, developSoft: 0.35,
+};
+/* The transport: pause, speed, and a seek along the wrap and the rise. The
+   page writes `paused`, `speed` and `seek`; the stage reads them each frame
+   and writes back `shot` (seconds since confirm), `length`, and whether the
+   shot has reached the wrap at all. Only the wrap and the rise can be
+   scrubbed — before them the shot latches state (the fall, the hold, the
+   descent) that is not worth unwinding. */
+interface Transport {
+  paused: boolean;
+  speed: number;
+  /** Seconds since confirm to jump to; the stage clears it once taken. */
+  seek: number | null;
+  shot: number;
+  length: number;
+  active: boolean;
+}
+const WRAP_CAMERA = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.cameraY, WRAP_TUNE_DEFAULT.cameraZ);
+const WRAP_LOOK = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.lookY, WRAP_TUNE_DEFAULT.lookZ);
+const WRAP_FORM_AT = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.formY, WRAP_TUNE_DEFAULT.formZ);
 const WRAP_MOVE_S = 2.2;
-/* The photo leaves the film over RELEASE_S — a few grains from the edge first,
-   then more — and everything has sunk, been caught and faded by WRAP_FALL_S.
-   Sinking speeds span 3× between the lightest and heaviest grain. */
-const RELEASE_S = 2.2;
-const WRAP_FALL_S = 7.2;
-const PARTICLE_COUNT = 5200;
-const SINK_SPEED: [number, number] = [0.72, 2.1];
-
 /* The rise: up through the surface, to the seat where the memory is named. */
 const RISE_S = 6.0;
 const NAME_FORM_AT = new THREE.Vector3(0, 0.95, 2.0);
@@ -131,8 +196,29 @@ const DESCENT_LOOK = new THREE.CatmullRomCurve3([
 
 const PHOTOS = [photoA, photoB];
 
-/** ?speed=0.25 plays the whole shot at quarter speed, for judging the timing. */
-const SPEED = Number(new URLSearchParams(window.location.search).get("speed")) || 1;
+/* Lab switches on the URL. ?speed=0.25 plays the whole shot at quarter speed.
+   ?from=wrap opens on the wrap itself — the photo already on the film, the
+   descent done, the form surfaced and handled, confirm just pressed — so the
+   grains can be judged without the minute before them; "again" replays from
+   the same place. With it, ?photo=0|1 picks the still and ?morph= / ?frost=
+   (0–1) set how the form was shaped and misted. */
+const PARAMS = new URLSearchParams(window.location.search);
+const SPEED = Number(PARAMS.get("speed")) || 1;
+const FROM: "wrap" | null = PARAMS.get("from") === "wrap" ? "wrap" : null;
+/** `?cloud=1`: the photo leaves the film as a point cloud (`wrapCloud.ts`). Off by default — not part of the shot. */
+const CLOUD = PARAMS.get("cloud") === "1";
+const toggleCloud = () => {
+  const url = new URL(window.location.href);
+  if (CLOUD) url.searchParams.delete("cloud"); else url.searchParams.set("cloud", "1");
+  window.location.assign(url.toString());
+};
+const unitParam = (key: string) => {
+  const v = Number(PARAMS.get(key));
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+};
+const PREVIEW_PHOTO = PHOTOS[Math.min(PHOTOS.length - 1, Math.max(0, Math.floor(Number(PARAMS.get("photo") ?? 1)) || 0))];
+const PREVIEW_MORPH = unitParam("morph");
+const PREVIEW_FROST = unitParam("frost");
 
 /** The water's body, seen from inside it: pale toward the surface, deep below.
     uWash gives it up almost entirely while the form is handled: the landing
@@ -301,139 +387,64 @@ const filmVertex = /* glsl */ `
   }
 `;
 
-/* Pale, faded stock — a near-white base, a little cool ink, soft frame edges.
-   The photo keeps its content but is lifted and pulled toward that ink, so it
-   reads as an image held in film rather than a print laid on top. Geometry is
-   in mm so the perforations keep the real 35mm pitch. While the thumbnail's
-   circle is still opening, the film's features have not arrived yet. */
+/* The strip as the film lab draws it (FilmPreview, filmStrip.ts, filmLook.ts):
+   a translucent sheet of pale stock whose thickness is not even, torn ends and
+   a worn, light-catching edge, the photo developed through filmLook and laid
+   in the window as dye at less than full cover, its frame fading into the
+   stock. Geometry is in mm so the perforations keep the real 35mm pitch. On
+   top of that, what only the shot needs: the develop (darks first), the
+   dissolve into grains, the sheen where the curl catches the sky, and the
+   backlit face seen from under the water. */
 const filmFragment = /* glsl */ `
+  ${STRIP_GLSL}
+  ${FILM_LOOK_GLSL}
+  ${SHEET_GLSL}
+  ${STRIP_FACE_GLSL}
   uniform sampler2D uPhoto;
   uniform sampler2D uEdgePrint;
   uniform vec2 uSize;
   uniform float uImageAspect;
-  uniform float uMorph;
   uniform float uFloat;
   uniform float uSeed;
   uniform float uDissolve;
+  uniform float uBelow;
+  uniform float uDevelop;
   varying vec2 vLocal;
   varying vec3 vWorld;
   varying vec3 vNormal;
-  const vec2 STRIP = vec2(${STRIP_MM.length.toFixed(1)}, ${STRIP_MM.width.toFixed(1)});
-  const vec2 WINDOW = vec2(18.0, 12.0);
-  const float PITCH = 4.75;
-  const float HOLE_Y = 14.1;
-  const vec2 HOLE = vec2(.99, 1.395);
-  float hash1(float x) { return fract(sin(x * 127.1) * 43758.5453); }
-  float noise1(float x) {
-    float i = floor(x), f = fract(x);
-    return mix(hash1(i), hash1(i + 1.0), f * f * (3.0 - 2.0 * f));
-  }
-  float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  float noise2(vec2 p) {
-    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash2(i), hash2(i + vec2(1, 0)), f.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), f.x), f.y);
-  }
-  float roundedBox(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + r;
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-  }
   void main() {
-    float feature = smoothstep(.35, 1.0, uMorph);
-    vec2 hs = uSize * .5;
     vec2 toWorld = uSize / STRIP;
     vec2 mm = vLocal / toWorld;
 
-    // outline: the circle opens into the strip; its short ends are torn
-    float side = sign(mm.x) * 13.0;
-    float torn = (noise1(mm.y * .32 + side + uSeed * 7.0) * .75
-      + noise1(mm.y * 1.3 + side + uSeed) * .2
-      + noise1(mm.y * 6.0 + side) * .05) * 1.4 * feature;
-    float shortSide = min(hs.x, hs.y);
-    float d = roundedBox(vLocal, vec2(hs.x - torn * toWorld.x, hs.y), mix(shortSide, shortSide * .02, uMorph));
-    float aa = fwidth(d);
-    float alpha = 1.0 - smoothstep(-aa, aa, d);
-    float hx = mod(mm.x + PITCH * .5, PITCH) - PITCH * .5;
-    float dh = roundedBox(vec2(hx, abs(mm.y) - HOLE_Y), HOLE, .42);
-    alpha *= 1.0 - (1.0 - smoothstep(-fwidth(dh), fwidth(dh), dh)) * feature;
+    // the torn outline, worn and scuffed, the perforations cut (filmStrip.ts)
+    float d = stripTornOutline(mm, uSeed);
+    float dh = stripHole(mm);
+    float alpha = stripCoverage(mm, uSeed, d, dh, 1.0);
     // the dissolve: the emulsion lets go in a drifting grain, image first
-    float grain = noise2(mm * vec2(.9, 1.6) + uSeed * 5.0) * .7 + noise2(mm * 4.0) * .3;
+    float grain = filmNoise(mm * vec2(.9, 1.6) + uSeed * 5.0) * .7 + filmNoise(mm * 4.0) * .3;
     float gone = 1.0 - smoothstep(uDissolve - .3, uDissolve, grain * .8 + .1);
     alpha *= 1.0 - gone;
     if (alpha < .01) discard;
 
-    // the base: near-white, uneven density, a faint blue stain drifting in
-    vec3 base = vec3(.935, .945, .948) + (noise2(mm * .35 + uSeed) - .5) * .025;
-    float stain = smoothstep(.58, .92, noise2(vec2(mm.x * .09, mm.y * .03) + uSeed * 3.0));
-    base = mix(base, vec3(.70, .78, .86), stain * .45);
-    base = mix(base, vec3(.80, .84, .87), smoothstep(15.5, 17.5, abs(mm.y)) * .5);
-
-    // the frame: the whole circle while it is a thumbnail, the 36×24 window once it is film
-    vec2 windowWorld = mix(STRIP * .5 + 1.0, WINDOW, feature) * toWorld;
-    vec2 q = vLocal / (windowWorld * 2.0);
-    float boxAspect = windowWorld.x / windowWorld.y;
-    vec2 uv = q;
-    if (boxAspect > uImageAspect) uv.y *= uImageAspect / boxAspect;
-    else uv.x *= boxAspect / uImageAspect;
-    vec3 photo = texture2D(uPhoto, uv + .5).rgb;
-    float luma = dot(photo, vec3(.2126, .7152, .0722));
-    vec3 ink = mix(vec3(.30, .40, .52), vec3(.94, .95, .95), luma);
-    vec3 faded = mix(photo, ink, .45 * feature);
-    faded = mix(faded, faded * .8 + .17, feature);
-    vec2 soft = .6 / (windowWorld / toWorld);
-    float inFrame = (1.0 - smoothstep(.5 - soft.x * feature - fwidth(q.x), .5, abs(q.x)))
-      * (1.0 - smoothstep(.5 - soft.y * feature - fwidth(q.y), .5, abs(q.y)));
-    vec3 color = mix(base, faded, inFrame);
-
-    vec4 print = texture2D(uEdgePrint, mm / STRIP + .5);
-    color = mix(color, vec3(.33, .45, .58), print.a * .6 * feature);
+    // the face: stock, the photo developing into the window as dye, the cut edge, the edge print
+    vec3 color;
+    float a;
+    stripFace(mm, uSeed, d, dh, sheetWindow(mm, uSeed), uPhoto, uImageAspect, 0.0, uEdgePrint, uDevelop, color, a);
 
     // a soft sheen where the curl catches the sky, nothing glossy
     vec3 n = normalize(vNormal);
     vec3 eye = normalize(cameraPosition - vWorld);
     if (dot(n, eye) < 0.0) n = -n;
     float sheen = pow(max(0.0, dot(reflect(-eye, n), normalize(vec3(-.3, .8, -.5)))), 18.0);
-    color = color * (.9 + .1 * n.y) + sheen * .28 * feature;
+    color = color * (.92 + .08 * n.y) + sheen * .16;
     color *= mix(1.0, .965, uFloat);
     if (!gl_FrontFacing) {
-      // from under the water the film is backlit, light coming through it
-      color = mix(vec3(.92, .95, .94), color * 1.05, .42);
+      // from under the water the film is backlit, light coming through it; uBelow is how much of the image survives that
+      color = mix(vec3(.92, .95, .94), color * 1.05, uBelow);
     }
-    gl_FragColor = vec4(color, alpha * mix(1.0, mix(.9, .97, inFrame), feature));
+    gl_FragColor = vec4(color, alpha * clamp(a, 0.0, 1.0));
   }
 `;
-
-/** The edge printing — stock name along the top, frame numbers and a ruler
-    along the bottom — drawn once, in mm, onto a transparent texture. */
-function createEdgePrint(frame: number): THREE.CanvasTexture {
-  const pxPerMm = 40;
-  const canvas = document.createElement("canvas");
-  canvas.width = STRIP_MM.length * pxPerMm;
-  canvas.height = STRIP_MM.width * pxPerMm;
-  const ctx = canvas.getContext("2d");
-  const mm = (v: number) => v * pxPerMm;
-  if (ctx) {
-    ctx.fillStyle = "#000";
-    ctx.textBaseline = "alphabetic";
-    ctx.font = `600 ${mm(1.4)}px ui-monospace, Menlo, monospace`;
-    ctx.fillText("NIJIMU 100", mm(5), mm(1.65));
-    ctx.fillText("NIJIMU 100", mm(33), mm(1.65));
-    ctx.font = `600 ${mm(1.5)}px ui-monospace, Menlo, monospace`;
-    ctx.fillText(String(frame), mm(7.5), mm(34.6));
-    ctx.fillText(`${frame}A`, mm(36), mm(34.6));
-    ctx.beginPath();
-    ctx.moveTo(mm(12.5), mm(33.3));
-    ctx.lineTo(mm(13.7), mm(33.9));
-    ctx.lineTo(mm(12.5), mm(34.5));
-    ctx.fill();
-    for (let i = 0; i <= 12; i++) {
-      const tall = i % 4 === 0 ? 1.1 : 0.6;
-      ctx.fillRect(mm(16 + i * 1.2), mm(33.2), mm(0.32), mm(tall));
-    }
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.anisotropy = 4;
-  return texture;
-}
 
 const motesVertex = /* glsl */ `
   attribute float aSeed;
@@ -510,98 +521,80 @@ const formFragment = /* glsl */ `
   }
 `;
 
-/* The photo, let go of the film and settling on the form the way dust settles
-   through still water. Each grain has a weight: the heavy ones are a little
-   larger, sink faster and straighter; the light ones drift, pause and lift on
-   the water, and arrive last. Nothing pulls a grain toward the form until it
-   has sunk to the form's height — then it is caught where it belongs. uClock
-   is seconds since the film began to let go. */
-const particleVertex = /* glsl */ `
-  attribute vec3 aStart;
-  attribute vec3 aEnd;
-  attribute vec3 aColor;
-  attribute float aDelay;
-  attribute float aWeight;
-  attribute float aSeed;
-  uniform float uClock;
-  uniform float uPixel;
-  uniform vec2 uSpeed;
-  uniform mat4 uForm;
-  varying vec3 vColor;
-  varying float vAlpha;
-  vec3 curl(vec3 p, float t) {
-    return vec3(
-      sin(p.y * 1.7 + p.z * .9 + t * .5),
-      sin(p.z * 1.3 + p.x * 1.1 - t * .35) * .4,
-      sin(p.x * 1.5 + p.y * .8 + t * .6));
-  }
+/* The touch. While the form is being handled the frame is drawn once more
+   through the water near the hands: a soft lens gathers around each hand and
+   bends what is behind it — the form's edge, the motes, the light — the way a
+   glass vessel bends when a hand reaches for it under water. A moving hand
+   leaves a wake that trails it; the disturbance shimmers; at its thickest the
+   light splits by a hair. Nothing is added to the scene, only its light bent. */
+const touchVertex = /* glsl */ `
+  varying vec2 vUv;
   void main() {
-    float age = uClock - aDelay;
-    float light = 1.0 - aWeight;
-    float speed = mix(uSpeed.x, uSpeed.y, aWeight);
-    vec3 end = (uForm * vec4(aEnd, 1.0)).xyz;
-    // the sink: terminal velocity, with a slow buoyant bob that the light grains feel most
-    float settle = smoothstep(0.0, .5, age);
-    float bob = sin(age * (1.4 + aSeed * 1.2) + aSeed * 6.283) * .5 + .5;
-    float lift = light * .14 * bob * settle;
-    float drop = speed * max(0.0, age) * (.72 + .28 * settle);
-    vec3 p = aStart;
-    p.y -= drop - lift;
-    // a slow current carries the column toward the form's side; lateral drift from the curl, by lightness
-    float fall = max(.1, (aStart.y - end.y) / speed);
-    p.xz += (end.xz - aStart.xz) * .6 * smoothstep(0.0, fall, age);
-    p += curl(aStart * 2.0 + aSeed * 7.0, age) * (.05 + .22 * light) * settle;
-    // the catch: as the grain comes down to the form's height, it is taken and held
-    float sinkY = aStart.y - drop;
-    float catchK = smoothstep(end.y + 1.3, end.y + .05, sinkY);
-    catchK = catchK * catchK * (3.0 - 2.0 * catchK);
-    p = mix(p, end, catchK);
-    vec4 view = viewMatrix * vec4(p, 1.0);
-    gl_Position = projectionMatrix * view;
-    float dist = max(.5, -view.z);
-    gl_PointSize = clamp(uPixel * (4.2 + 3.4 * aWeight + 1.2 * aSeed) / dist, 1.0, 7.0);
-    vColor = aColor;
-    // present once it has left the film; once held, it fades into the surface — the light grains first
-    float born = smoothstep(0.0, .25, age);
-    float landAge = (aStart.y - (end.y + .05)) / speed;
-    float linger = mix(.45, 1.5, aWeight);
-    float faded = 1.0 - smoothstep(landAge + .2, landAge + .2 + linger, age);
-    vAlpha = born * faded;
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
-const particleFragment = /* glsl */ `
-  varying vec3 vColor;
-  varying float vAlpha;
+const touchFragment = /* glsl */ `
+  uniform sampler2D tScene;
+  uniform vec2 uHand[2];
+  uniform vec2 uWake[2];
+  uniform float uPress[2];
+  uniform float uAspect;
+  uniform float uTime;
+  uniform float uAmount;
+  varying vec2 vUv;
+  float touchHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float touchNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(touchHash(i), touchHash(i + vec2(1, 0)), f.x),
+               mix(touchHash(i + vec2(0, 1)), touchHash(i + vec2(1, 1)), f.x), f.y);
+  }
   void main() {
-    float d = length(gl_PointCoord - .5);
-    float a = (1.0 - smoothstep(.2, .5, d)) * vAlpha * .85;
-    if (a < .005) discard;
-    gl_FragColor = vec4(vColor, a);
+    vec2 aspect = vec2(uAspect, 1.0);
+    vec2 shift = vec2(0.0);
+    float near = 0.0;
+    for (int i = 0; i < 2; i++) {
+      float press = uPress[i];
+      if (press < .002) continue;
+      vec2 d = (vUv - uHand[i]) * aspect;
+      float r2 = dot(d, d);
+      // the lens: strongest a hand's width out from the centre, where the water is pushed aside
+      float lens = exp(-r2 / .034);
+      shift -= d * lens * .18 * press;
+      // the wake: wider and softer, trailing the hand's motion
+      float wake = exp(-r2 / .09);
+      shift -= uWake[i] * wake * press;
+      // the surface of the disturbance is never still
+      vec2 shimmer = vec2(
+        touchNoise(d * 5.0 + vec2(uTime * .7, -uTime * .5)),
+        touchNoise(d * 5.0 + 3.1 - uTime * .6)) - .5;
+      shift += shimmer * lens * .012 * press;
+      near = max(near, lens * press);
+    }
+    shift = shift / aspect * uAmount;
+    near *= uAmount;
+    vec4 c = texture2D(tScene, vUv + shift);
+    // the light splits by a hair where the water is thickest
+    float split = near * .1;
+    c.r = texture2D(tScene, vUv + shift * (1.0 + split)).r;
+    c.b = texture2D(tScene, vUv + shift * (1.0 - split)).b;
+    // and the gathered water catches a touch more light
+    c.rgb += near * .02;
+    gl_FragColor = c;
   }
 `;
 
-/** The photo's pixels, read once so each particle can carry its own. */
-function readPhoto(texture: THREE.Texture): { data: Uint8ClampedArray; w: number; h: number } | null {
-  const image = texture.image as CanvasImageSource & { width: number; height: number };
-  const w = 160, h = 160;
-  const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return null;
-  try {
-    ctx.drawImage(image, 0, 0, w, h);
-    return { data: ctx.getImageData(0, 0, w, h).data, w, h };
-  } catch {
-    return null;
-  }
-}
+/** What the window holds before a photo: a single pale texel. */
+const BLANK_PHOTO = (() => {
+  const texture = new THREE.DataTexture(new Uint8Array([236, 239, 239, 255]), 1, 1);
+  texture.needsUpdate = true;
+  return texture;
+})();
 
+/** The photo chosen for the strip hanging in front of the view. */
 interface FallRequest {
   texture: THREE.Texture;
-  /** Thumbnail centre and diameter, in canvas pixels. */
-  cx: number;
-  cy: number;
-  diameter: number;
 }
 
 /** What the page hands the stage, frame by frame, without re-rendering it. */
@@ -614,6 +607,9 @@ interface StageState {
   morph: number;
   frost: number;
   oklch: Oklch;
+  /** Where the hands are over the frame (0–1, y up) — the camera's, or the
+      pointer standing in for them. The water is bent around them. */
+  hands: { x: number; y: number }[];
   /** Set once by the page to begin the wrap, then the rise. */
   wrap: boolean;
   rise: boolean;
@@ -621,9 +617,18 @@ interface StageState {
 
 interface StageProps {
   stage: RefObject<StageState>;
+  /** Assigned by the page when the run starts, so the page can save it. */
+  form: ArtifactForm;
+  /** "wrap" opens on the wrap, the shot before it taken as done. */
+  from: "wrap" | null;
+  /** The wrap's knobs, read every frame; the panel writes them. */
+  tune: RefObject<WrapTune>;
+  transport: RefObject<Transport>;
   crossingRef: RefObject<HTMLDivElement | null>;
   glowRef: RefObject<HTMLDivElement | null>;
   hintRef: RefObject<HTMLDivElement | null>;
+  /** The button laid over the hanging strip; kept on it as it sways. */
+  pickRef: RefObject<HTMLButtonElement | null>;
   captionRef: RefObject<HTMLDivElement | null>;
   onFallStart: () => void;
   onSettled: () => void;
@@ -631,16 +636,20 @@ interface StageProps {
   onUnder: () => void;
   onWrapped: () => void;
   onRisen: () => void;
+  /** A seek has taken the shot back to before the wrap ended, or before the rise ended. */
+  onRewound: (to: "wrapping" | "rising") => void;
 }
 
-function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, onSettled, onDescend, onUnder, onWrapped, onRisen }: StageProps) {
+function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, glowRef, hintRef, pickRef, captionRef, onFallStart, onSettled, onDescend, onUnder, onWrapped, onRisen, onRewound }: StageProps) {
   const { camera, size, gl } = useThree();
   const time = useRef(0);
+  const jumped = useRef(false);
   const dropIndex = useRef(0);
   const fall = useRef<{
     at: number; pos: THREE.Vector3; quat: THREE.Quaternion; right: THREE.Vector3;
-    diameter: number; width: number; height: number;
+    width: number; height: number;
   } | null>(null);
+  const developAt = useRef<number | null>(null);
   const landedAt = useRef<number | null>(null);
   const settled = useRef(false);
   const hold = useRef(0);
@@ -658,18 +667,23 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
   const photoMaterial = useRef<THREE.ShaderMaterial | null>(null);
   const smooth = useRef({ morph: 0, frost: 0, wash: 0, dye: 0, spin: 0 });
   const written = useRef(-1);
+  const touches = useRef([
+    { at: new THREE.Vector2(-10, -10), wake: new THREE.Vector2(), press: 0 },
+    { at: new THREE.Vector2(-10, -10), wake: new THREE.Vector2(), press: 0 },
+  ]);
   const tint = useMemo(() => new THREE.Color(), []);
   const scratch = useMemo(() => ({
     v: new THREE.Vector3(), forward: new THREE.Vector3(), q: new THREE.Quaternion(),
     flutter: new THREE.Quaternion(), euler: new THREE.Euler(),
     flat: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, FILM_YAW, 0, "YXZ")),
     cameraAt: new THREE.Vector3(), lookAt: new THREE.Vector3(), formAt: new THREE.Vector3(),
+    wrapCamera: WRAP_CAMERA.clone(), wrapLook: WRAP_LOOK.clone(), wrapForm: WRAP_FORM_AT.clone(),
   }), []);
 
   /* The form: a superformula artifact of its own, grown from its sphere pose.
      Growth is written on the CPU, as BubbleViewer does, so the photo overlay —
      which shares the geometry — follows every vertex. */
-  const artifact = useMemo(() => createArtifactGeometry(createArtifactForm()), []);
+  const artifact = useMemo(() => createArtifactGeometry(artifactForm), [artifactForm]);
   const normals = useMemo(() => new Float32Array(artifact.rest.normals.length), [artifact]);
   useEffect(() => () => artifact.geometry.dispose(), [artifact]);
   const writeMorph = (m: number) => {
@@ -706,20 +720,31 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
     uInvProjection: { value: new THREE.Matrix4() },
     uCameraWorld: { value: new THREE.Matrix4() },
   }), [waves, water, under]);
-  const filmUniforms = useMemo(() => ({
-    ...waves,
-    uPhoto: { value: null as THREE.Texture | null },
-    uSize: { value: new THREE.Vector2(1, 1) },
-    uImageAspect: { value: 1 },
-    uEdgePrint: { value: createEdgePrint(1 + Math.floor(Math.random() * 36)) },
-    uMorph: { value: 0 },
-    uFloat: { value: 0 },
-    uSink: { value: 0 },
-    uCurl: { value: 0 },
-    uFlex: { value: 0 },
-    uSeed: { value: Math.random() * 10 },
-    uDissolve: { value: 0 },
-  }), [waves]);
+  const filmUniforms = useMemo(() => {
+    // one seed for the strip's tears and stains and for where the light gets in
+    const seed = Math.random() * 10;
+    const look = filmLookUniforms();
+    look.uFilmSeed.value = seed;
+    return {
+      ...waves,
+      ...look,
+      ...sheetUniforms(),
+      // unexposed stock until a photo is chosen; the strip is whole from the start
+      uPhoto: { value: BLANK_PHOTO as THREE.Texture },
+      uDevelop: { value: 0 },
+      uSize: { value: new THREE.Vector2(FILM_LENGTH, FILM_WIDTH) },
+      uImageAspect: { value: 1 },
+      uEdgePrint: { value: createEdgePrint(1 + Math.floor(Math.random() * 36)) },
+      uFloat: { value: 0 },
+      uSink: { value: 0 },
+      uCurl: { value: 1 },
+      uFlex: { value: 0 },
+      uSeed: { value: seed },
+      // starts fully dissolved, and gathers itself over EMERGE_S
+      uDissolve: { value: 1.2 },
+      uBelow: { value: WRAP_TUNE_DEFAULT.filmBelow },
+    };
+  }, [waves]);
   const motesUniforms = useMemo(() => ({
     uTime: waves.uTime, uUnder: under, uWash: water.uWash, uPixel: { value: gl.getPixelRatio() },
   }), [waves, water, under, gl]);
@@ -732,92 +757,74 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
     uCore: { value: new THREE.Color(meshCoreFromOklch(DEFAULT_OKLCH)) },
     uRim: { value: new THREE.Color(rimFromOklch(DEFAULT_OKLCH)) },
   }), [water]);
-  const particleUniforms = useMemo(() => ({
-    uClock: { value: -1 },
-    uPixel: { value: gl.getPixelRatio() },
-    uSpeed: { value: new THREE.Vector2(SINK_SPEED[0], SINK_SPEED[1]) },
-    uForm: { value: new THREE.Matrix4() },
-  }), [gl]);
+  // the point cloud (only with ?cloud=1): its uniforms and material live in wrapCloud.ts
+  const particleUniforms = useMemo(() => createCloudUniforms(WRAP_TUNE_DEFAULT), []);
+  const particleMaterial = useMemo(() => createCloudMaterial(particleUniforms), [particleUniforms]);
+  useEffect(() => () => particleMaterial.dispose(), [particleMaterial]);
   const [particleGeometry, setParticleGeometry] = useState<THREE.BufferGeometry | null>(null);
   useEffect(() => () => particleGeometry?.dispose(), [particleGeometry]);
 
-  /* Each grain: a vertex on the form's lit side, the photo pixel the overlay
-     will show there, and where that pixel sits on the floating film. Few of
-     them, kept apart, leaning toward the photo's darker parts — so the image
-     stays faintly legible while it falls and the screen never fills. */
-  const buildParticles = (filmMesh: THREE.Mesh, formMesh: THREE.Mesh, texture: THREE.Texture, size: THREE.Vector2) => {
-    const photo = readPhoto(texture);
+  /* The touch pass: the scene is drawn to a target, then to the screen through
+     the water around the hands. The quad copies the frame as it is where
+     nothing bends it. */
+  const touch = useMemo(() => {
+    const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
+    const material = new THREE.ShaderMaterial({
+      vertexShader: touchVertex,
+      fragmentShader: touchFragment,
+      uniforms: {
+        tScene: { value: target.texture },
+        uHand: { value: [new THREE.Vector2(-10, -10), new THREE.Vector2(-10, -10)] },
+        uWake: { value: [new THREE.Vector2(), new THREE.Vector2()] },
+        uPress: { value: [0, 0] },
+        uAspect: { value: 1 },
+        uTime: { value: 0 },
+        uAmount: { value: 0 },
+      },
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    quad.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(quad);
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    return { target, material, quad, scene, camera };
+  }, []);
+  useEffect(() => () => { touch.target.dispose(); touch.material.dispose(); touch.quad.geometry.dispose(); }, [touch]);
+  useEffect(() => {
+    const dpr = gl.getPixelRatio();
+    touch.target.setSize(Math.round(size.width * dpr), Math.round(size.height * dpr));
+    touch.material.uniforms.uAspect.value = size.width / size.height;
+  }, [touch, gl, size]);
+  useFrame(({ gl: renderer, scene, camera: view }) => {
+    renderer.setRenderTarget(touch.target);
+    renderer.render(scene, view);
+    renderer.setRenderTarget(null);
+    renderer.render(touch.scene, touch.camera);
+  }, 1);
+
+  /* On confirm: the print that will develop on the form — the shared
+     `MemoryPhotoLayer` look on a copy of the form's geometry, patched to
+     develop rather than fade in — and, with ?cloud=1, the point cloud. */
+  const buildWrap = (filmMesh: THREE.Mesh, formMesh: THREE.Mesh, texture: THREE.Texture, size: THREE.Vector2) => {
     const { rest } = artifact;
     const uv = buildPhotoUv(rest.sphere, MODEL_SPACE);
-    const positions = formMesh.geometry.getAttribute("position").array as Float32Array;
-    const start = new Float32Array(PARTICLE_COUNT * 3);
-    const end = new Float32Array(PARTICLE_COUNT * 3);
-    const color = new Float32Array(PARTICLE_COUNT * 3);
-    const delay = new Float32Array(PARTICLE_COUNT);
-    const weight = new Float32Array(PARTICLE_COUNT);
-    const seed = new Float32Array(PARTICLE_COUNT);
-    const p = new THREE.Vector3();
-    filmMesh.updateMatrixWorld();
-    const n = rest.vertexCount;
-    const lumaAt = (u: number, w: number) => {
-      if (!photo) return 0.5;
-      const px = Math.min(photo.w - 1, Math.floor(u * photo.w));
-      const py = Math.min(photo.h - 1, Math.floor((1 - w) * photo.h));
-      const k = (py * photo.w + px) * 4;
-      return (0.2126 * photo.data[k] + 0.7152 * photo.data[k + 1] + 0.0722 * photo.data[k + 2]) / 255;
-    };
-    // minimum spacing on the image, kept with a grid of occupied cells
-    const spacing = Math.sqrt(0.785 / PARTICLE_COUNT) * 0.78;
-    const cells = Math.ceil(1 / spacing);
-    const taken = new Uint8Array(cells * cells);
-    // vertices in a random order, so the first-come spacing has no bias
-    const order = Array.from({ length: n }, (_, k) => k);
-    for (let k = n - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [order[k], order[j]] = [order[j], order[k]]; }
-    let i = 0;
-    for (let o = 0; o < n && i < PARTICLE_COUNT; o++) {
-      const v = order[o];
-      // the overlay only shows on the hemisphere facing the camera
-      if (rest.sphere[v * 3 + 2] < 0.05) continue;
-      const u = uv[v * 2], w = uv[v * 2 + 1];
-      const r = Math.hypot(u - 0.5, w - 0.5);
-      if (r > 0.5) continue;
-      const cell = Math.min(cells - 1, Math.floor(u * cells)) + Math.min(cells - 1, Math.floor(w * cells)) * cells;
-      if (taken[cell]) continue;
-      const luma = lumaAt(u, w);
-      // darker parts of the image keep more of their grains
-      if (Math.random() > 0.3 + 0.7 * (1 - luma) * (1 - luma)) continue;
-      taken[cell] = 1;
-      // on the strip: the frame window holds the photo's middle
-      p.set((u - 0.5) * size.x * 0.75, (w - 0.5) * size.y * 0.66, 0.02).applyMatrix4(filmMesh.matrixWorld);
-      start.set([p.x, p.y, p.z], i * 3);
-      end.set([positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]], i * 3);
-      // mid-fall the image should still be readable: its darks stay dark-ish, its lights pale
-      const f = 0.5 + luma * 0.45;
-      color.set([f * 0.97, f * 0.985, f], i * 3);
-      // weight, skewed light
-      const wt = Math.pow(Math.random(), 2.2);
-      weight[i] = wt;
-      // release: the upper edge first; a few grains in the first second or two, then more
-      delay[i] = (1 - w) * 0.9 + Math.pow(Math.random(), 0.55) * (RELEASE_S - 0.9);
-      seed[i] = Math.random();
-      i++;
+    if (CLOUD) {
+      setParticleGeometry(buildCloudGeometry({
+        sphere: rest.sphere, vertexCount: rest.vertexCount, uv,
+        positions: formMesh.geometry.getAttribute("position").array as Float32Array,
+        filmMesh, texture, stripSize: size,
+        count: tune.current.cloudCount, releaseS: tune.current.releaseS,
+      }));
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(start, 3));
-    geometry.setAttribute("aStart", new THREE.BufferAttribute(start, 3));
-    geometry.setAttribute("aEnd", new THREE.BufferAttribute(end, 3));
-    geometry.setAttribute("aColor", new THREE.BufferAttribute(color, 3));
-    geometry.setAttribute("aDelay", new THREE.BufferAttribute(delay, 1));
-    geometry.setAttribute("aWeight", new THREE.BufferAttribute(weight, 1));
-    geometry.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
-    geometry.setDrawRange(0, i);
-    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 50);
-    setParticleGeometry(geometry);
 
-    // the overlay the particles become: shares the form's geometry, hidden until they land
+    // the print: shares the form's geometry, developing from nothing
     formMesh.geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     // a little of the film's fade stays with it: less color, a touch more presence
-    const material = createMemoryPhotoMaterial(texture, 0, { ...MEMORY_PHOTO_FILTER_DEFAULTS, saturate: 0.6, contrast: 1.06, opacity: 0.62 });
+    const material = createMemoryPhotoMaterial(texture, 1, { ...MEMORY_PHOTO_FILTER_DEFAULTS, saturate: 0.6, contrast: 1.06, opacity: 0.62 });
+    developOnForm(material);
     const overlay = new THREE.Mesh(formMesh.geometry, material);
     overlay.scale.setScalar(1.012);
     overlay.renderOrder = 10;
@@ -846,16 +853,99 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
   };
 
   useFrame((_, delta) => {
-    const dt = Math.min(delta, 0.05) * SPEED;
+    const tr = transport.current;
+    const knobs = tune.current;
+    const dt = tr.paused ? 0 : Math.min(delta, 0.05) * tr.speed;
     if (!document.hidden) time.current += dt;
+    const s = stage.current;
+
+    /* The seek. The wrap and the rise are functions of the time since
+       confirm, so moving the clock is enough — except for what latched on the
+       way: the wrap's end, the rise's start and end, the film hidden, the
+       surface broken. Those are set to where the target time would have them. */
+    const wrapEnds = WRAP_MOVE_S * 0.5 + knobs.fallS;
+    tr.length = wrapEnds + RISE_S + 0.5;
+    tr.active = wrapAt.current !== null;
+    if (tr.seek !== null && wrapAt.current !== null) {
+      const target = Math.min(tr.length, Math.max(0, tr.seek));
+      tr.seek = null;
+      time.current = wrapAt.current + target;
+      if (target < wrapEnds) {
+        if (wrapped.current) {
+          wrapped.current = false;
+          riseAt.current = null; risen.current = false; broke.current = false;
+          s.rise = false;
+          if (film.current) film.current.visible = true;
+          onRewound("wrapping");
+        }
+      } else {
+        if (!wrapped.current) {
+          wrapped.current = true;
+          if (film.current) film.current.visible = false;
+          setDevelop(photoMaterial.current, knobs, 1);
+          s.rise = true;
+          onWrapped();
+        }
+        riseAt.current = wrapAt.current + wrapEnds;
+        const k = (target - wrapEnds) / RISE_S;
+        broke.current = k >= 1;
+        if (k < 1 && risen.current) { risen.current = false; onRewound("rising"); }
+      }
+    }
     const t = time.current;
     waves.uTime.value = t;
-    const s = stage.current;
+    tr.shot = wrapAt.current === null ? 0 : t - wrapAt.current;
+
+    /* ?from=wrap: the first frame is set up as the end of the color step —
+       the photo developed and the strip afloat, the descent long over, the
+       form surfaced with its shape and mist, the water washed — and the wrap
+       is begun on it. Everything timed from these marks reads as finished. */
+    if (from === "wrap" && !jumped.current && s.request && film.current && form.current) {
+      jumped.current = true;
+      const longAgo = t - 60;
+      const request = s.request;
+      s.request = null;
+      const image = request.texture.image as { width: number; height: number };
+      filmUniforms.uPhoto.value = prepareFilmPhoto(request.texture);
+      filmUniforms.uImageAspect.value = image.width / image.height;
+      filmUniforms.uDevelop.value = 1.45;
+      filmUniforms.uDissolve.value = 0;
+      filmUniforms.uFloat.value = 1;
+      filmUniforms.uCurl.value = 0.7;
+      filmUniforms.uSink.value = 1;
+      developAt.current = longAgo;
+      fall.current = {
+        at: longAgo, pos: FILM_AT.clone(), quat: scratch.flat.clone(),
+        right: new THREE.Vector3(1, 0, 0), width: FILM_LENGTH, height: FILM_WIDTH,
+      };
+      landedAt.current = longAgo;
+      settled.current = true;
+      hold.current = 1;
+      descentAt.current = longAgo;
+      reachedBottom.current = true;
+      smooth.current.wash = WATER_WASH;
+      smooth.current.dye = 1;
+      smooth.current.morph = s.morph;
+      smooth.current.frost = s.frost;
+      writeMorph(s.morph);
+      water.uTintAmount.value = 1;
+      s.wrap = true;
+    }
 
     /* The camera, in order: still on the pond; down the descent path; drawn
        back for the wrap; up the rise path; still again, on the named memory. */
     const { cameraAt, lookAt, formAt } = scratch;
     formAt.copy(FORM_AT);
+    filmUniforms.uBelow.value = knobs.filmBelow;
+    // the wrap's framing is live from the panel; the rise sets out from wherever it is
+    scratch.wrapCamera.set(0, knobs.cameraY, knobs.cameraZ);
+    scratch.wrapLook.set(0, knobs.lookY, knobs.lookZ);
+    scratch.wrapForm.set(0, knobs.formY, knobs.formZ);
+    if (riseAt.current === null) {
+      RISE_PATH.points[0].copy(scratch.wrapCamera);
+      RISE_LOOK.points[0].copy(scratch.wrapLook);
+      RISE_FORM.points[0].copy(scratch.wrapForm);
+    }
     if (riseAt.current !== null) {
       const k = Math.min(1, (t - riseAt.current) / RISE_S);
       const u = flowProgress(k, 0, 1);
@@ -863,17 +953,17 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       lookAt.copy(RISE_LOOK.getPoint(u));
       formAt.copy(RISE_FORM.getPoint(u));
       // carry the wrap's slow sink into the start of the rise, so there is no step
-      const carry = 0.45 * (1 - smoothProgress(k, 0, 0.45));
+      const carry = knobs.viewSink * (1 - smoothProgress(k, 0, 0.45));
       cameraAt.y -= carry;
       lookAt.y -= carry * 0.8;
       if (k >= 1 && !risen.current) { risen.current = true; onRisen(); }
     } else if (wrapAt.current !== null) {
       const k = flowProgress(t - wrapAt.current, 0, WRAP_MOVE_S);
-      cameraAt.copy(DESCENT_PATH.getPoint(1)).lerp(WRAP_CAMERA, k);
-      lookAt.copy(DESCENT_LOOK.getPoint(1)).lerp(WRAP_LOOK, k);
-      formAt.lerp(WRAP_FORM_AT, k);
+      cameraAt.copy(DESCENT_PATH.getPoint(1)).lerp(scratch.wrapCamera, k);
+      lookAt.copy(DESCENT_LOOK.getPoint(1)).lerp(scratch.wrapLook, k);
+      formAt.lerp(scratch.wrapForm, k);
       // then the view sinks a little with the grains
-      const sink = smoothProgress(t - wrapAt.current, WRAP_MOVE_S, WRAP_MOVE_S + WRAP_FALL_S) * 0.45;
+      const sink = smoothProgress(t - wrapAt.current, WRAP_MOVE_S, WRAP_MOVE_S + knobs.fallS) * knobs.viewSink;
       cameraAt.y -= sink;
       lookAt.y -= sink * 0.8;
     } else if (descentAt.current === null) {
@@ -885,6 +975,26 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       cameraAt.copy(DESCENT_PATH.getPoint(u));
       lookAt.copy(DESCENT_LOOK.getPoint(u));
       if (k >= 1 && !reachedBottom.current) { reachedBottom.current = true; onUnder(); }
+    }
+    // the orbit: once the wrap has begun, the view can be turned about its look point to watch from another side;
+    // the rise takes its own turn (from below, looking up at the form against the light), and lets it go as it surfaces
+    let yawDeg = knobs.orbitYaw, pitchDeg = knobs.orbitPitch;
+    if (riseAt.current !== null) {
+      const k = Math.min(1, (t - riseAt.current) / RISE_S);
+      const into = smoothProgress(k, 0, 0.22);
+      const held = 1 - smoothProgress(k, knobs.riseViewUntil, Math.max(knobs.riseViewUntil + 0.05, knobs.riseViewBack));
+      yawDeg = THREE.MathUtils.lerp(knobs.orbitYaw, knobs.riseYaw * held, into);
+      pitchDeg = THREE.MathUtils.lerp(knobs.orbitPitch, knobs.risePitch * held, into);
+    }
+    if (wrapAt.current !== null && (yawDeg !== 0 || pitchDeg !== 0)) {
+      const offset = scratch.v.copy(cameraAt).sub(lookAt);
+      const yaw = THREE.MathUtils.degToRad(yawDeg);
+      const pitch = THREE.MathUtils.degToRad(pitchDeg);
+      const flat = Math.hypot(offset.x, offset.z);
+      const heading = Math.atan2(offset.x, offset.z) + yaw;
+      const elevation = Math.min(1.45, Math.max(-1.45, Math.atan2(offset.y, flat) + pitch));
+      const r = offset.length();
+      cameraAt.set(lookAt.x + r * Math.cos(elevation) * Math.sin(heading), lookAt.y + r * Math.sin(elevation), lookAt.z + r * Math.cos(elevation) * Math.cos(heading));
     }
     camera.position.copy(cameraAt);
     camera.lookAt(lookAt);
@@ -910,6 +1020,39 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
 
     const camY = camera.position.y;
     under.value = 1 - smoothProgress(camY, -0.35, 0.05);
+
+    /* The hands in the water. Each slot follows its hand with a little lag
+       and keeps the hand's motion as a wake; a hand that leaves fades where it
+       was. The left hand keeps the left slot, so two hands never swap. */
+    const tu = touch.material.uniforms;
+    const hands = s.hands.length > 1 ? [...s.hands].sort((a, b) => a.x - b.x) : s.hands;
+    for (let i = 0; i < 2; i++) {
+      const slot = touches.current[i];
+      const hand = hands[i];
+      if (hand) {
+        if (slot.press < 0.01) { slot.at.set(hand.x, hand.y); slot.wake.set(0, 0); }
+        const k = 1 - Math.exp(-9 * dt);
+        const dx = (hand.x - slot.at.x) * k, dy = (hand.y - slot.at.y) * k;
+        slot.at.x += dx; slot.at.y += dy;
+        // the wake is the smoothed motion, in frame-widths per second, held back by the water
+        if (dt > 0) {
+          const kw = 1 - Math.exp(-4 * dt);
+          slot.wake.x += ((dx / dt) * 0.02 - slot.wake.x) * kw;
+          slot.wake.y += ((dy / dt) * 0.02 - slot.wake.y) * kw;
+          if (slot.wake.length() > 0.025) slot.wake.setLength(0.025);
+        }
+        slot.press = ease(slot.press, 1, 5);
+      } else {
+        slot.press = ease(slot.press, 0, 3);
+        slot.wake.multiplyScalar(Math.exp(-3 * dt));
+      }
+      (tu.uHand.value as THREE.Vector2[])[i].copy(slot.at);
+      (tu.uWake.value as THREE.Vector2[])[i].copy(slot.wake);
+      (tu.uPress.value as number[])[i] = slot.press;
+    }
+    tu.uTime.value = t;
+    // only while the form is in hand, and only under the water
+    tu.uAmount.value = ease(tu.uAmount.value, s.step !== null ? under.value : 0, 2.5);
     if (glowRef.current) glowRef.current.style.opacity = String(1 - under.value);
     if (crossingRef.current) {
       const crossing = descentAt.current === null ? 0 : Math.exp(-((camY / 0.28) ** 2));
@@ -918,30 +1061,58 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       crossingRef.current.style.setProperty("-webkit-backdrop-filter", `blur(${(crossing * 14).toFixed(1)}px)`);
     }
 
-    const request = s.request;
+    /* The strip, before it is let go: it gathers itself out of nothing in
+       front of the view and hangs there, empty, turning a little on the air.
+       The photo develops into its window; a beat later the hand opens. */
     const mesh = film.current;
-    if (request && mesh) {
-      s.request = null;
-      const persp = camera as THREE.PerspectiveCamera;
-      const dir = scratch.v.set((request.cx / size.width) * 2 - 1, 1 - (request.cy / size.height) * 2, 0.5)
-        .unproject(camera).sub(camera.position).normalize();
+    if (mesh && fall.current === null) {
+      filmUniforms.uDissolve.value = 1.2 * (1 - smoothProgress(t, EMERGE_S[0], EMERGE_S[1]));
       camera.getWorldDirection(scratch.forward);
-      const image = request.texture.image as { width: number; height: number };
-      filmUniforms.uPhoto.value = request.texture;
-      filmUniforms.uImageAspect.value = image.width / image.height;
-      fall.current = {
-        at: t,
-        pos: camera.position.clone().addScaledVector(dir, START_DEPTH / dir.dot(scratch.forward)),
-        quat: camera.quaternion.clone(),
-        right: new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion),
-        diameter: (request.diameter / size.height) * 2 * START_DEPTH * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)),
-        width: FILM_LENGTH,
-        height: FILM_WIDTH,
-      };
-      mesh.visible = true;
-      onFallStart();
+      scratch.v.set(0, 1, 0).applyQuaternion(camera.quaternion);
+      mesh.position.copy(camera.position).addScaledVector(scratch.forward, CHOOSE_DEPTH)
+        .addScaledVector(scratch.v, -0.12 + 0.025 * Math.sin(t * 0.7));
+      scratch.euler.set(-0.08 + 0.05 * Math.sin(t * 0.5), 0.06 * Math.sin(t * 0.37 + 1.0), 0.03 * Math.sin(t * 0.43), "YXZ");
+      mesh.quaternion.copy(camera.quaternion).multiply(scratch.flutter.setFromEuler(scratch.euler));
+      filmUniforms.uFlex.value = 0.08 * Math.sin(t * 0.8);
+      const request = s.request;
+      if (request) {
+        s.request = null;
+        const image = request.texture.image as { width: number; height: number };
+        filmUniforms.uPhoto.value = prepareFilmPhoto(request.texture);
+        filmUniforms.uImageAspect.value = image.width / image.height;
+        developAt.current = t;
+      }
+      if (developAt.current !== null) {
+        const since = t - developAt.current;
+        filmUniforms.uDevelop.value = 1.45 * smoothProgress(since, 0, DEVELOP_S);
+        if (since >= LET_GO_S) {
+          fall.current = {
+            at: t,
+            pos: mesh.position.clone(),
+            quat: mesh.quaternion.clone(),
+            right: new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion),
+            width: FILM_LENGTH,
+            height: FILM_WIDTH,
+          };
+          onFallStart();
+        }
+      }
+      // the pick button rides the strip
+      const pick = pickRef.current;
+      if (pick) {
+        scratch.v.copy(mesh.position).project(camera);
+        const cx = (scratch.v.x * 0.5 + 0.5) * size.width, cy = (-scratch.v.y * 0.5 + 0.5) * size.height;
+        scratch.v.set(1, 0, 0).applyQuaternion(camera.quaternion).multiplyScalar(FILM_LENGTH * 0.5).add(mesh.position).project(camera);
+        const hw = Math.abs((scratch.v.x * 0.5 + 0.5) * size.width - cx);
+        scratch.v.set(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(FILM_WIDTH * 0.5).add(mesh.position).project(camera);
+        const hh = Math.abs((-scratch.v.y * 0.5 + 0.5) * size.height - cy);
+        pick.style.transform = `translate(-50%, -50%) translate(${cx.toFixed(1)}px, ${cy.toFixed(1)}px)`;
+        pick.style.width = `${(hw * 2).toFixed(1)}px`;
+        pick.style.height = `${(hh * 2).toFixed(1)}px`;
+      }
     }
 
+    /* The fall: from where it hung to the water, fluttering, settling flat. */
     const f = fall.current;
     if (f && mesh) {
       const k = Math.min(1, (t - f.at) / FALL_S);
@@ -953,17 +1124,11 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
         + (k < 1 / 2.2 ? 0.2 * Math.sin(Math.PI * k * 2.2) : 0);
       mesh.position.addScaledVector(f.right, 0.28 * Math.sin(k * Math.PI * 2.6) * decay);
       scratch.q.copy(f.quat).slerp(scratch.flat, smoothProgress(k, 0.05, 0.85));
-      scratch.euler.set(0.55 * Math.sin(k * Math.PI * 2.6 + 0.9) * decay, 0, 0.4 * Math.sin(k * Math.PI * 2.6) * decay);
+      scratch.euler.set(0.55 * Math.sin(k * Math.PI * 2.6 + 0.9) * decay, 0, 0.4 * Math.sin(k * Math.PI * 2.6) * decay, "XYZ");
       mesh.quaternion.copy(scratch.q).multiply(scratch.flutter.setFromEuler(scratch.euler));
-      const grow = smoothProgress(k, 0, 0.75);
-      filmUniforms.uSize.value.set(
-        THREE.MathUtils.lerp(f.diameter, f.width, grow),
-        THREE.MathUtils.lerp(f.diameter, f.height, grow),
-      );
-      filmUniforms.uMorph.value = smoothProgress(k, 0.05, 0.6);
-      // the strip springs into its curl as it opens, and flexes with the air
-      filmUniforms.uCurl.value = smoothProgress(k, 0.2, 0.9) * (1 - 0.3 * filmUniforms.uFloat.value);
-      filmUniforms.uFlex.value = 0.6 * Math.sin(k * Math.PI * 2.6 + 1.7) * decay * smoothProgress(k, 0.1, 0.4);
+      // the curl flexes with the air on the way down; the water presses some of it out
+      filmUniforms.uCurl.value = 1 - 0.3 * filmUniforms.uFloat.value;
+      filmUniforms.uFlex.value = 0.6 * Math.sin(k * Math.PI * 2.6 + 1.7) * decay * smoothProgress(k, 0.0, 0.3);
       if (k >= 1 && landedAt.current === null) {
         landedAt.current = t;
         drop(FILM_AT.x, FILM_AT.z, t, 1.6);
@@ -1017,7 +1182,9 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       formUniforms.uAir.value = 1 - smoothProgress(-formAt.y, -0.2, 0.3);
       const bob = riseAt.current !== null && risen.current ? Math.sin(t * 0.9) * 0.03 : Math.sin(t * 0.6) * 0.05;
       body.position.set(formAt.x, formAt.y + bob, formAt.z);
-      body.scale.setScalar(0.9 * (0.86 + 0.14 * reveal));
+      // for the wrap the form fills out — about twice its volume — and stays that size up through the rise
+      const grown = wrapAt.current === null ? 0 : flowProgress(t - wrapAt.current, 0, WRAP_MOVE_S);
+      body.scale.setScalar(0.9 * (0.86 + 0.14 * reveal) * (1 + knobs.grow * grown));
       // it turns slowly; for the wrap it comes round to face the light, and holds
       if (wrapAt.current !== null && riseAt.current === null) {
         const home = Math.round(body.rotation.y / (Math.PI * 2)) * Math.PI * 2;
@@ -1026,23 +1193,38 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       body.updateMatrixWorld();
     }
 
-    /* The wrap: the film lets go of its image from the top down; the particles
-       sink and gather on the form; the overlay then takes over from them. */
+    /* The wrap: the film lets go of its image from the top down and the print
+       develops on the form. With ?cloud=1 the image falls as points between. */
     if (s.wrap && wrapAt.current === null && mesh && body && filmUniforms.uPhoto.value) {
       wrapAt.current = t;
-      buildParticles(mesh, body, filmUniforms.uPhoto.value, filmUniforms.uSize.value);
+      buildWrap(mesh, body, filmUniforms.uPhoto.value, filmUniforms.uSize.value);
     }
     if (wrapAt.current !== null && !wrapped.current) {
       // seconds since the film began to let go
       const clock = t - wrapAt.current - WRAP_MOVE_S * 0.5;
-      particleUniforms.uClock.value = clock;
-      // the emulsion goes with its grains: thin at first, then the rest, a little after the release
-      filmUniforms.uDissolve.value = Math.min(1.2, Math.max(0, clock + 0.3) / (RELEASE_S + 1.2) * 1.2);
-      if (body) particleUniforms.uForm.value.copy(body.matrixWorld);
-      // the heavy grains arrive patchily; the print fades in beneath them and fills the gaps
-      setMemoryPhotoFade(photoMaterial.current, smoothProgress(clock, 2.4, 6.0));
-      if (clock >= WRAP_FALL_S) { wrapped.current = true; if (mesh) mesh.visible = false; onWrapped(); }
-    } else if (body) particleUniforms.uForm.value.copy(body.matrixWorld);
+      if (CLOUD) {
+        const pu = particleUniforms;
+        pu.uClock.value = clock;
+        // the knobs, every frame, so a slider moves the cloud that is already in the water
+        setCloudUniforms(pu, particleMaterial, knobs, gl.getPixelRatio(), mesh ? mesh.position : null);
+        if (body) { pu.uForm.value.copy(body.matrixWorld); pu.uFormAt.value.copy(body.position); }
+      }
+      // the emulsion lets go: thin at first, then the rest, a little after the release
+      filmUniforms.uDissolve.value = Math.min(1.2, Math.max(0, clock + 0.3) / (knobs.releaseS + 1.2) * 1.2);
+      // the print develops on the form: darks first, the top leading
+      setDevelop(photoMaterial.current, knobs, smoothProgress(clock, knobs.overlayIn, Math.max(knobs.overlayIn + 0.1, knobs.overlayOut)));
+      if (clock >= knobs.fallS) {
+        wrapped.current = true;
+        if (mesh) mesh.visible = false;
+        setDevelop(photoMaterial.current, knobs, 1);
+        onWrapped();
+      }
+    } else if (body && CLOUD) {
+      particleUniforms.uForm.value.copy(body.matrixWorld);
+      particleUniforms.uFormAt.value.copy(body.position);
+      // points still in the water when the wrap was called finish their way
+      if (wrapAt.current !== null) particleUniforms.uClock.value = t - wrapAt.current - WRAP_MOVE_S * 0.5;
+    }
 
     /* The rise. The surface breaks once, where the form comes up through it. */
     if (s.rise && riseAt.current === null && wrapped.current) riseAt.current = t;
@@ -1072,7 +1254,7 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       <shaderMaterial name="surface" transparent depthTest={false} depthWrite={false} side={THREE.DoubleSide}
         vertexShader={waterVertex} fragmentShader={waterFragment} uniforms={surfaceUniforms} />
     </mesh>
-    <mesh ref={film} visible={false} renderOrder={2} frustumCulled={false}>
+    <mesh ref={film} renderOrder={2} frustumCulled={false}>
       <planeGeometry args={[1, 1, 64, 48]} />
       <shaderMaterial name="film" transparent depthTest={false} depthWrite={false} side={THREE.DoubleSide}
         vertexShader={filmVertex} fragmentShader={filmFragment} uniforms={filmUniforms} />
@@ -1085,11 +1267,8 @@ function Stage({ stage, crossingRef, glowRef, hintRef, captionRef, onFallStart, 
       <shaderMaterial name="form" transparent depthTest={false} depthWrite={false}
         vertexShader={formVertex} fragmentShader={formFragment} uniforms={formUniforms} />
     </mesh>
-    {particleGeometry && (
-      <points ref={particles} geometry={particleGeometry} renderOrder={6} frustumCulled={false}>
-        <shaderMaterial name="particles" transparent depthTest={false} depthWrite={false}
-          vertexShader={particleVertex} fragmentShader={particleFragment} uniforms={particleUniforms} />
-      </points>
+    {CLOUD && particleGeometry && (
+      <points ref={particles} geometry={particleGeometry} material={particleMaterial} renderOrder={6} frustumCulled={false} />
     )}
   </>;
 }
@@ -1100,60 +1279,492 @@ const easeMorph = (m: number) => m * m * (3 - 2 * m);
 /** Words set against the washed water, which is paper by then: the chrome grey. */
 const UNDER_INK = CHROME_GRAY;
 
-const STEP_COPY: Record<Step, { title: string; lines: [string, string]; hint: string }> = {
+/* The gesture ranges, as ShapeGrowPage reads them. The hint under the copy
+   names the drag only while no camera is driving the step. */
+const STEP_COPY: Record<Step, { title: string; lines: [string, string]; drag: string }> = {
   shape: {
     title: "shape",
     lines: ["each memory already has a shape.", "open your hands, and let these words find theirs."],
-    hint: "drag across to grow it",
+    drag: "or drag across to grow it",
   },
   distance: {
     title: "distance",
     lines: ["time blurs the edges, not the feeling.", "a faded memory can hold more."],
-    hint: "drag across to let it mist over",
+    drag: "or drag across to let it mist over",
   },
   color: {
     title: "color",
     lines: ["remembering dyes what happened.", "how does it feel, returning to it today?"],
-    hint: "",
+    drag: "",
   },
 };
 
+/** Two palms together → sphere; apart → the settled form. */
+function distanceToMorph(distance: number): number {
+  return clamp01((distance - 0.15) / (0.55 - 0.15));
+}
+/** Fist → 0, open palm → 1. */
+function opennessToUnit(openness: number): number {
+  return clamp01((openness - 0.09) / (0.28 - 0.09));
+}
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+function map01(value: number, min: number, max: number): number {
+  return clamp01((value - min) / (max - min));
+}
+
 const loader = new THREE.TextureLoader();
 
-function DescentRun({ onAgain }: { onAgain: () => void }) {
+/* The print develops on the form rather than fading in flat: as on paper
+   in the tray, the darks come first, and here the top of the image — where
+   the sheet landed first — leads the rest. The overlay is the shared
+   `MemoryPhotoLayer` material; its fragment is patched where it computes
+   alpha. uDevelop is 0…1; uDarks and uSweep are how far each leads; uSoft
+   is how gradually any one part comes up. */
+function developOnForm(material: THREE.ShaderMaterial) {
+  Object.assign(material.uniforms, {
+    uDevelop: { value: 0 },
+    uDarks: { value: WRAP_TUNE_DEFAULT.developDarks },
+    uSweep: { value: WRAP_TUNE_DEFAULT.developSweep },
+    uSoft: { value: WRAP_TUNE_DEFAULT.developSoft },
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader
+      .replace("uniform float uFade;", "uniform float uFade;\nuniform float uDevelop;\nuniform float uDarks;\nuniform float uSweep;\nuniform float uSoft;")
+      .replace(
+        "float alpha = tex.a * uBaseOpacity * edge * uFade;",
+        `float devLuma = dot(tex.rgb, vec3(0.2126, 0.7152, 0.0722));
+  float need = devLuma * uDarks + (1.0 - vPhotoUv.y) * uSweep;
+  float reveal = smoothstep(need, need + uSoft, uDevelop * (1.0 + uDarks + uSweep + uSoft));
+  float alpha = tex.a * uBaseOpacity * edge * uFade * reveal;`,
+      );
+  };
+  material.needsUpdate = true;
+}
+function setDevelop(material: THREE.ShaderMaterial | null, k: WrapTune, progress: number) {
+  if (!material?.uniforms.uDevelop) return;
+  material.uniforms.uDevelop.value = Math.min(1, Math.max(0, progress));
+  material.uniforms.uDarks.value = k.developDarks;
+  material.uniforms.uSweep.value = k.developSweep;
+  material.uniforms.uSoft.value = Math.max(0.02, k.developSoft);
+}
+
+/* The wrap's knobs, grouped as the panel shows them. Ranges are generous;
+   the defaults above are the current judgement. */
+type Knob = TuneKnob<WrapTune>;
+const WRAP_KNOBS: { group: string; knobs: Knob[] }[] = [
+  { group: "framing", knobs: [
+    { key: "cameraY", label: "camera height", min: -5, max: 0, step: 0.05 },
+    { key: "cameraZ", label: "camera distance", min: 3, max: 14, step: 0.05 },
+    { key: "lookY", label: "look height", min: -4, max: 1.5, step: 0.05 },
+    { key: "lookZ", label: "look depth", min: -3, max: 4, step: 0.05 },
+    { key: "formY", label: "form height", min: -5, max: -1, step: 0.05 },
+    { key: "formZ", label: "form depth (film at 2)", min: -2, max: 4, step: 0.05 },
+    { key: "orbitYaw", label: "view turned (°)", min: -180, max: 180, step: 1 },
+    { key: "orbitPitch", label: "view raised (°)", min: -80, max: 80, step: 1 },
+    { key: "riseYaw", label: "rise: view turned (°)", min: -180, max: 180, step: 1 },
+    { key: "risePitch", label: "rise: view raised (°)", min: -80, max: 80, step: 1 },
+    { key: "riseViewUntil", label: "rise: held until (of rise)", min: 0, max: 1, step: 0.01 },
+    { key: "riseViewBack", label: "rise: back to the pond by", min: 0.05, max: 1, step: 0.01 },
+    { key: "grow", label: "form grows by", min: 0, max: 1, step: 0.01 },
+    { key: "viewSink", label: "view sinks over the wrap", min: 0, max: 1.2, step: 0.01 },
+    { key: "filmBelow", label: "film seen from below", min: 0, max: 1, step: 0.01 },
+  ] },
+  { group: "timing", knobs: [
+    { key: "releaseS", label: "emulsion lets go over (on again)", min: 0.3, max: 6, step: 0.1 },
+    { key: "fallS", label: "wrap ends at", min: 3, max: 16, step: 0.1 },
+  ] },
+  { group: "print", knobs: [
+    { key: "overlayIn", label: "print develops from", min: 0, max: 10, step: 0.1 },
+    { key: "overlayOut", label: "print developed by", min: 0.5, max: 14, step: 0.1 },
+    { key: "developDarks", label: "darks lead by", min: 0, max: 2, step: 0.01 },
+    { key: "developSweep", label: "top leads by", min: 0, max: 2, step: 0.01 },
+    { key: "developSoft", label: "each part comes up over", min: 0.05, max: 1.5, step: 0.01 },
+  ] },
+  // the point cloud's knobs join the panel only when the cloud is on
+  ...(CLOUD ? (CLOUD_KNOBS as { group: string; knobs: Knob[] }[]) : []),
+];
+
+/** The panel of knobs, down the right; folds to a word. A phase picked on the
+    timeline names a group here, which scrolls into view and is marked. */
+function WrapTunePanel({ tune, onChange, focus }: { tune: WrapTune; onChange: (next: WrapTune) => void; focus: string | null }) {
+  const [open, setOpen] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const sections = useRef<Record<string, HTMLElement | null>>({});
+  useEffect(() => {
+    if (!focus) return;
+    if (!open) setOpen(true);
+    const id = window.requestAnimationFrame(() => sections.current[focus]?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    return () => window.cancelAnimationFrame(id);
+  }, [focus, open]);
+  const copy = async () => {
+    const lines = (Object.keys(WRAP_TUNE_DEFAULT) as (keyof WrapTune)[]).map((k) => `  ${k}: ${Number(tune[k].toFixed(3))},`);
+    try {
+      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch { /* clipboard refused — the values are still on screen */ }
+  };
+  return (
+    <>
+      <TextButton label={open ? "hide knobs" : "knobs"} onClick={() => setOpen((o) => !o)}
+        style={{ position: "fixed", right: 28, top: 22, zIndex: 40, fontSize: NOTE_SIZE }} />
+      {open && (
+        <aside aria-label="wrap knobs" style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 250, padding: "56px 24px 28px 22px",
+          boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 8, zIndex: 35, overflowY: "auto",
+          borderLeft: "1px solid rgba(123, 123, 135, 0.14)", background: "rgba(236, 237, 236, 0.55)", backdropFilter: "blur(6px)" }}>
+          {WRAP_KNOBS.map(({ group, knobs }) => (
+            <section key={group} ref={(el) => { sections.current[group] = el; }}
+              style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8, scrollMarginTop: 56 }}>
+              <p style={{ ...META, margin: "0 0 2px", color: CHROME_GRAY,
+                textDecoration: focus === group ? "underline" : "none", textUnderlineOffset: 4 }}>{group}</p>
+              {knobs.map(({ key, label, min, max, step }) => (
+                <label key={key} style={{ display: "block" }}>
+                  <span style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY }}>
+                    <span>{label}</span>
+                    <span style={{ opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>{tune[key].toFixed(step < 0.01 ? 3 : 2)}</span>
+                  </span>
+                  <input type="range" className="wrap-range" min={min} max={max} step={step} value={tune[key]}
+                    onChange={(e) => onChange({ ...tune, [key]: Number(e.target.value) })} />
+                </label>
+              ))}
+            </section>
+          ))}
+          <div style={{ display: "flex", gap: 18, marginTop: 14 }}>
+            <TextButton label="reset" onClick={() => onChange(WRAP_TUNE_DEFAULT)} style={{ fontSize: NOTE_SIZE }} />
+            <TextButton label={copied ? "copied" : "copy values"} onClick={() => void copy()} style={{ fontSize: NOTE_SIZE }} />
+          </div>
+          {/* the point cloud is kept aside (wrapCloud.ts); this reloads the lab with it on or off */}
+          <TextButton label={CLOUD ? "without the point cloud" : "with the point cloud"} onClick={toggleCloud}
+            style={{ fontSize: NOTE_SIZE, marginTop: 6, alignSelf: "flex-start", opacity: 0.7 }} />
+        </aside>
+      )}
+    </>
+  );
+}
+
+/* The timeline. Seconds since confirm run left to right; each track is one
+   thing the shot does, each block the span it does it in, computed from the
+   knobs so the blocks move as the sliders do — and the other way: an edge
+   dragged writes the knob behind it, a block dragged by its body shifts both
+   edges when both are knobs. Pressing a block seeks to its start and names
+   its knob group to the panel; pressing or dragging the empty track seeks. */
+type WrapBlock = PhaseBlock<WrapTune>;
+const KNOB_RANGE = new Map(WRAP_KNOBS.flatMap((g) => g.knobs.map((k) => [k.key, k] as const)));
+function clampKnobs(k: WrapTune, next: Partial<WrapTune>): WrapTune {
+  const out = { ...k };
+  for (const key of Object.keys(next) as (keyof WrapTune)[]) {
+    const r = KNOB_RANGE.get(key);
+    const v = next[key] as number;
+    out[key] = r ? Math.round(Math.min(r.max, Math.max(r.min, v)) / r.step) * r.step : v;
+  }
+  return out;
+}
+function phaseBlocks(k: WrapTune): WrapBlock[] {
+  const release = WRAP_MOVE_S * 0.5;
+  const wrapEnds = release + k.fallS;
+  const fallEnd = (_: WrapTune, s: number) => ({ fallS: s - release });
+  const releaseEnd = (_: WrapTune, s: number) => ({ releaseS: s - release });
+  const motion: WrapBlock[] = CLOUD ? cloudPhaseBlocks(k, release) : [];
+  const riseHeld = wrapEnds + RISE_S * k.riseViewUntil;
+  return [
+    { track: "camera", label: "draw back · form grows", from: 0, to: WRAP_MOVE_S, group: "framing" },
+    { track: "camera", label: "view sinks", from: WRAP_MOVE_S, to: wrapEnds, group: "framing", setTo: fallEnd },
+    { track: "camera", label: "rise view held", from: wrapEnds, to: riseHeld, group: "framing",
+      setTo: (_, s) => ({ riseViewUntil: (s - wrapEnds) / RISE_S }) },
+    { track: "camera", label: "back to the pond", from: riseHeld, to: wrapEnds + RISE_S * k.riseViewBack, group: "framing",
+      setFrom: (_, s) => ({ riseViewUntil: (s - wrapEnds) / RISE_S }), setTo: (_, s) => ({ riseViewBack: (s - wrapEnds) / RISE_S }) },
+    { track: "film", label: "emulsion lets go", from: release, to: release + k.releaseS, group: "timing", setTo: releaseEnd },
+    { track: "film", label: "clear base", from: release + k.releaseS, to: wrapEnds, group: "framing", setFrom: releaseEnd, setTo: fallEnd },
+    ...motion,
+    { track: "print", label: "print develops", from: release + k.overlayIn, to: release + Math.max(k.overlayIn + 0.1, k.overlayOut), group: "print",
+      setFrom: (_, s) => ({ overlayIn: s - release }), setTo: (_, s) => ({ overlayOut: s - release }) },
+    { track: "rise", label: "rise · surface · named", from: wrapEnds, to: wrapEnds + RISE_S, group: "framing", setFrom: fallEnd },
+  ];
+}
+const TRACKS = ["camera", "film", ...(CLOUD ? CLOUD_TRACKS : []), "print", "rise"];
+
+type Drag =
+  | { kind: "seek" }
+  | { kind: "edge"; block: WrapBlock; edge: "from" | "to"; x0: number; base: WrapTune }
+  | { kind: "body"; block: WrapBlock; x0: number; base: WrapTune; moved: boolean };
+
+const TL_FONT = { fontFamily: SANS, fontSize: 11, fontWeight: 300, letterSpacing: "0.1px", color: CHROME_GRAY } as const;
+const TL_LINE = "rgba(85, 85, 95, 0.32)";
+
+function Timeline({ transport, tune, onChange, onFocus }: {
+  transport: RefObject<Transport>; tune: WrapTune; onChange: (next: WrapTune) => void; onFocus: (group: string) => void;
+}) {
+  const [, tick] = useState(0);
+  const [open, setOpen] = useState(true);
+  const tracksRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<Drag | null>(null);
+  useEffect(() => {
+    const id = window.setInterval(() => tick((n) => n + 1), 80);
+    return () => window.clearInterval(id);
+  }, []);
+  const tr = transport.current;
+  if (!tr.active) return null;
+  const blocks = phaseBlocks(tune);
+  const tracks = TRACKS.filter((track) => blocks.some((b) => b.track === track));
+  const now = blocks.filter((b) => tr.shot >= b.from && tr.shot < b.to).map((b) => b.label);
+  const length = tr.length;
+  const at = (seconds: number) => `${(Math.min(length, Math.max(0, seconds)) / length * 100).toFixed(2)}%`;
+  const seekTo = (seconds: number) => { tr.seek = seconds; tick((n) => n + 1); };
+  const secondsAt = (clientX: number) => {
+    const r = tracksRef.current?.getBoundingClientRect();
+    return r ? (clientX - r.left) / r.width * length : 0;
+  };
+  const secondsPer = (dx: number) => {
+    const r = tracksRef.current?.getBoundingClientRect();
+    return r ? dx / r.width * length : 0;
+  };
+  const begin = (e: ReactPointerEvent, d: Drag) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    drag.current = d;
+    try { tracksRef.current?.setPointerCapture(e.pointerId); } catch { /* a pointer the browser no longer knows; the drag still works while over the tracks */ }
+    if (d.kind === "seek") seekTo(secondsAt(e.clientX));
+  };
+  const move = (e: ReactPointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    if (d.kind === "seek") { seekTo(secondsAt(e.clientX)); return; }
+    const dt = secondsPer(e.clientX - d.x0);
+    if (d.kind === "edge") {
+      const s = (d.edge === "from" ? d.block.from : d.block.to) + dt;
+      const set = d.edge === "from" ? d.block.setFrom : d.block.setTo;
+      if (!set) return;
+      onChange(clampKnobs(d.base, set(d.base, s)));
+      if (tr.paused) seekTo(s);
+      return;
+    }
+    if (Math.abs(e.clientX - d.x0) < 3 && !d.moved) return;
+    d.moved = true;
+    if (d.block.setFrom && d.block.setTo) {
+      const first = clampKnobs(d.base, d.block.setFrom(d.base, d.block.from + dt));
+      onChange(clampKnobs(first, d.block.setTo(first, d.block.to + dt)));
+      if (tr.paused) seekTo(d.block.from + dt);
+    }
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.kind === "body" && !d.moved) { seekTo(d.block.from); onFocus(d.block.group); }
+  };
+  const button = (label: string, title: string, onClick: () => void) => (
+    <button type="button" title={title} aria-label={title} onClick={onClick}
+      style={{ ...TL_FONT, border: "none", background: "transparent", padding: "2px 5px", cursor: "pointer" }}>{label}</button>
+  );
+  const ticks = Array.from({ length: Math.floor(length) + 1 }, (_, i) => i);
+  const rowH = 22;
+  const handle = (block: WrapBlock, edge: "from" | "to") => (
+    <span role="presentation" title={edge === "from" ? "drag to move the start" : "drag to move the end"}
+      onPointerDown={(e) => begin(e, { kind: "edge", block, edge, x0: e.clientX, base: tune })}
+      style={{ position: "absolute", top: -2, bottom: -2, [edge === "from" ? "left" : "right"]: -4, width: 8, cursor: "ew-resize" }} />
+  );
+  return (
+    <div role="group" aria-label="timeline" style={{ ...TL_FONT, position: "fixed", left: 28, right: 290, bottom: 22, zIndex: 36,
+      padding: "6px 12px 8px", boxSizing: "border-box", background: "rgba(236, 237, 236, 0.58)", backdropFilter: "blur(6px)",
+      borderRadius: 8, border: `1px solid rgba(123, 123, 135, 0.12)` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: open ? 8 : 0 }}>
+        {button("‹‹", "back one second", () => seekTo(tr.shot - 1))}
+        {button("‹", "back a tenth", () => seekTo(tr.shot - 0.1))}
+        {button(tr.paused ? "play" : "pause", tr.paused ? "play" : "pause", () => { tr.paused = !tr.paused; tick((n) => n + 1); })}
+        {button("›", "forward a tenth", () => seekTo(tr.shot + 0.1))}
+        {button("››", "forward one second", () => seekTo(tr.shot + 1))}
+        <span style={{ fontVariantNumeric: "tabular-nums", minWidth: "4.2em", marginLeft: 8 }}>{tr.shot.toFixed(2)} s</span>
+        <span style={{ flex: 1, opacity: 0.6, marginLeft: 10, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+          {now.join(" · ")}
+        </span>
+        <label style={{ ...TL_FONT, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontVariantNumeric: "tabular-nums", opacity: 0.7 }}>×{tr.speed.toFixed(2)}</span>
+          <input type="range" className="wrap-range" aria-label="speed" min={0.05} max={2} step={0.05} value={tr.speed}
+            onChange={(e) => { tr.speed = Number(e.target.value); tick((n) => n + 1); }} style={{ width: 80 }} />
+        </label>
+        {button(open ? "fold" : "phases", open ? "hide the phases" : "show the phases", () => setOpen((o) => !o))}
+      </div>
+      {open && <div style={{ display: "grid", gridTemplateColumns: "52px 1fr", columnGap: 12 }}>
+        <div>
+          {tracks.map((track) => (
+            <div key={track} style={{ height: rowH, lineHeight: `${rowH}px`, opacity: 0.6 }}>{track}</div>
+          ))}
+        </div>
+        <div ref={tracksRef} style={{ position: "relative", cursor: "col-resize", touchAction: "none", userSelect: "none" }}
+          onPointerDown={(e) => begin(e, { kind: "seek" })}
+          onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+          {tracks.map((track) => (
+            <div key={track} style={{ position: "relative", height: rowH, borderBottom: `1px solid rgba(123, 123, 135, 0.1)` }}>
+              {blocks.filter((b) => b.track === track).map((b) => {
+                const live = tr.shot >= b.from && tr.shot < b.to;
+                const movable = !!(b.setFrom && b.setTo);
+                return (
+                  <div key={b.label} role="button" tabIndex={0} aria-label={`${b.label}, ${b.from.toFixed(1)} to ${b.to.toFixed(1)} seconds`}
+                    title={`${b.label} · ${b.from.toFixed(1)}–${b.to.toFixed(1)} s`}
+                    onPointerDown={(e) => begin(e, { kind: "body", block: b, x0: e.clientX, base: tune, moved: false })}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); seekTo(b.from); onFocus(b.group); } }}
+                    style={{ position: "absolute", top: 4, bottom: 4, left: at(b.from), width: `calc(${at(b.to)} - ${at(b.from)})`,
+                      boxSizing: "border-box", border: `1px solid ${TL_LINE}`, borderRadius: 2, padding: "0 6px", overflow: "visible",
+                      whiteSpace: "nowrap", cursor: movable ? "grab" : "pointer", lineHeight: `${rowH - 10}px`,
+                      background: live ? "rgba(85, 85, 95, 0.08)" : "transparent", opacity: live ? 1 : 0.72 }}>
+                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{b.label}</span>
+                    {b.setFrom && handle(b, "from")}
+                    {b.setTo && handle(b, "to")}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {/* the seconds */}
+          <div style={{ position: "relative", height: 14 }}>
+            {ticks.map((s) => (
+              <span key={s} style={{ position: "absolute", left: at(s), transform: "translateX(-50%)", top: 2, opacity: 0.5,
+                fontVariantNumeric: "tabular-nums" }}>{s}</span>
+            ))}
+          </div>
+          {/* the playhead */}
+          <div aria-hidden style={{ position: "absolute", top: 0, bottom: 14, left: at(tr.shot), width: 1, background: "rgba(85, 85, 95, 0.7)", pointerEvents: "none" }} />
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: RefObject<WrapTune>; transport: RefObject<Transport> }) {
+  const navigate = useNavigate();
   const stage = useRef<StageState>({
     request: null, holding: false, step: null,
-    morph: 0, frost: 0, oklch: DEFAULT_OKLCH, wrap: false, rise: false,
+    morph: FROM ? PREVIEW_MORPH : 0, frost: FROM ? PREVIEW_FROST : 0,
+    oklch: DEFAULT_OKLCH, hands: [], wrap: false, rise: false,
   });
+  // The memory's form and id are fixed when the run starts, as the recording
+  // step fixes them on the live pond.
+  const [form] = useState(() => createArtifactForm());
+  const [memoryId] = useState(() => crypto.randomUUID());
   const hostRef = useRef<HTMLDivElement>(null);
   const crossingRef = useRef<HTMLDivElement>(null);
   const glowRef = useRef<HTMLDivElement>(null);
   const hintRef = useRef<HTMLDivElement>(null);
   const captionRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pickRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-  const [phase, setPhase] = useState<Phase>("choose");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [phase, setPhase] = useState<Phase>(FROM === "wrap" ? "wrapping" : "choose");
   const [loading, setLoading] = useState<string | null>(null);
   const [lifted, setLifted] = useState<string | null>(null);
-  const [morph, setMorph] = useState(0);
-  const [frost, setFrost] = useState(0);
+  const [morph, setMorph] = useState(stage.current.morph);
+  const [frost, setFrost] = useState(stage.current.frost);
+  // opening on the wrap, the still is on the film before the stage mounts
+  const [ready, setReady] = useState(FROM === null);
+  useEffect(() => {
+    if (FROM === null) return;
+    let live = true;
+    void loader.loadAsync(PREVIEW_PHOTO).then((texture) => {
+      if (!live) return;
+      stage.current.request = { texture };
+      setLifted(PREVIEW_PHOTO);
+      setReady(true);
+    });
+    return () => { live = false; };
+  }, []);
   const [colorUv, setColorUv] = useState(() => uvFromOklch(DEFAULT_OKLCH));
+  const [colorHeld, setColorHeld] = useState(false);
+  const [handsDetected, setHandsDetected] = useState(0);
   const [memoryName, setMemoryName] = useState("");
   const [year, setYear] = useState("");
   const drag = useRef<{ x: number; from: number } | null>(null);
 
   const step: Step | null = phase === "shape" || phase === "distance" || phase === "color" ? phase : null;
   stage.current.step = step;
+  const stepRef = useRef(step);
+  stepRef.current = step;
 
   useEffect(() => {
     if (phase === "naming") nameRef.current?.focus();
   }, [phase]);
 
   const setSignal = (value: number) => {
-    const v = Math.min(1, Math.max(0, value));
-    if (phase === "shape") { stage.current.morph = v; setMorph(v); }
-    else if (phase === "distance") { stage.current.frost = v; setFrost(v); }
+    const v = clamp01(value);
+    if (stepRef.current === "shape") { stage.current.morph = v; setMorph(v); }
+    else if (stepRef.current === "distance") { stage.current.frost = v; setFrost(v); }
   };
+  const colorUvRef = useRef(colorUv);
+  const pickColor = (u: number, v: number) => {
+    const uv = { u: clamp01(u), v: clamp01(v) };
+    colorUvRef.current = uv;
+    setColorUv(uv);
+    stage.current.oklch = sampleField(uv.u, uv.v);
+  };
+  const colorHeldRef = useRef(false);
+  const pinchFrames = useRef(0);
+  /** Who last put hands in the water: the camera wins while it sees any. */
+  const handsFrom = useRef<"camera" | "pointer" | null>(null);
+  const morphGate = useRef(createGestureGate(0.015));
+  const frostGate = useRef(createGestureGate(0.015));
+  useEffect(() => {
+    // fresh baselines each step, so a hand already in frame does not jump the form
+    morphGate.current = createGestureGate(0.015);
+    frostGate.current = createGestureGate(0.015);
+    colorHeldRef.current = false;
+    pinchFrames.current = 0;
+    setColorHeld(false);
+    stage.current.hands = [];
+    handsFrom.current = null;
+  }, [step]);
+
+  /* The same three gestures as ShapeGrowPage: two palms apart for shape, one
+     palm opening for distance, a fingertip over the field for color (pinch to
+     hold). The camera opens when the form surfaces; the drag below stays as
+     the fallback when it is refused or no hand is seen. */
+  const tracking = useHandTracking({
+    enabled: step !== null,
+    videoRef,
+    numHands: step === "shape" ? 2 : 1,
+    onLandmarks: (hands) => {
+      setHandsDetected(hands.length);
+      // the camera is mirrored, as the corner window shows it; landmark y runs down
+      handsFrom.current = "camera";
+      stage.current.hands = hands.map((hand) => {
+        const c = handCenter(hand);
+        return { x: 1 - c.x, y: 1 - c.y };
+      });
+      const tab = stepRef.current;
+      if (tab === "shape") {
+        if (hands.length < 2) return;
+        const distance = landmarkDistance(handCenter(hands[0]), handCenter(hands[1]));
+        if (morphGate.current.update(distance)) setSignal(distanceToMorph(distance));
+      } else if (tab === "distance") {
+        const openness = handOpenness(hands[0]);
+        // open palm frosts the glass; a fist clears it
+        if (frostGate.current.update(openness)) setSignal(opennessToUnit(openness));
+      } else if (tab === "color") {
+        const hand = hands[0];
+        const pinch = landmarkDistance(hand[4], hand[8], true);
+        if (pinch < 0.052) {
+          pinchFrames.current += 1;
+          if (!colorHeldRef.current && pinchFrames.current >= 2) { colorHeldRef.current = true; setColorHeld(true); }
+        } else {
+          pinchFrames.current = 0;
+          if (colorHeldRef.current && pinch > 0.08) { colorHeldRef.current = false; setColorHeld(false); }
+        }
+        if (colorHeldRef.current) return;
+        const nextU = 1 - map01(hand[8].x, 0.12, 0.88);
+        const nextV = map01(hand[8].y, 0.16, 0.84);
+        const current = colorUvRef.current;
+        pickColor(current.u + (nextU - current.u) * 0.24, current.v + (nextV - current.v) * 0.24);
+      }
+    },
+    onNoHands: () => {
+      setHandsDetected(0);
+      if (handsFrom.current === "camera") { handsFrom.current = null; stage.current.hands = []; }
+      if (colorHeldRef.current) { colorHeldRef.current = false; pinchFrames.current = 0; setColorHeld(false); }
+    },
+  });
+  const handsNeeded = step === "shape" ? 2 : 1;
+  const gestureLive = tracking.isTracking && handsDetected >= handsNeeded;
+
   const continueStep = () => {
     if (phase === "shape") setPhase("distance");
     else if (phase === "distance") setPhase("color");
@@ -1163,19 +1774,36 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
   const yearSettled = year.length === 4 && Number(year) <= currentYear;
   const canSave = phase === "naming" && memoryName.trim() !== "" && yearSettled;
 
-  const pick = async (url: string, button: HTMLElement) => {
+  /* Saved the way the naming rim saves, plus what the rim drops: the photo,
+     the pick and the frost. The archive carries them; the gallery does not
+     draw them yet. */
+  const save = () => {
+    if (!canSave) return;
+    const oklch = stage.current.oklch;
+    const matPresetIndex = Math.min(
+      Math.round((((oklch.h % 360) + 360) % 360) / 360 * (MATERIAL_PRESETS.length - 1)),
+      MATERIAL_PRESETS.length - 1,
+    );
+    saveMemory({
+      id: memoryId,
+      title: memoryName.trim(),
+      year,
+      transcript: "",
+      highlightedWords: [],
+      shape: { form, matPresetIndex, fluidity: 0, evolve: stage.current.morph, bumpAmount: 0 },
+      colorIndex: draftColorIndex(matPresetIndex),
+      look: { ...(lifted ? { photoUrl: lifted } : {}), oklch, vividness: 1 - stage.current.frost },
+      createdAt: new Date().toISOString(),
+    });
+    setPhase("saved");
+  };
+
+  const pick = async (url: string) => {
     if (phase !== "choose" || loading) return;
     setLoading(url);
-    const rect = button.getBoundingClientRect();
-    const host = hostRef.current?.getBoundingClientRect();
     try {
       const texture = await loader.loadAsync(url);
-      stage.current.request = {
-        texture,
-        cx: rect.left + rect.width / 2 - (host?.left ?? 0),
-        cy: rect.top + rect.height / 2 - (host?.top ?? 0),
-        diameter: rect.width,
-      };
+      stage.current.request = { texture };
       setLifted(url);
     } catch {
       setLoading(null);
@@ -1183,21 +1811,36 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
   };
 
   const setHolding = (holding: boolean) => { stage.current.holding = holding; };
-  const itemSize = "clamp(96px, 11vw, 136px)";
+  const choosing = phase === "choose" && !lifted && !loading;
+
+  /* While the camera sees no hand, the pointer is the hand in the water. */
+  const pointerAsHand = (e: ReactPointerEvent) => {
+    if (!step || handsFrom.current === "camera") return;
+    const host = hostRef.current?.getBoundingClientRect();
+    if (!host) return;
+    handsFrom.current = "pointer";
+    stage.current.hands = [{ x: (e.clientX - host.left) / host.width, y: 1 - (e.clientY - host.top) / host.height }];
+  };
+  const pointerOut = () => {
+    if (handsFrom.current === "pointer") { handsFrom.current = null; stage.current.hands = []; }
+  };
 
   return (
     <main ref={hostRef} style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden",
-      background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}>
-      <Canvas camera={{ fov: 48, near: 0.1, far: 2400, position: POND_CAMERA.toArray() }}
+      background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}
+      onPointerMove={pointerAsHand}
+      onPointerLeave={pointerOut}>
+      {ready && <Canvas camera={{ fov: 48, near: 0.1, far: 2400, position: POND_CAMERA.toArray() }}
         dpr={[1, 1.5]} gl={{ antialias: true, alpha: true }} style={{ position: "absolute", inset: 0 }}>
-        <Stage stage={stage} crossingRef={crossingRef} glowRef={glowRef} hintRef={hintRef} captionRef={captionRef}
+        <Stage stage={stage} form={form} from={FROM} tune={tune} transport={transport} crossingRef={crossingRef} glowRef={glowRef} hintRef={hintRef} pickRef={pickRef} captionRef={captionRef}
           onFallStart={() => setPhase("falling")}
           onSettled={() => setPhase("floating")}
           onDescend={() => setPhase("descending")}
           onUnder={() => setPhase("shape")}
           onWrapped={() => { stage.current.rise = true; setPhase("rising"); }}
-          onRisen={() => setPhase("naming")} />
-      </Canvas>
+          onRisen={() => setPhase("naming")}
+          onRewound={(to) => setPhase(to)} />
+      </Canvas>}
       <div ref={glowRef} aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none",
         background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)" }} />
       <div ref={crossingRef} aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", opacity: 0,
@@ -1205,41 +1848,48 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
 
       <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20 }}>lab — descent</p>
 
-      <div style={{ position: "absolute", left: "50%", top: 171, transform: "translateX(-50%)", width: "min(28em, 90vw)",
-        textAlign: "center", pointerEvents: "none", opacity: phase === "choose" ? 1 : 0, transition: "opacity 700ms ease" }}>
+      {/* The camera, a small mirrored window in the corner while the hands steer. */}
+      <video ref={videoRef} playsInline muted aria-hidden
+        style={{ position: "absolute", right: 28, bottom: 28, width: 128, height: 96, objectFit: "cover",
+          borderRadius: 10, transform: "scaleX(-1)", zIndex: 20, pointerEvents: "none",
+          opacity: step && tracking.isTracking ? 0.42 : 0, transition: "opacity 700ms ease",
+          filter: "grayscale(1) contrast(0.9)", mixBlendMode: "multiply" }} />
+
+      <div style={{ position: "absolute", left: "50%", top: 96, transform: "translateX(-50%)", width: "min(28em, 90vw)",
+        textAlign: "center", pointerEvents: "none", opacity: choosing ? 1 : 0, transition: "opacity 700ms ease",
+        animation: FROM ? "none" : "descentFadeIn 1400ms ease 900ms backwards" }}>
         <p style={{ ...TITLE, margin: 0, color: CHROME_GRAY }}>a photo that holds this memory</p>
         <p style={{ margin: "10px 0 0", fontFamily: SERIF, fontSize: NOTE_SIZE, lineHeight: 1.45, color: CHROME_GRAY }}>
-          it will rest on the water.
+          touch the film to choose one. it will rest on the water.
         </p>
       </div>
 
-      <div role="listbox" aria-label="photo library" style={{ position: "absolute", left: 0, right: 0, bottom: 28,
-        display: "flex", justifyContent: "center", gap: "clamp(18px, 2.4vw, 32px)", padding: "18px max(28px, 5vw)",
-        opacity: phase === "choose" ? 1 : 0, transition: "opacity 500ms ease 150ms",
-        pointerEvents: phase === "choose" ? "auto" : "none", zIndex: 10 }}>
+      {/* The strip itself is the picker: an unseen button kept over it by the stage. */}
+      <button ref={pickRef} type="button" aria-label="choose a photo for the film"
+        onClick={() => inputRef.current?.click()} disabled={!choosing}
+        style={{ position: "absolute", top: 0, left: 0, border: "none", padding: 0, background: "transparent",
+          cursor: choosing ? "pointer" : "default", zIndex: 10, pointerEvents: choosing ? "auto" : "none" }} />
+      <input ref={inputRef} type="file" accept="image/*" aria-label="choose a photo" style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void pick(URL.createObjectURL(file));
+        }} />
+
+      {/* The bundled stills, small and to one side, so the lab can run without a photo of one's own. */}
+      <div role="listbox" aria-label="photo library" style={{ position: "absolute", left: 0, right: 0, bottom: 34,
+        display: "flex", justifyContent: "center", alignItems: "center", gap: 14,
+        opacity: choosing ? 1 : 0, transition: "opacity 500ms ease 150ms", animation: FROM ? "none" : "descentFadeIn 1400ms ease 1500ms backwards",
+        pointerEvents: choosing ? "auto" : "none", zIndex: 10 }}>
+        <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.6, marginRight: 6 }}>or one of these</span>
         {PHOTOS.map((url) => (
           <button key={url} type="button" role="option" aria-selected={lifted === url} aria-label="select photo"
-            onClick={(e) => void pick(url, e.currentTarget)}
-            style={{ width: itemSize, height: itemSize, flex: `0 0 ${itemSize}`, padding: 0, overflow: "hidden",
+            onClick={() => void pick(url)}
+            style={{ width: 48, height: 48, flex: "0 0 48px", padding: 0, overflow: "hidden",
               borderRadius: "50%", border: "1px solid rgba(123, 123, 135, 0.25)", background: "#e7e7e8",
-              boxShadow: "0 10px 30px rgba(40, 36, 48, 0.12)", cursor: "pointer",
-              visibility: lifted === url ? "hidden" : "visible" }}>
+              boxShadow: "0 6px 18px rgba(40, 36, 48, 0.1)", cursor: "pointer", opacity: 0.85 }}>
             <img src={url} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }} />
           </button>
         ))}
-        <input ref={inputRef} type="file" accept="image/*" aria-label="choose a photo" style={{ display: "none" }}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            const button = inputRef.current?.nextElementSibling as HTMLElement | null;
-            if (file && button) void pick(URL.createObjectURL(file), button);
-          }} />
-        <button type="button" aria-label="add a photo from this device" onClick={() => inputRef.current?.click()}
-          style={{ width: itemSize, height: itemSize, flex: `0 0 ${itemSize}`, borderRadius: "50%", border: "none",
-            background: "rgba(123, 123, 135, 0.72)", color: "rgba(255, 255, 255, 0.9)", fontFamily: SERIF,
-            fontSize: "clamp(42px, 5vw, 64px)", fontWeight: 200, lineHeight: 1, cursor: "pointer",
-            visibility: lifted && !PHOTOS.includes(lifted) ? "hidden" : "visible" }}>
-          ＋
-        </button>
       </div>
 
       {phase === "floating" && (
@@ -1283,8 +1933,7 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
           {/* a pale veil under the wash, so the band reads as light on the paper rather than a strip */}
           <div aria-hidden style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "30vh", zIndex: 9, pointerEvents: "none",
             background: "linear-gradient(to bottom, rgba(236,237,238,0) 0%, rgba(236,237,238,.55) 45%, rgba(236,237,238,.7) 100%)" }} />
-          <OklchColorField u={colorUv.u} v={colorUv.v}
-            onPick={({ u, v, color }) => { setColorUv({ u, v }); stage.current.oklch = color; }} />
+          <OklchColorField u={colorUv.u} v={colorUv.v} held={colorHeld} onPick={({ u, v }) => pickColor(u, v)} />
         </>
       )}
       {step && (
@@ -1296,11 +1945,18 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
             <p style={{ margin: "14px 0 0", fontFamily: SERIF, fontSize: INSTRUCTION_SIZE, lineHeight: 1.45, color: UNDER_INK }}>
               {STEP_COPY[step].lines[0]}<br />{STEP_COPY[step].lines[1]}
             </p>
-            {STEP_COPY[step].hint && (
-              <p style={{ margin: "26px 0 0", fontFamily: SANS, fontSize: NOTE_SIZE, color: UNDER_INK, opacity: 0.7 }}>
-                {STEP_COPY[step].hint}
+            {STEP_COPY[step].drag && (
+              // with the camera on, the gesture hint takes this seat and the words move under it
+              <p style={{ margin: tracking.isTracking ? "118px 0 0" : "26px 0 0", fontFamily: SANS, fontSize: NOTE_SIZE, color: UNDER_INK,
+                opacity: gestureLive ? 0 : 0.7, transition: "opacity 900ms ease, margin 600ms ease" }}>
+                {tracking.isTracking ? STEP_COPY[step].drag : STEP_COPY[step].drag.replace(/^or /, "")}
               </p>
             )}
+          </div>
+          {/* GestureHint sits 210px below its parent; from here that is under the copy */}
+          <div style={{ position: "absolute", left: "50%", top: 80, transform: "translateX(-50%)", zIndex: 6,
+            pointerEvents: "none", opacity: tracking.isTracking ? 0.8 : 0, transition: "opacity 900ms ease" }}>
+            <GestureHint kind={step} active={gestureLive} />
           </div>
           <PillButton label="continue" trailing="›" onClick={continueStep}
             style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: step === "color" ? "calc(24vh + 28px)" : 40, zIndex: 30 }} />
@@ -1320,14 +1976,22 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
         {phase === "saved" ? <p style={CAPTION_YEAR_STYLE}>{year}</p> : (
           <input value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="year"
             inputMode="numeric" maxLength={4} aria-label="year" className="descent-field"
-            onKeyDown={(e) => { if (e.key === "Enter" && canSave) setPhase("saved"); }}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); }}
             style={{ ...CAPTION_YEAR_STYLE, width: "6em" }} />
         )}
-        <TextButton label="save memory" onClick={() => setPhase("saved")} disabled={!canSave}
+        <TextButton label="save memory" onClick={save} disabled={!canSave}
           style={{ position: "absolute", top: "100%", marginTop: 48, opacity: canSave ? 1 : 0, transition: "opacity 400ms ease" }} />
       </div>
+      {/* once kept, the gallery opens on it — the way the naming rim hands over */}
+      {phase === "saved" && (
+        <TextButton label="see it among the others"
+          onClick={() => navigate(CAROUSEL_PATH, { state: { galleryOpen: true, galleryFocusId: memoryId, galleryCarried: true } })}
+          style={{ position: "absolute", left: "50%", bottom: 40, transform: "translateX(-50%)", zIndex: 20,
+            animation: "descentFadeIn 900ms ease 600ms backwards" }} />
+      )}
 
       <style>{`
+        @keyframes descentFadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes descentStepIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
         .descent-field { background: transparent; border: none; outline: none; padding: 0; }
         .descent-field::placeholder { color: inherit; opacity: .35; font-style: inherit; }
@@ -1345,5 +2009,28 @@ function DescentRun({ onAgain }: { onAgain: () => void }) {
 /** /lab/descent — photo onto the water, and down through it. */
 export function DescentPrototype() {
   const [run, setRun] = useState(0);
-  return <DescentRun key={run} onAgain={() => setRun((r) => r + 1)} />;
+  // the knobs outlive a run, so "again" replays with the sliders where they were
+  const [tune, setTune] = useState<WrapTune>(WRAP_TUNE_DEFAULT);
+  const tuneRef = useRef(tune);
+  tuneRef.current = tune;
+  // the transport too: a paused lab stays paused through "again", at the wrap's first frame
+  const transport = useRef<Transport>({ paused: false, speed: SPEED, seek: null, shot: 0, length: 1, active: false });
+  // the knob group the timeline last pointed at
+  const [focus, setFocus] = useState<string | null>(null);
+  return (
+    <>
+      <DescentRun key={run} onAgain={() => { transport.current.active = false; setRun((r) => r + 1); }} tune={tuneRef} transport={transport} />
+      <WrapTunePanel tune={tune} onChange={setTune} focus={focus} />
+      <Timeline transport={transport} tune={tune} onChange={setTune} onFocus={setFocus} />
+      <style>{`
+        .wrap-range { -webkit-appearance: none; appearance: none; width: 100%; height: 16px; margin: 0; background: transparent; cursor: pointer; display: block; }
+        .wrap-range::-webkit-slider-runnable-track { height: 1px; background: rgba(123, 123, 135, 0.4); }
+        .wrap-range::-moz-range-track { height: 1px; background: rgba(123, 123, 135, 0.4); }
+        .wrap-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 9px; height: 9px; border-radius: 50%; margin-top: -4px; background: #7b7b87; border: none; }
+        .wrap-range::-moz-range-thumb { width: 9px; height: 9px; border-radius: 50%; background: #7b7b87; border: none; }
+        .wrap-range:focus-visible { outline: none; }
+        .wrap-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(123, 123, 135, 0.25); }
+      `}</style>
+    </>
+  );
 }

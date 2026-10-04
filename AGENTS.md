@@ -18,37 +18,424 @@ wave field (`POND_WAVES_GLSL` exported from `PerspectivePond.tsx`).
 
 Intended sequence, built in the lab and not yet wired into the production route:
 
-1. After recording, stay on the pond and pick a photo (bundled stills, or a
-   local jpeg/png/webp/gif for this visit only).
-2. The chosen photo falls as a soft, faded 35mm film strip — sprocket holes,
-   torn ends, a slight curl pressed down by the water — and floats.
+1. After recording, stay on the pond. An empty 35mm strip gathers itself out
+   of the air in front of the view and hangs there (`CHOOSE_DEPTH`,
+   `EMERGE_S`). Touching the strip opens the file picker (a local
+   jpeg/png/webp/gif for this visit only); two bundled stills sit small at the
+   bottom so the lab runs without one.
+2. The photo develops into the strip's window, darks first (`uDevelop`,
+   `DEVELOP_S`); a beat later (`LET_GO_S`) the strip is let go and falls —
+   flutter, a soft landing, ripples — and floats. The earlier circle-thumbnail
+   → strip morph is gone; `uMorph` is 1 from the start.
 3. Hold to descend through the film into the water. The form surfaces.
 4. Shape, distance, then color. While the form is handled, the water washes
    paler and less saturated so the object is what has the color.
-5. On confirm, the film overhead dissolves into sparse particles of uneven
-   weight and spacing. They settle onto the form as its photo map (the existing
-   `MemoryPhotoLayer` look).
+5. On confirm, the film's emulsion lets go and the photo develops on the form
+   as its photo map (the existing `MemoryPhotoLayer` look), darks first. The
+   particle version of this step — the image falling as a point cloud — is
+   kept in `wrapCloud.ts` behind `?cloud=1`, not in the shot (fourth pass,
+   below).
 6. The form rises, breaks the surface, and is named.
 
-Still open, on purpose: the photo-to-film transformation needs another pass.
-The user deferred that and asked to continue the underwater steps first. Do not
-treat the film look as finished. Portrait photos are cropped into the 36×24
-frame; turning the strip for a vertical photo was offered and not decided.
+The film's surface (`filmFragment`) is now the film lab's strip, wired in on
+2026-10-03: `STRIP_GLSL` + `FILM_LOOK_GLSL` + `SHEET_GLSL` from
+`filmStrip.ts`/`filmLook.ts`, with the descent adding only what the shot needs
+— the torn outline and worn edge, the develop (darks first, `uDevelop`), the
+dissolve into grains (`uDissolve`), the sheen where the curl catches the sky,
+and the backlit face from under the water (`uBelow`). The empty window is the
+stock a shade lighter at .55 of its alpha; the photo develops into it through
+`filmLook` and covers it at `uPhotoOpacity`. `filmUniforms` spreads
+`filmLookUniforms()` and `sheetUniforms()` (the default stock, photo opacity
+and edge fade), and `prepareFilmPhoto` is applied to the texture where
+`request.texture` lands. `uMorph` is gone. Tune in `/lab/film`; what settles
+there goes into `FILM_LOOK_DEFAULT`, `STOCKS`/`STOCK_DEFAULT` and
+`SHEET_DEFAULT`, and the descent follows. Checked once on the water: the sheet
+reads thin and pale there (distance, haze, 68% cover), which the user has not
+yet judged. Portrait photos are cropped into the 36×24 frame; turning the
+strip for a vertical photo was offered and not decided.
 
-The lab is one shot, not the live route. Do not wire it in until asked. Gaps
-inside the lab, in the order they matter:
+The photo's own film look is a second lab, **`/lab/film`**
+(`src/app/lab/FilmPreview.tsx`): one flat strip facing the viewer, nothing
+moving, drop or choose a photo, hold the strip to see it as uploaded, sliders
+down the right. The look itself is `src/app/lib/filmLook.ts`: a GLSL function
+`filmLook(sampler, uv)` plus its uniforms (`filmLookUniforms`, `setFilmLook`,
+`prepareFilmPhoto` for the mipmaps it blurs with). The model follows
+GrainLab's pipeline (MIT) rewritten for the GPU: tone (flatten, shoulder,
+tinted lift) → saturation → midtone lean and shadow/highlight crossover →
+bloom and halation from the photo's mipmaps → mottle → frame-relative grain →
+vignette → a seed-placed leak. Defaults were first set against three
+expired-stock scans the user gave, then against Yoshiyuki Okuyama's wider
+work (lifted blue-grey blacks, warm cream highlights, saturation kept, broad
+warm leaks from one side); the user has accepted the colour.
+`FILM_LOOK_DEFAULT` is the place to write back what the sliders settle on
+("copy values" puts them on the clipboard). The strip's own mm constants and
+edge print moved to `src/app/lab/filmStrip.ts`, shared by both labs; the edge
+print is thin (weight 300, hairline ticks) by request. The stock's colours are
+a palette there too (`STOCKS`: grey-pink, grey, and grey-green, which the user
+set in the preview and is the default, `STOCK_DEFAULT`; `setStock`), chosen
+by swatches at the top of the preview's panel. "+" copies the chosen stock
+into the user's own, with colour pickers for its four tints (cool end, base,
+warm end, stain) and "remove"; "copy values" writes the palette out as a
+`STOCKS` entry so a liked one can be added to the list. Own stocks live in
+page state only. The sheet itself is `SHEET_GLSL` in `filmStrip.ts`, shared
+by both labs: `sheetStock` (the stock's drift, stains and uneven thickness —
+alpha .6–.88, lighter and more transparent where thin, a wash of light across
+it), `sheetWindow` (the photo's frame fading into the stock over `uEdgeFade`
+mm, unevenly, with a little bleed past the edge), `sheetDyeAlpha` (dark holds,
+light lets what is behind through) and `sheetEdge` (the cut edge and the
+perforations catch a hair of light, a faint shade inside). `sheetUniforms()`
+carries the stock and `SHEET_DEFAULT` (`photoOpacity` .68 — the photo is a
+layer of dye over the stock, not full cover, so the stock shows through the
+picture and it changes with the strip; `edgeFade` 2.5 mm); both have sliders
+in the preview. The preview alone adds a soft cast shadow mesh behind the
+strip (`shadowFragment`).
 
-- Shape and distance are full-screen horizontal drags. They stand in for the
-  MediaPipe gestures on `ShapeGrowPage` (two-hand distance, open-palm frost).
-  Color already uses `OklchColorField`.
-- Naming only types a title and a year onto the floating form. It does not
-  call `saveMemory`, and it does not hand the rim to `PuddleDiveGallery`.
-  Photo, OKLCH, frost, and material are still dropped by the archive.
-- The lab starts at the photo tray. Recording and the transcript/highlight
+A third lab, **`/lab/vessel`** (`src/app/lab/VesselPreview.tsx`), is a still
+life of a different end state: the memory as one thin, almost clear glass
+vessel (the superformula form, `?form=` seed, `?category=`, `?morph=`), with
+the 35mm strip from `/lab/film` pressed loosely along its inner wall carrying
+the photo — the photo is a thing inside the glass, not a map on its surface.
+Nothing moves but a slow turn (`?turn=`, hold to stop, drag to turn; `?yaw=`
+opens it turned, 180 is the far face); drop or choose a photo (`?photo=0|1`
+or an image URL); sliders down the right in groups glass / refraction / sheet
+/ dye / light / scene; "copy values" writes `VESSEL_TUNE_DEFAULT`, which is
+where tuned values go back. Two glass looks switch at the top of the panel
+(`?glass=frost|refract`, refract is the default): *frost* is the descent's
+`formFragment` idea (toned shell, Fresnel rim, two or three frost patches, a
+seed bubble); *refraction* has no tone of its own — the scene (backdrop
+quad, ground, sheet) is drawn to a render target, blitted, and the glass's
+facing and far walls (`glassRefractFragment`, on `FRONT_LAYER`) sample it
+displaced along the view-space normal (`bend`), smeared by thickness
+(`glassSoft`), darkened where thick (`thickDark`, the feet), with the live
+`BubbleViewer` vocabulary for the edge — a dark rim line `pow(g, 3.3)`, a
+thin film ring `pow(g, 20)` lit by the key, grazing reflection of a two-stop
+room (`envAbove`/`envBelow`, `horizon`, `horizonSoft`). Back/front is decided
+by `dot(n, v)`, not `gl_FrontFacing` — three flips the winding for a
+`BackSide` material, and the far wall drawn as "facing" was what made the body
+milky. `?show=glass|sheet` draws one layer alone. For the sheet the strip's
+face was factored out of the descent's `filmFragment` into `STRIP_FACE_GLSL`
+(`stripTornOutline`, `stripCoverage`, `stripFace`) in `filmStrip.ts`, and
+`filmLook` took a third `bias` argument (mip bias, for the blurred far face);
+the descent calls the same functions and renders as before. Not yet judged by
+the user: the refraction look at all (it has only been seen in captures:
+reads as thin clear glass, the strip legible through it, edges and feet
+smeared; whether it wants more body is the `bodyAlpha`/`thickDark`/`bend`
+question), the key highlight line, how the sheet sits for a portrait photo
+(cropped into the 36×24 frame as in the film lab), and the frost look since
+the back-wall fix. The second step the user named — the sheet wrap inside the
+descent behind `?wrap=sheet` — was not started.
+
+The vessel's sheet has two builds since 2026-10-04, switched by a
+"pressed to the wall / draped" radio at the top of the sheet group
+(`?sheet=draped`; pressed is the default and unchanged). The user's ask: the
+fold should not run along the inner wall but hang like soft fabric, bending
+when it wants to and leaving natural air between its face and the wall.
+`buildDrapedSheet` is its own cloth — a 72×24 grid in true strip mm
+(`STRIP_MM` × `sheetSize`) hung from one place on the wall (`anchorAngle`,
+`anchorHeight`, `tilt`), pressed to the wall for `contact` mm, then peeling
+toward the inside over `sag` mm by `peel` degrees, curling across (`curl`)
+and twisting (`twist`), then settled as soft cloth against a radius map of
+the inset glass (`buildWallMap`, θ/φ bins, blurred twice — the superformula
+is star-shaped about its centre). The first settle snapped every vertex to
+the wall and the user saw brittle plastic (jagged folds); it is now: 96×48
+grid (≈1 mm a cell), 24 passes of loose distance constraints, the wall met
+with a radial correction that is blurred across the sheet before it is
+applied (a lobe bows the cloth over a width rather than printing a kink),
+and a Taubin smooth each pass (Laplacian step, slightly larger step back, so
+nothing shrinks) as the bending stiffness of gauze or soaked paper; `soft`
+0…1 scales the smoothing, 0 is the crisp version; a last hard clamp keeps
+everything inside the glass. The model is the user's own earlier draped-cloth
+piece (a catenary plane computed once on the CPU, fine subdivision, smooth
+normals, softness from the material): no solver, nothing moves. The feel is
+a knob group of its own ("feel", draped only; the uniforms sit neutral when
+pressed so the film look is untouched): `sheer` (alpha), `softRim` (a
+Fresnel edge that lightens and thins so the outline furs), `sheen` (a broad
+grazing light from the key), `gloss` (the film's hard highlight, 1 is film),
+`grain` (screen-space, fine). The cloth carries its mm as an attribute
+(`aMm`, `uMmAttr` 1), so `sheetFragment` draws the same strip; the pressed
+sheet still derives mm from `vRest`. The user preferred the near face of the
+sheet (sharp, lit, mip bias 0) to the far face (bias 1.6, dimmed by
+`backFace`, cooler) and asked to be able to put that face against the glass:
+"picture faces — the inside / the glass" under the sheet radios
+(`?face=glass`, `SheetFace`, `uFlip`): the fragment's `facing` is
+`gl_FrontFacing` xor the flip and `mm.x` is mirrored with it, so the strip is
+truly turned over — the emulsion side reads the right way round from the
+glass side and mirrored from inside. Works for both sheet builds. The knob
+group "drape" shows only when
+draped; `arc`/`band`/`lift`/`fold scale` only when pressed; "copy values"
+notes which. Seen: at size 1.2 the strip hangs as one bowed sheet; at 1.5
+(bigger than the cavity) it bows into the bowl in broad rounded folds. Not
+yet judged by the user: the soft defaults (soft .7, sheer .8, softRim .35,
+sheen .35, gloss .15, grain .04) and the light on its underside. The shape
+defaults are the user's own settling (size 2.26, hung from 180° at height
+1.0, tilt 2, contact 30.5 mm, sag 21 mm, peel 69°, curl .35, twist 15, gap
+.03, soft .7) — a sheet much longer than the strip, pressed along most of
+its length and peeling only at the end.
+
+The lab is one shot, not the live route. Do not wire it in until asked.
+
+Done inside the lab since the first cut:
+
+- The three underwater steps take the same MediaPipe gestures as
+ `ShapeGrowPage` through `useHandTracking` (two palms apart → shape, one
+ palm opening → frost, fingertip over the field → color, pinch to hold), with
+ the same ranges. The full-screen drag and the field's own pointer handling
+ stay as the fallback when the camera is refused or no hand is seen; the hint
+ under the copy says "drag across…" then, and "or drag across…" when the
+ camera is live. A small greyed camera window sits bottom-right while a step
+ is on. `GestureHint` shows under the copy when tracking.
+- Naming saves. "save memory" calls `saveMemory` with the run's
+ `ArtifactForm`, `evolve` = the shape step's morph (as `ShapeGrowPage`
+ saves it), a material preset and `colorIndex` derived from the OKLCH hue
+ the way `NamingRim` does, and a new optional `look` field
+ (`MemoryLook` in `memoryStore.ts`: `photoUrl`, `oklch`, `vividness`).
+ `ArchiveArtifact` carries `look` through `buildArchive`. The gallery and
+ the viewers do not read `look` yet, so the archived blob still shows the
+ palette tint and no photo; that render unification is the next foundation
+ step. "see it among the others" then navigates to `/memory` with
+ `{ galleryOpen, galleryFocusId, galleryCarried }`, the rim's own handoff.
+ A device photo's `photoUrl` is an object URL and dies with the visit.
+- The touch. During the three steps the frame is drawn through a post pass
+ (`touchFragment`; a second `useFrame(…, 1)` in `Stage` renders the scene to
+ a `WebGLRenderTarget`, then to the screen). Around each hand a soft lens
+ bends what is behind it, a moving hand leaves a wake, the light splits by a
+ hair. Hand positions come from `handCenter` of the MediaPipe landmarks
+ (mirrored); while the camera sees no hand the pointer stands in
+ (`StageState.hands`, `handsFrom`). Tuning lives in the shader constants
+ (`.18` lens, `.1` split) and in the wake smoothing in the frame loop.
+- The wrap: grains are about twice as large (`gl_PointSize` 8.5–16 px), a
+ little softer and lighter each; the form grows 1.3× (`WRAP_GROW`, ≈2.2×
+ volume) over `WRAP_MOVE_S` and keeps that size through the rise. The camera
+ did not move. Details below.
+
+### The wrap, in detail (the film → particles → photo map)
+
+What the user asked for: on confirm the floating film overhead dissolves into
+particles that sink and attach to the form's surface, arriving as the existing
+`MemoryPhotoLayer` look. The sinking must be staggered and natural — grains
+of different weight and size, weight slightly changing speed, uneven spacing,
+never a dense sheet filling the water; light and flowing. Later: the grains
+were too small (fixed, above), and the form should be 1–2× larger in volume
+with the camera unchanged (fixed, `WRAP_GROW`).
+
+Built (`buildParticles`, `particleVertex`/`particleFragment`, the wrap block
+of `Stage`'s frame loop):
+
+- Timing. Confirm on the color step sets `stage.wrap`; `wrapAt` is taken, the
+ camera lerps to `WRAP_CAMERA`/`WRAP_LOOK` over `WRAP_MOVE_S` 2.2 s with the
+ film overhead and the form in frame, the form turns to face front and grows.
+ The particle clock starts half-way through that move. Grains release over
+ `RELEASE_S` 2.2 s (top edge of the image first, a few early, then the
+ rest); everything has sunk, been caught and faded by `WRAP_FALL_S` 7.2 s.
+ Then the film is hidden, `onWrapped` fires and the rise begins. The view
+ sinks 0.45 with the grains during the fall and that sink is carried into
+ the start of the rise so there is no step.
+- Grains. `PARTICLE_COUNT` 5200 is a ceiling; each grain is a vertex on the
+ form's camera-facing hemisphere (`rest.sphere z > .05`, inside the photo
+ disc), its photo pixel via `buildPhotoUv`, and the pixel's place on the
+ film window (75% × 66% of the strip). A grid of occupied cells enforces a
+ minimum spacing; vertices are visited in random order; darker image parts
+ keep more grains (`.3 + .7(1-luma)²`), so the image stays faintly legible
+ mid-fall. Colour is luma-based cool white (`f = .5 + .45·luma`), not the
+ photo's hue. Weight `pow(rand, 2.2)` — skewed light.
+- Motion (GPU). Terminal velocity `SINK_SPEED` 0.72–2.1 by weight (3×
+ range); a slow buoyant bob the light grains feel most; a current carrying
+ the column 60% toward the form's side; curl-noise drift, stronger for light
+ grains. Nothing pulls a grain until it has sunk to within 1.3 of its end
+ height, then it is caught and held (`catchK`), with `uForm` = the form's
+ matrixWorld so the grains follow the growing, turning form.
+- Hand-off to the map. Once held, a grain fades (light first, linger
+ 0.45–1.5 s) while `setMemoryPhotoFade` brings the overlay up over clock
+ 2.4–6.0 s; the overlay is `createMemoryPhotoMaterial` with
+ `saturate .6, contrast 1.06, opacity .62` on a 1.012× copy of the form
+ geometry. The film's emulsion goes with its grains (`uDissolve` over
+ `RELEASE_S + 1.2`).
+- Size is in world units: `gl_PointSize = uViewScale·size·(1 + byWeight·weight
+ + .3·seed)/dist`, with `uViewScale` = viewport height in device px over
+ 2·tan(fov/2), so a grain is the same size in the water whatever the screen.
+- The 700 ambient motes (`motesVertex`) are separate — dust in the water,
+ not the photo; they fade with the wash.
+
+Second pass (2026-10-03, later): everything about the wrap that is a matter
+of judgement is a knob — `WrapTune` / `WRAP_TUNE_DEFAULT` at the top of the
+file, a panel of sliders down the lab's right side (`WrapTunePanel`, "hide
+knobs" folds it, "copy values" puts the object on the clipboard). `Stage`
+reads the knobs every frame, so framing, grain size, colour, speeds and the
+hand-off move while grains are already falling; count and release spread are
+baked when the grains are built and take effect on "again". The knobs live
+in `DescentPrototype`, so "again" keeps them. **`?from=wrap`** opens the lab on
+the wrap itself (photo on the film, descent done, form surfaced and washed;
+`?photo=0|1`, `?morph=`, `?frost=`), with "again" replaying from there —
+`Stage`'s first frame sets the marks (`descentAt`, `fall`, `landedAt`, …) as
+long past. Defaults in `WRAP_TUNE_DEFAULT` are the second pass's judgement:
+camera (0,-3,7) looking at (0,-1.1,.2) so the film sits in the top band and
+the form in the lower third; grains: the user's own settling, 3000 of size
+.013, drift 2.14, caught from 1.0 (the rest of that group unchanged); darks
+.58 / lights 1.0 so grains read as light, not sediment; the print rises at clock 3.6–7.0 and
+the wrap ends at 8.0; `filmBelow` .6 — the film seen from under the water
+used to keep only 42% of its image (`filmFragment`, back face) and was
+invisible once the emulsion dissolved. Grains now carry the photo's pixel
+(`aColor`) and luma (`aLuma`); `colorMix` 0→1 moves from cool white to the
+photo's own hue at `colorSat`. `bindToOverlay` 1 keeps a caught grain until
+the print has risen under it instead of fading after `linger`.
+
+**Third pass (2026-10-03, night) — the point cloud.** The user showed four
+TouchDesigner demos of theirs (dense sheets of tiny points folding like
+smoke, bright where the sheet doubles over; one of them dark smoke on pale
+grey) and asked for the particles to be refounded on that. What changed,
+and supersedes the grain model described above (`buildParticles`,
+`cloudVertex`/`cloudFragment`, the wrap block):
+
+- The image is a sheet, not grains. `cloudCount` (default 90 000, ceiling
+ `CLOUD_MAX` 200 000, on "again") points on a lightly jittered grid over the
+ film window; each takes its pixel and — inverting `buildPhotoUv`'s planar
+ projection — its place on the form's lit side, blended from the nearest
+ form vertices binned by photo-uv. Points whose uv falls outside the photo
+ disc (the image's corners) have no place (`aLands` 0) and thin away.
+- The sheet stays whole. Release sweeps down the sheet (`aDelay` from the
+ row, a slight lean); the landing sweeps the sheet too (`landAt`,
+ `landOver`, each point gliding over `landEase`). `grain` 0→1 adds per-point
+ lag to both, from a coherent sheet to loose points. No weights.
+- Motion is a field. Curl of three value-noise potentials with analytic
+ gradients (divergence-free, so the sheet folds without bunching), two
+ octaves (`fieldScale`, `fieldAmp`, `fieldDetail`), drifting slowly with
+ time (`evolve`), plus a sink and a pull toward the form's column
+ (`current`). Each point's path is the field integrated from its own release
+ in ten fixed half-second steps in the vertex shader — a pure function of the
+ cloud clock, so the timeline can still scrub it. The swirl eases with a
+ point's own age: full until `calmAfter` (1.4 s), down to a quarter over
+ `calmOver` (1.8 s) — the user liked the first movement (around 3 s on the
+ shot clock) and found what followed too wide, spreading to the sides; after
+ the ease the way on is mostly the sink (.7) and the pull toward the form's
+ column (`current` .6), with `fieldAmp` down to .7. The timeline shows this
+ on a "swirl" track, from the first release.
+- Points carry the photo's tones by default (`blend` 2, normal blending): a
+ black pixel is a point of value `grainDark` .2, a white one `grainBright`
+ .9, grey or the photo's own colour by `colorMix`. The first cut was ink
+ (`blend` 1: `CustomBlending` dst·(1−src), slate `uInkColor`) and read as
+ black on the water — the user asked for the photo's tones instead. `blend`
+ 0 is additive light, the TouchDesigner-on-black reading. The material's
+ `blending` is switched per frame. Size is in pixels (`pointPx` 1.5, mild
+ distance attenuation), a square below ~2 px and a soft disc above.
+- Nothing attaches. The user asked that points not settle as a solid skin
+ on the form (the first cut formed a visible ball) but melt like snow before
+ the ground: on its glide a point shrinks (to 20%) and fades, gone by `melt`
+ .8 of the way. `linger`/`bindToOverlay` are gone with that.
+- The print develops rather than fading in flat. `developOnForm` patches the
+ shared `MemoryPhotoLayer` material (`onBeforeCompile`, at its alpha line):
+ reveal is a threshold on `luma·developDarks + (1−uv.y)·developSweep` that
+ `uDevelop` (0…1 over `overlayIn`…`overlayOut`, cloud clock) moves past,
+ each part coming up over `developSoft` — darks first, the top of the image
+ (where the sheet lands first) leading, as on paper in the tray. The user
+ asked for exactly this feel from the image's first appearance on the form.
+- Timeline tracks are now camera, film, cloud ("the sheet flows", its end
+ dragging `landAt`), swirl, lands (`landAt` … `+landOver+landEase`), print,
+ rise.
+- The form sits under the film. The film rests at z 2 and the form used to
+ glide to z −0.2 for the wrap, so the sheet fell 2.2 units in front of it
+ and read as landing on its near side; the user asked for straight down.
+ `formZ` (default 2.0, = `FILM_AT.z`) is a knob; the camera default moved
+ back to z 8.6 looking at z 2.0. `orbitYaw`/`orbitPitch` (degrees) turn the
+ view about its look point once the wrap has begun — to watch the fall from
+ another side without changing the shot. The rise has its own turn
+ (`riseYaw` −18, `risePitch` −49: from below, looking up at the form
+ against the light — the user's pick), taken up over the first 22% of the
+ rise, held until `riseViewUntil` .45 and let go by `riseViewBack` .85 as
+ the form comes up to the pond view; the camera track shows both spans.
+- The hourglass (`mode` 1; 0 is the sheet in the field, the default). The
+ user's image: the film becomes sand. The sheet funnels to a neck
+ (`neckDrop` .9 below the film, `neckRadius` .12) over `gatherS` 1.6 s,
+ then pours over `pourS` 3 s — down from the neck, lateral spread
+ `pow(s, spread)` (2.0: narrow long, opening late) toward each point's place
+ on the form's **upper** surface (`aTop`: the sheet laid over the top
+ hemisphere, image top at the far side, nearest-vertex blend binned by x/z),
+ with a `twist` that unwinds as it lands. The melt applies on the last 40%
+ of the pour. The field, landing sweep and swirl knobs do nothing in this
+ mode; the timeline shows gather/pour tracks instead of cloud/swirl/lands.
+
+Seen once, at 4.2 s: the sheet reads as a folded grey veil over the water,
+lighter and darker with the image, convincingly like the references; the
+form below still plain (development begins at 3.2 on the cloud clock). The
+melt and the development were not seen — the Cursor browser tab stops
+painting within seconds of opening now. Judge: whether 90k points at
+`pointAlpha` .12 is the right weight; whether the long straight glide from
+the sheet's height to the form reads as melting or as flying in (if the
+latter, raise `landAt` so the field has sunk the sheet nearer first, or
+lower `melt`); whether the development's darks-first/top-first mix is
+right. The field's magnitude (`uAmp * .35` inside `field`) and the
+integration (`STEPS` 10 × `STEP` .5) are the two constants not on the
+panel.
+
+The timeline (`Timeline`, along the bottom once the wrap has begun): the
+shot runs from confirm, left to right, with the camera, film, cloud,
+lands, print and rise as tracks and each phase an outlined block whose span
+is computed from the knobs (`phaseBlocks`) — so the blocks move as the
+sliders do, and the other way: dragging a block's edge writes the knob
+behind it (`setFrom`/`setTo`, clamped to the slider's range), dragging a
+block with both edges editable shifts both (the print), and a fixed edge
+(the camera's 2.2 s, the rise's 6 s) has no handle. Pressing a block seeks
+to its start and underlines its knob group in the panel; pressing the empty
+track seeks there; while paused a dragged edge carries the playhead with it.
+Above the tracks: ‹‹ ‹ play/pause › ›› step by a second and a tenth, the
+clock, the phases under the playhead, speed, and "fold". Seeking works
+because the wrap and the rise are functions of `t − wrapAt`: `Transport`
+(`paused`, `speed`, `seek`) is a ref the frame loop reads first; a seek sets
+`time.current` and re-latches `wrapped`/`riseAt`/`risen`/`broke`, the film's
+visibility and the page phase (`onRewound`).
+
+Seen in a browser this time (Cursor's own browser: it stops painting when its
+webview is hidden while `document.hidden` stays false, and its screenshot
+tool then returns a stale frame — reopen the tab beside the chat and check a
+clock; the CDP `Page.captureScreenshot` is current). Before the pass the film
+hung at the very top edge and left the frame as the view sank, the grains were
+1–3 px, and the print was already on the form while most grains were in the
+air. Not yet judged by the user: the new defaults, colour on vs off, bind on
+vs off.
+
+**Fourth pass (2026-10-04) — the cloud set aside.** The user decided the
+core experience does not have particles for now; the work is to be kept on
+this branch, switchable, but not the default. So: everything about the point
+cloud (both motions, the hourglass, melt, the knobs, the timeline tracks, the
+shaders, `readPhoto`, the geometry build) moved whole into
+**`src/app/lab/wrapCloud.ts`** — `CloudTune`/`CLOUD_TUNE_DEFAULT`,
+`CLOUD_KNOBS`, `CLOUD_TRACKS`/`cloudPhaseBlocks`, `createCloudUniforms`,
+`createCloudMaterial`, `setCloudUniforms`, `buildCloudGeometry`. The lab's
+`WrapTune extends CloudTune`, so the defaults, "copy values" and "reset"
+still carry the cloud's values, but the lab only builds the geometry,
+drives the uniforms, draws the `<points>`, shows the cloud's knob groups and
+timeline tracks when **`?cloud=1`** is on the URL (`CLOUD` in
+`DescentPrototype.tsx`; a "with / without the point cloud" button at the foot
+of the knobs panel reloads with it toggled). Nothing in the live create flow
+imports `wrapCloud.ts`.
+
+The core wrap, without the cloud, is now: the view draws back and the form
+grows (`WRAP_MOVE_S`), the film's emulsion lets go from the top down over
+`releaseS` (`uDissolve`) leaving a clear base, the print develops on the form
+over `overlayIn`…`overlayOut` (darks first, the top of the image leading —
+`developOnForm`/`setDevelop`, the knob group "print"), the wrap ends at
+`fallS`, and the form rises with its own view (`riseYaw`/`risePitch`). The
+panel shows framing / timing / print only. Checked in a browser in both modes
+after the move; the shot ran through to naming without errors.
+
+Not built / not judged:
+
+- Whether the gap the cloud leaves — the image lifting off the film and
+ nothing crossing the water to the form — wants something quieter in its
+ place (a wash, the print's own light), or is right as a cut.
+- Grains come only from the lit hemisphere; the back of the form gets its
+ map from the overlay alone.
+- No interaction between the grains and the hands (the touch pass bends them
+ like everything else, but they do not part around a hand).
+- No reduced-motion path for the wrap.
+
+Gaps still inside the lab, in the order they matter:
+
+- The lab starts at the empty strip. Recording and the transcript/highlight
   step stay on the live pond. The agreed order, when this is wired, is
   record → transcript highlight → photo → film.
-- Underwater refraction that follows the hand was discussed and not built.
-- No reduced-motion path, and no way to step backward through the shot.
+- No reduced-motion path. The timeline steps and scrubs the wrap and the
+ rise only; nothing before the confirm can be stepped back through
+ (`?from=wrap` jumps to the wrap, but only from a fresh load).
 - Left unjudged: the form reads thin under frost on the color step, the wrap
   framing, and the sky after the rise, which is very bright.
 
@@ -136,7 +523,7 @@ nijimu/
 │   ├── app/
 │   │   ├── App.tsx                 # ROUTER + GlobalControls (music/profile)
 │   │   ├── components/             # one file per live screen, plus shared UI
-│   │   ├── lab/                    # /lab/descent — in-progress create shot, not the live flow
+│   │   ├── lab/                    # /lab/descent — in-progress create shot; /lab/film — the photo's film look, flat; /lab/vessel — the memory as a glass vessel, still; wrapCloud.ts — the point cloud, kept aside (?cloud=1)
 │   │   ├── archive/                # unused former record-loop pages
 │   │   ├── hooks/                  # reusable behavior (see §7)
 │   │   ├── lib/                    # pure/shared modules (see §6)

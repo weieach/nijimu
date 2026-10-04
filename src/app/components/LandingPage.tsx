@@ -5,6 +5,8 @@ import { MemoryCarouselPage } from "./MemoryCarouselPage";
 import { MemoryPondPage } from "./MemoryPondPage";
 import { PageHeader } from "./PageHeader";
 import { BackButton } from "./BackButton";
+import { LabDock } from "./LabDock";
+import { useLandingReturn } from "../lib/landingReturn";
 import { INK_ENTRY, pickLandingGalleryIndex, type InkArrival } from "../lib/landingTransition";
 import { buildArchive } from "../lib/archive";
 import { CAROUSEL_PATH, MEMORY_POND_PATH, NAMING_PATH, RECORD_START_PATH, TRANSCRIPT_PATH } from "../lib/routes";
@@ -33,6 +35,7 @@ export function LandingPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { pathname } = location;
+  const { phase } = useLandingReturn();
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [arrival, setArrival] = useState<InkArrival | null>(null);
   const [entryFocus, setEntryFocus] = useState<{ id: string; slot: number } | null>(null);
@@ -205,6 +208,7 @@ export function LandingPage() {
           }} />
         </div>
       )}
+      {!inGallery && !inNaming && !inPond && !arrival && phase === "idle" && <LabDock />}
       {!inGallery && !inNaming && !inPond && (
         <div style={{ position: "absolute", inset: 0, zIndex: 40 }}>
           <BlobScene classicChrome ctaLabel="Enter" showPlus={false}

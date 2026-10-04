@@ -1,6 +1,6 @@
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
 import { COLOR_PALETTE } from "./colors";
-import { loadMemories, toMemoryEvent, SavedMemory } from "./memoryStore";
+import { loadMemories, toMemoryEvent, SavedMemory, type MemoryLook } from "./memoryStore";
 import { ArtifactForm, formForMemory } from "./superformula";
 
 /*
@@ -27,6 +27,8 @@ export interface ArchiveArtifact {
   };
   /** Drop anchor in puddle uv (y up) — only the homescreen has water to ripple. */
   anchor?: { x: number; y: number };
+  /** Photo, color and frost from the sculpting steps, when the memory has them. */
+  look?: MemoryLook;
 }
 
 // Deterministic per-memory texture, so a curated memory keeps its surface
@@ -80,6 +82,7 @@ function artifactFor(event: MemoryEvent, index: number, saved?: SavedMemory): Ar
           evolve: rand() * 0.5 + 0.5,
           bumpAmount: index % 2 === 0 ? rand() * 0.03 : 0.03 + rand() * 0.12,
         },
+    ...(saved?.look ? { look: saved.look } : {}),
   };
 }
 

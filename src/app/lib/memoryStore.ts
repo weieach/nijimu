@@ -21,7 +21,19 @@ export interface SavedMemory {
   };
   /** Index into COLOR_PALETTE / MEMORY_COLORS for this memory's tint. */
   colorIndex: number;
+  /** What the sculpting steps chose beyond the form. Optional: the curated
+      archive has none, and the gallery does not draw it yet. */
+  look?: MemoryLook;
   createdAt: string;
+}
+
+export interface MemoryLook {
+  /** The wrapped photo — an asset URL, or a data / object URL for this visit. */
+  photoUrl?: string;
+  /** The color step's pick. */
+  oklch?: { l: number; c: number; h: number };
+  /** 1 = clear glass, 0 = fully frosted (the distance step). */
+  vividness?: number;
 }
 
 /** This tab only. A reload starts from the curated archive again. */
