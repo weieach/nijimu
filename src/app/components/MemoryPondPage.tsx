@@ -1,21 +1,69 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useHoldToCreate } from "../hooks/useHoldToCreate";
-import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH } from "../lib/routes";
+import { CAROUSEL_PATH, MEMORY_POND_PATH, RECORD_START_PATH, SHAPE_GROW_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { CHROME_GRAY } from "../lib/colors";
 import { INSTRUCTION_SIZE, SANS, SERIF, SERIF_EXPOSURE } from "../lib/theme";
 import { POND_THOUGHTS, hasSeenPondInstruction, markPondInstructionSeen, pondPromptCue } from "../lib/pondPrompts";
-import { PerspectivePond, type PondTouch } from "./PerspectivePond";
+import { loadFormDraft } from "../lib/formDraft";
+import { DEFAULT_BUBBLE_AMBIENTS, DEFAULT_BUBBLE_LIGHTS, type AmbientFill, type EditableLight } from "../lib/sceneLights";
+import { createArtifactForm, formFromState } from "../lib/superformula";
+import { DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
+import { PerspectivePond, type PondTouch, type UnderwaterHandoff } from "./PerspectivePond";
 import { PondRecordingOverlay } from "./PondRecordingOverlay";
+import { PondPhotoOverlay } from "./PondPhotoOverlay";
+import type { PondPaper } from "./PondPhotoPaper";
 import { PuddleTranscriptPage } from "./PuddleTranscriptPage";
 
-export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, transcript = false, onReady, onLeave }: {
-  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; transcript?: boolean; onReady?: () => void; onLeave?: () => void;
+export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = false, recording = false, transcript = false, photo = false, onReady, onLeave, onSubmergeChange }: {
+  arrival?: number; active?: boolean; reducedMotion?: boolean; recording?: boolean; transcript?: boolean; photo?: boolean; onReady?: () => void; onLeave?: () => void; onSubmergeChange?: (active: boolean) => void;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const overlaid = recording || transcript;
+  const overlaid = recording || transcript || photo;
   const [touch, setTouch] = useState<PondTouch | null>(null);
+  // The picture chosen for this memory, on its way down to (or resting on) the water.
+  const [paper, setPaper] = useState<PondPaper | null>(null);
+  const [paperLanded, setPaperLanded] = useState(false);
+  const [submerging, setSubmerging] = useState(false);
+  const [handoff, setHandoff] = useState<UnderwaterHandoff | null>(null);
+  const handoffState = useRef<Record<string, unknown>>({});
+  const choosePaper = useCallback((url: string) => {
+    setPaperLanded(false);
+    setPaper({ url, serial: performance.now() });
+  }, []);
+  const clearPaper = useCallback(() => { setPaper(null); setPaperLanded(false); }, []);
+  const markPaperLanded = useCallback(() => setPaperLanded(true), []);
+  useEffect(() => { if (!photo) clearPaper(); }, [photo, clearPaper]);
+  const beginSubmerge = useCallback((photoUrl?: string) => {
+    const { photoUrl: _previous, ...carried } =
+      (location.state as Record<string, unknown> | null) ?? {};
+    // Settle now what the shape page would otherwise choose on arrival, so the
+    // form seen on the way down is the one waiting there.
+    const draft = loadFormDraft();
+    const form = formFromState(carried) ?? draft?.form ?? createArtifactForm();
+    setHandoff({
+      form,
+      lights: (carried.lights as EditableLight[] | undefined) ?? draft?.lights ?? DEFAULT_BUBBLE_LIGHTS,
+      ambients: (carried.ambients as AmbientFill[] | undefined) ?? draft?.ambients ?? DEFAULT_BUBBLE_AMBIENTS,
+      material: (carried.bubbleMaterial as UnderwaterHandoff["material"] | undefined) ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL,
+    });
+    handoffState.current = {
+      ...carried,
+      form,
+      ...(photoUrl ? { photoUrl } : {}),
+      underwaterEntry: true,
+      photoWrapped: !photoUrl,
+    };
+    setSubmerging(true);
+  }, [location.state]);
+  const finishSubmerge = useCallback(() => {
+    navigate(SHAPE_GROW_PATH, { state: handoffState.current });
+  }, [navigate]);
+  useEffect(() => {
+    onSubmergeChange?.(submerging);
+    return () => onSubmergeChange?.(false);
+  }, [submerging, onSubmergeChange]);
   const promptRefs = useRef<Array<HTMLDivElement | null>>([]);
   const cueRef = useRef(pondPromptCue(0));
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -121,13 +169,15 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     if (!active) return;
     const keys = (e: KeyboardEvent) => {
       if (e.key !== "Escape" && e.key !== "ArrowUp") return;
-      if (transcript) navigate(RECORD_START_PATH, { state: location.state });
+      if (submerging) return;
+      if (photo) navigate(TRANSCRIPT_PATH, { state: location.state });
+      else if (transcript) navigate(RECORD_START_PATH, { state: location.state });
       else if (recording) navigate(MEMORY_POND_PATH);
       else back();
     };
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
-  }, [active, recording, transcript, back, navigate, location.state]);
+  }, [active, recording, transcript, photo, submerging, back, navigate, location.state]);
   useEffect(() => {
     if (!enabled) return;
     buttonRef.current?.focus({ preventScroll: true });
@@ -156,10 +206,17 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     setTouch({ ...at, serial: performance.now() });
   }, []);
 
-  return <section aria-label={transcript ? "your spoken memory" : recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
+  return <section aria-label={photo ? "a picture for this memory" : transcript ? "your spoken memory" : recording ? "record a memory" : "a pond for a new memory"} data-pond-ready={enabled}
     style={{ position: "absolute", inset: 0, overflow: "hidden", background: "linear-gradient(#ededE8, #e2e6e2 42%, #b6c8c3)" }}>
-    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} promptRipples={!overlaid} />
-    <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)" }} />
+    <PerspectivePond arrival={arrival} reducedMotion={reducedMotion} touch={touch} cursorRef={cursorRef} holdRef={holdProgress} hintRef={hintRef} hintRevealRef={hintReveal} promptRefs={promptRefs} cueRef={cueRef} onReady={ready} lifeReady={lifeReady} promptRipples={!overlaid}
+      paper={paper} onPaperLanded={markPaperLanded}
+      submerge={submerging} handoff={handoff} onSubmergeComplete={finishSubmerge} />
+    <div aria-hidden style={{
+      position: "absolute", inset: 0, pointerEvents: "none",
+      background: "radial-gradient(ellipse at 48% 24%, #fff9, transparent 58%)",
+      opacity: submerging ? 0 : 1,
+      transition: "opacity 2400ms ease",
+    }} />
     {POND_THOUGHTS.map((thought, i) => <div key={thought.text} ref={el => { promptRefs.current[i] = el; }} data-pond-prompt={i} aria-hidden="true"
       style={{ position: "absolute", top: 0, left: 0, width: "min(148px, 42vw)", textAlign: "center", pointerEvents: "none", opacity: 0, transform: "translate(-50%, -100%) translate(50vw, 58vh)", transformOrigin: "center bottom", color: CHROME_GRAY, fontFamily: SERIF_EXPOSURE, fontWeight: 400, fontSynthesis: "none", fontSize: INSTRUCTION_SIZE, lineHeight: 1.45, textShadow: "0 1px 16px #f3f4ece6", paddingBottom: 52 }}>
       {thought.text}
@@ -228,6 +285,7 @@ export function MemoryPondPage({ arrival = 1, active = true, reducedMotion = fal
     </div>
     {recording && <PondRecordingOverlay reducedMotion={reducedMotion} onVoicePulse={pulseWater} />}
     {transcript && <PuddleTranscriptPage />}
-    <span className="sr-only" role="status">{recording ? "ready to record" : ""}</span>
+    {photo && !submerging && <PondPhotoOverlay reducedMotion={reducedMotion} chosenUrl={paper?.url} landed={paperLanded} onChoose={choosePaper} onClear={clearPaper} onContinue={beginSubmerge} />}
+    <span className="sr-only" role="status">{recording ? "ready to record" : photo && paperLanded ? "the picture is resting on the water" : ""}</span>
   </section>;
 }

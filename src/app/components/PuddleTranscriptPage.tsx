@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
-import { RECORD_START_PATH, SHAPE_GROW_PATH, TRANSCRIPT_PATH } from "../lib/routes";
+import { PHOTO_PATH, RECORD_START_PATH, TRANSCRIPT_PATH } from "../lib/routes";
 import { BODY_SIZE, NOTE_SIZE, PROSE_SIZE, SERIF, SERIF_DISPLAY, TITLE } from "../lib/theme";
 import { getTranscription } from "../lib/transcribe";
 import type { ArtifactForm } from "../lib/superformula";
@@ -160,8 +160,9 @@ export function PuddleTranscriptPage() {
       setShowContinue(false);
     } else {
       setFadeOutContent(true);
+      // The words stay on the water; the picture comes next, on the same pond.
       setTimeout(() => {
-        navigate(SHAPE_GROW_PATH, {
+        navigate(PHOTO_PATH, {
           state: {
             ...state,
             transcript,

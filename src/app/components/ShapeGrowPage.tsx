@@ -2,8 +2,8 @@ import { useLocation, useNavigate } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import { BackButton } from "./BackButton";
 import { SceneViewer, MATERIAL_PRESETS } from "./SceneViewer";
-import { BubbleViewer, BUBBLE_BACKGROUND, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
-import { AmbientSurround } from "./AmbientSurround";
+import { BubbleViewer, DEFAULT_BUBBLE_MATERIAL } from "./BubbleViewer";
+import { UNDERWATER_CSS_BACKGROUND } from "../lib/underwaterLight";
 import { OklchColorField } from "./OklchColorField";
 import { stripLegacyEvolveFromState } from "../hooks/useOscillatingEvolve";
 import {
@@ -21,7 +21,6 @@ import { LightGeometryView } from "./LightGeometryView";
 import { BubbleMaterialView } from "./BubbleMaterialView";
 import { BubblePhotoView } from "./BubblePhotoView";
 import { BubbleFormView } from "./BubbleFormView";
-import { PhotoLibraryTray } from "./PhotoLibraryTray";
 import {
   MEMORY_PHOTO_DEFAULTS,
   MEMORY_PHOTO_FILTER_DEFAULTS,
@@ -39,16 +38,17 @@ import {
   DEFAULT_OKLCH,
   type Oklch,
   meshCoreFromOklch,
+  oklchToHex,
   rimFromOklch,
   sampleField,
   uvFromOklch,
 } from "../lib/oklch";
 import {
   NAMING_PATH,
+  PHOTO_PATH,
   SHAPE_DISTANCE_PATH,
   SHAPE_FEELING_PATH,
   SHAPE_GROW_PATH,
-  TRANSCRIPT_PATH,
 } from "../lib/routes";
 import {
   ArtifactCategory,
@@ -58,7 +58,6 @@ import {
   formKey,
 } from "../lib/superformula";
 import memoryPhotoUrl from "../../assets/memory-photo.jpg";
-import snowMountainPhotoUrl from "../../assets/memory-photo-02.png";
 
 type GestureStep = "shape" | "feeling" | "distance";
 
@@ -131,16 +130,21 @@ export function ShapeGrowPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const step = stepFromPath(location.pathname);
+  const underwaterEntry = !!location.state?.underwaterEntry;
+  // The scene is already there when arriving from the pond; only the words fade in.
   const [fadeIn, setFadeIn] = useState(false);
-  const [sceneReady, setSceneReady] = useState(false);
+  const [sceneReady, setSceneReady] = useState(underwaterEntry);
   const [handsDetected, setHandsDetected] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const draft = loadFormDraft();
-  const startingMorph =
-    asFiniteNumber(location.state?.morphProgress) ??
-    asFiniteNumber(draft?.morphProgress) ??
-    0;
+  // The underwater hand-off always meets a sphere. A stale form draft must
+  // not make the object jump to yesterday's shape on the first frame.
+  const startingMorph = underwaterEntry
+    ? 0
+    : asFiniteNumber(location.state?.morphProgress) ??
+      asFiniteNumber(draft?.morphProgress) ??
+      0;
   const startingVividness = asFiniteNumber(location.state?.vividness) ?? 1;
   const startingFeeling =
     asFiniteNumber(location.state?.photoFilter?.feeling) ??
@@ -190,16 +194,21 @@ export function ShapeGrowPage() {
   const [selectedLightId, setSelectedLightId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [materialOpen, setMaterialOpen] = useState(false);
-  const [bubbleMaterial, setBubbleMaterial] = useState(
-    () => location.state?.bubbleMaterial ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL,
-  );
+  const [bubbleMaterial, setBubbleMaterial] = useState(() => ({
+    ...DEFAULT_BUBBLE_MATERIAL,
+    ...(location.state?.bubbleMaterial ?? draft?.bubbleMaterial),
+  }));
   const [photoOpen, setPhotoOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
-  const [photoLibraryOpen, setPhotoLibraryOpen] = useState(false);
-  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | undefined>(
-    () => location.state?.photoUrl,
-  );
+  // The picture is chosen on the pond (/record/photo) and arrives with the memory.
+  const selectedPhotoUrl: string | undefined = location.state?.photoUrl;
   photoSelectedRef.current = !!selectedPhotoUrl;
+  const [photoWrapProgress, setPhotoWrapProgress] = useState(
+    () => !selectedPhotoUrl || location.state?.photoWrapped || step !== "shape" ? 1 : 0,
+  );
+  const photoReadyRef = useRef(photoWrapProgress >= 1);
+  photoReadyRef.current = photoWrapProgress >= 1;
+  const wrapFrameRef = useRef<number | null>(null);
   const [photoFilter, setPhotoFilter] = useState(() => {
     const base = {
       ...MEMORY_PHOTO_FILTER_DEFAULTS,
@@ -261,7 +270,6 @@ export function ShapeGrowPage() {
   // Fresh gates when the gesture step changes.
   useEffect(() => {
     resetGestureGates();
-    if (step !== "distance") setPhotoLibraryOpen(false);
     if (step !== "feeling") {
       colorHeldRef.current = false;
       pinchFramesRef.current = 0;
@@ -270,8 +278,15 @@ export function ShapeGrowPage() {
   }, [step]);
 
   useEffect(() => {
-    setTimeout(() => setFadeIn(true), 100);
-    setTimeout(() => setSceneReady(true), 300);
+    const fadeTimer = window.setTimeout(() => setFadeIn(true), underwaterEntry ? 380 : 100);
+    const sceneTimer = window.setTimeout(() => setSceneReady(true), underwaterEntry ? 0 : 300);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(sceneTimer);
+    };
+  }, [underwaterEntry]);
+  useEffect(() => () => {
+    if (wrapFrameRef.current !== null) cancelAnimationFrame(wrapFrameRef.current);
   }, []);
 
   // Debounced: growth changes every frame while a hand is moving.
@@ -392,6 +407,7 @@ export function ShapeGrowPage() {
         }
 
         if (tab === "shape" && hands.length >= 2) {
+          if (!photoReadyRef.current) return;
           const distance = landmarkDistance(
             handCenter(hands[0]),
             handCenter(hands[1]),
@@ -427,27 +443,6 @@ export function ShapeGrowPage() {
     resetGestureGates();
   };
 
-  const togglePhoto = () => {
-    if (selectedPhotoUrl) {
-      setSelectedPhotoUrl(undefined);
-      return;
-    }
-    setPhotoLibraryOpen(true);
-  };
-
-  const selectLibraryPhoto = (url: string) => {
-    setSelectedPhotoUrl(url);
-    setPhotoLibraryOpen(false);
-    // Settle on the historical wrap look; keep frost cleared so fist
-    // later returns to this exact state with no pop.
-    targetPhotoOpacityRef.current = WRAP_PHOTO_OPACITY_FULL;
-    targetVividnessRef.current = 1;
-    setVividness(1);
-    setPhotoFilter((current) =>
-      withWrapPhotoLook(current, WRAP_PHOTO_OPACITY_FULL),
-    );
-  };
-
   const coreColor = meshCoreFromOklch(oklch);
   const rimColor = rimFromOklch(oklch);
   const matPresetIndex = Math.min(
@@ -458,30 +453,72 @@ export function ShapeGrowPage() {
     MATERIAL_PRESETS.length - 1,
   );
   const colorApplied = step === "feeling";
-
-  const formState = () => ({
-    ...stripLegacyEvolveFromState(location.state),
-    cameraPermission,
-    form,
-    morphProgress,
-    bubbleMaterial,
-    lights,
-    ambients,
-    renderVariant: variant,
-    vividness,
-    photoFilter,
-    photoUrl: selectedPhotoUrl,
-    oklch,
-    coreColor,
-    rimColor,
-    matPresetIndex,
-    shape: {
-      form,
-      fluidity: 0,
-      evolve: morphProgress,
-      bumpAmount: 0,
-    },
+  // The chosen feeling colours the water around the form, faintly.
+  const underwaterTint = oklchToHex({
+    l: 0.8,
+    c: Math.min(oklch.c * 0.55, 0.05),
+    h: oklch.h,
   });
+  const photoWrapped = !selectedPhotoUrl || photoWrapProgress >= .999;
+  const overlayPhotoFade = photoWrapped
+    ? 1
+    : Math.max(0, Math.min(1, (photoWrapProgress - .72) / .28));
+  const projectionStrength =
+    step === "shape" && selectedPhotoUrl
+      ? .82 * (1 - Math.max(0, Math.min(1, (photoWrapProgress - .42) / .48)))
+      : 0;
+
+  const beginPhotoWrap = () => {
+    if (!selectedPhotoUrl || photoWrapProgress > 0) return;
+    targetMorphRef.current = 0;
+    setMorphProgress(0);
+    const started = performance.now();
+    const duration = 3400;
+    const tick = (now: number) => {
+      const raw = Math.min(1, (now - started) / duration);
+      const eased = raw * raw * (3 - 2 * raw);
+      setPhotoWrapProgress(eased);
+      if (raw < 1) wrapFrameRef.current = requestAnimationFrame(tick);
+      else {
+        setPhotoWrapProgress(1);
+        photoReadyRef.current = true;
+        wrapFrameRef.current = null;
+        resetGestureGates();
+      }
+    };
+    wrapFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const formState = () => {
+    // `underwaterEntry` is a one-shot hand-off hint. Carrying it into later
+    // routes would reset the form to a sphere when the user navigates back.
+    const { underwaterEntry: _underwaterEntry, ...carried } =
+      stripLegacyEvolveFromState(location.state);
+    return {
+      ...carried,
+      cameraPermission,
+      form,
+      morphProgress,
+      bubbleMaterial,
+      lights,
+      ambients,
+      renderVariant: variant,
+      vividness,
+      photoFilter,
+      photoUrl: selectedPhotoUrl,
+      photoWrapped,
+      oklch,
+      coreColor,
+      rimColor,
+      matPresetIndex,
+      shape: {
+        form,
+        fluidity: 0,
+        evolve: morphProgress,
+        bumpAmount: 0,
+      },
+    };
+  };
 
   const handleContinue = () => {
     saveFormDraft({ form, morphProgress, bubbleMaterial, lights, ambients });
@@ -500,7 +537,7 @@ export function ShapeGrowPage() {
         ? SHAPE_DISTANCE_PATH
         : step === "distance"
           ? SHAPE_GROW_PATH
-          : TRANSCRIPT_PATH;
+          : PHOTO_PATH;
     navigate(previousPath, { state: formState() });
   };
 
@@ -508,17 +545,13 @@ export function ShapeGrowPage() {
     <div
       className="relative w-full h-screen flex flex-col overflow-hidden"
       style={{
-        background: variant === "bubble" ? BUBBLE_BACKGROUND : "#e0e0e0",
+        background: variant === "bubble" ? UNDERWATER_CSS_BACKGROUND : "#e0e0e0",
       }}
     >
-      {step === "feeling" && <AmbientSurround oklch={oklch} />}
 
       <div
         style={{
-          display:
-            cameraPermission === "granted" && !photoLibraryOpen
-              ? "block"
-              : "none",
+          display: cameraPermission === "granted" ? "block" : "none",
           position: "absolute",
           bottom: 22,
           right: 22,
@@ -561,16 +594,16 @@ export function ShapeGrowPage() {
         {variant === "bubble" ? (
           <BubbleViewer
             key={formKey(form)}
-            autoRotate={!lightEditOpen}
+            autoRotate={!lightEditOpen && photoWrapped}
             morphProgress={morphProgress}
             ready={sceneReady}
             form={form}
             coreColor={colorApplied ? coreColor : undefined}
             rimColor={colorApplied ? rimColor : undefined}
-            memoryPhotoUrl={
-              lightEditOpen || step === "shape" ? undefined : selectedPhotoUrl
-            }
-            photoFade={1}
+            memoryPhotoUrl={lightEditOpen ? undefined : selectedPhotoUrl}
+            photoFade={step === "shape" ? overlayPhotoFade : 1}
+            projectionStrength={projectionStrength}
+            photoWrapProgress={step === "shape" ? photoWrapProgress : 1}
             lightEditMode={lightEditOpen}
             lights={lights}
             onLightsChange={setLights}
@@ -582,8 +615,11 @@ export function ShapeGrowPage() {
             reflectivity={bubbleMaterial.reflectivity}
             transparency={bubbleMaterial.transparency}
             fog={bubbleMaterial.fog}
+            metalness={bubbleMaterial.metalness}
             photoFilter={photoFilter}
             vividness={vividness}
+            underwater
+            underwaterTint={colorApplied ? underwaterTint : null}
           />
         ) : (
           <SceneViewer
@@ -659,8 +695,17 @@ export function ShapeGrowPage() {
           {variant === "bubble" ? (
             step === "shape" ? (
               <>
-                <p style={{ margin: 0 }}>each memory already has a shape.</p>
-                <p style={{ margin: 0 }}>open your hands, and let these words find theirs.</p>
+                {!photoWrapped && selectedPhotoUrl ? (
+                  <>
+                    <p style={{ margin: 0 }}>light from the picture is still finding the form.</p>
+                    <p style={{ margin: 0 }}>let it come closer.</p>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ margin: 0 }}>each memory already has a shape.</p>
+                    <p style={{ margin: 0 }}>open your hands, and let these words find theirs.</p>
+                  </>
+                )}
               </>
             ) : step === "feeling" ? (
               <>
@@ -681,10 +726,10 @@ export function ShapeGrowPage() {
           )}
         </div>
 
-        {variant === "bubble" && (
+        {variant === "bubble" && (step !== "shape" || photoWrapped) && (
           <GestureHint
             kind={step === "feeling" ? "color" : step}
-            active={handsDetected >= (step === "shape" ? 2 : 1)}
+            active={photoWrapped && handsDetected >= (step === "shape" ? 2 : 1)}
           />
         )}
 
@@ -785,7 +830,7 @@ export function ShapeGrowPage() {
         </div>
       )}
 
-      {variant === "bubble" && step !== "feeling" && (
+      {variant === "bubble" && step !== "feeling" && (step !== "shape" || photoWrapped) && (
         <>
           <LightGeometryView
             open={lightEditOpen}
@@ -829,31 +874,22 @@ export function ShapeGrowPage() {
         </>
       )}
 
-      <PhotoLibraryTray
-        open={step === "distance" && photoLibraryOpen}
-        photoUrl={snowMountainPhotoUrl}
-        selectedUrl={selectedPhotoUrl}
-        onSelect={selectLibraryPhoto}
-        onClose={() => setPhotoLibraryOpen(false)}
-      />
-
-      {!lightEditOpen && !photoLibraryOpen && step === "distance" && (
+      {!lightEditOpen && step === "shape" && selectedPhotoUrl && !photoWrapped ? (
         <PillButton
-          label={selectedPhotoUrl ? "remove photo" : "add photo"}
-          onClick={togglePhoto}
+          label={photoWrapProgress > 0 ? "settling into the form" : "let the picture find its form"}
+          onClick={beginPhotoWrap}
+          disabled={photoWrapProgress > 0}
           className="transition-opacity duration-500"
           style={{
             position: "absolute",
             left: "50%",
             transform: "translateX(-50%)",
-            bottom: 96,
+            bottom: 108,
             zIndex: 30,
             pointerEvents: "auto",
           }}
         />
-      )}
-
-      {!lightEditOpen && !photoLibraryOpen && (
+      ) : !lightEditOpen && (
         <PillButton
           label="continue"
           onClick={handleContinue}

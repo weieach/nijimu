@@ -14,6 +14,7 @@ const FALLBACK_MATERIAL = {
   reflectivity: 0.2,
   transparency: 0.9,
   fog: 0,
+  metalness: 0.35,
 };
 
 export type FormDraft = {

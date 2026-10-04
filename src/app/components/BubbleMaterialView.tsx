@@ -6,6 +6,7 @@ export type BubbleMaterialParams = {
   reflectivity: number;
   transparency: number;
   fog: number;
+  metalness: number;
 };
 
 type BubbleMaterialViewProps = {
@@ -23,6 +24,7 @@ const SLIDERS: {
   { id: "reflectivity", label: "reflectivity" },
   { id: "transparency", label: "transparency" },
   { id: "fog", label: "fog" },
+  { id: "metalness", label: "metallic sheen" },
 ];
 
 /**

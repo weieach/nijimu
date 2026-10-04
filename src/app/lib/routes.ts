@@ -13,6 +13,9 @@ export const RECORD_START_PATH = "/record/start";
 /** Spoken words and highlights — same pond overlay as recording. */
 export const TRANSCRIPT_PATH = "/record/transcript";
 
+/** A picture for the memory, let down onto the same water after the words. */
+export const PHOTO_PATH = "/record/photo";
+
 /** MediaPipe shape steps — one screen per gesture. */
 export const SHAPE_GROW_PATH = "/record/shape/grow";
 export const SHAPE_FEELING_PATH = "/record/shape/feeling";

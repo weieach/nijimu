@@ -23,6 +23,7 @@ import {
   DEFAULT_ARTIFACT_FORM,
   computeMeshNormals,
   formKey,
+  getArtifactMesh,
 } from "../lib/superformula";
 import {
   configureMemoryPhotoTexture,
@@ -47,6 +48,18 @@ import {
   createBubbleLightUniforms,
   fillBubbleLightUniforms,
 } from "../lib/sceneLights";
+import {
+  PROJECTED_PHOTO_FUNCTION,
+  PROJECTED_PHOTO_UNIFORMS,
+  createProjectedPhotoUniforms,
+} from "../lib/projectedPhotoLight";
+import {
+  UNDERWATER_FORM_FUNCTION,
+  UNDERWATER_FORM_UNIFORMS,
+  createUnderwaterFormUniforms,
+  underwaterTime,
+} from "../lib/underwaterLight";
+import { UnderwaterBackdrop } from "./UnderwaterBackdrop";
 
 /*
  * BubbleViewer — the 'bubble' rendering variant of the form-grow step.
@@ -63,8 +76,10 @@ const BUBBLE_VERT = `
 varying vec3 vNormalW;
 varying vec3 vViewDirW;
 varying vec3 vWorldPos;
+varying vec3 vPhotoProjectPos;
 
 void main() {
+  vPhotoProjectPos = normalize(position);
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
   vWorldPos = worldPos.xyz;
   vNormalW = normalize(mat3(modelMatrix) * normal);
@@ -84,20 +99,40 @@ uniform float uReflectivity;
 uniform float uTransparency;
 uniform float uFog;
 uniform vec3 uFogColor;
+uniform float uMetalness;
 uniform int uLightCount;
 uniform vec3 uLightPos[8];
 uniform vec3 uLightColor[8];
 uniform float uLightIntensity[8];
 uniform float uLightKind[8];
 uniform vec3 uAmbientColor;
+// Where the light rig's origin sits in this scene; lights are placed around it.
+uniform vec3 uOrigin;
+uniform float uReveal;
+${PROJECTED_PHOTO_UNIFORMS}
+${UNDERWATER_FORM_UNIFORMS}
 
 varying vec3 vNormalW;
 varying vec3 vViewDirW;
 varying vec3 vWorldPos;
+${PROJECTED_PHOTO_FUNCTION}
+${UNDERWATER_FORM_FUNCTION}
+
+// A soft studio seen in polished metal: bright overhead, a dim band just
+// below the horizon, a paler floor beneath, and two broad windows at the sides.
+vec3 metalReflection(vec3 r) {
+  float up = smoothstep(-.04, .5, r.y);
+  float down = smoothstep(-.24, -.85, r.y);
+  float tone = .24 + up * .7 + down * .38;
+  tone += pow(max(dot(r, normalize(vec3(-.72, .32, .62))), 0.0), 5.0) * .42;
+  tone += pow(max(dot(r, normalize(vec3(.78, .26, .58))), 0.0), 7.0) * .3;
+  return vec3(min(tone, 1.04)) * vec3(.985, .99, 1.0);
+}
 
 void main() {
   vec3 n = normalize(vNormalW);
   vec3 v = normalize(vViewDirW);
+  vec3 local = vWorldPos - uOrigin;
   // Facing the camera → 0; grazing the silhouette → 1.
   float facing = 1.0 - abs(dot(n, v));
 
@@ -125,7 +160,9 @@ void main() {
   col += vec3(film);
   alpha = clamp(alpha + film * 0.35, 0.0, 1.0);
 
-  col += uAmbientColor;
+  // Under water the fill falls off away from the beam, so the form has a lit
+  // side and a shaded one instead of a uniform glow.
+  col += uAmbientColor * mix(1.0, .55, uUnderwater);
 
   vec3 specAccum = vec3(0.0);
   vec3 diffAccum = vec3(0.0);
@@ -135,7 +172,7 @@ void main() {
     vec3 L;
     float atten = 1.0;
     if (kind < 0.5) {
-      vec3 toL = uLightPos[i] - vWorldPos;
+      vec3 toL = uLightPos[i] - local;
       float d = length(toL);
       L = toL / max(d, 0.001);
       atten = 1.0 / (1.0 + 0.12 * d + 0.02 * d * d);
@@ -143,7 +180,7 @@ void main() {
       // Directional: LightRig aims at the origin, so L ≈ normalize(position).
       L = normalize(uLightPos[i]);
     } else {
-      vec3 toL = uLightPos[i] - vWorldPos;
+      vec3 toL = uLightPos[i] - local;
       float d = length(toL);
       L = toL / max(d, 0.001);
       atten = 1.0 / (1.0 + 0.06 * d);
@@ -156,8 +193,31 @@ void main() {
     float rimL = pow(clamp(facing, 0.0, 1.0), 3.0) * ndotl;
     specAccum += lc * (spec * specMix + rimL * rimLMix);
   }
+  // Under water the beam is the key light; the rig's own glints step back.
+  specAccum *= mix(1.0, .5, uUnderwater);
+  diffAccum *= mix(1.0, .6, uUnderwater);
   col += diffAccum + specAccum;
+  if (uUnderwater > 0.001) {
+    vec3 beam = underwaterBeam(n, v, facing) * uUnderwater;
+    col += beam;
+    alpha = clamp(alpha + dot(beam, vec3(.333)) * .22, 0.0, 1.0);
+  }
+  // Metal mirrors the surroundings rather than glowing, but stays partly
+  // see-through so the form keeps its lightness.
+  if (uMetalness > 0.001) {
+    vec3 env = metalReflection(reflect(-v, n));
+    col = mix(col, env, uMetalness * (.7 + .3 * pow(facing, 2.0)));
+    alpha = mix(alpha, .56 + .32 * pow(facing, 1.5), uMetalness * .85);
+  }
+  vec3 projection = projectedPhotoLight(n);
+  // Light areas pass through; dark areas in the print withhold some of the
+  // existing fill. Without that subtraction the pale bubble washes the image
+  // into an unstructured white glow at the Canvas hand-off.
+  float projectedMass = max(projection.r, max(projection.g, projection.b));
+  float footprint = smoothstep(.008, .055, projectedMass);
+  col = col * (1.0 - footprint * uProjectionStrength * .48) + projection * 1.28;
   alpha = clamp(alpha + length(specAccum) * 0.18, 0.0, 1.0);
+  alpha = clamp(alpha + length(projection) * .05, 0.0, 1.0);
 
   // Distance fog toward the water midtone + a little milky facing haze.
   if (uFog > 0.001) {
@@ -171,7 +231,7 @@ void main() {
     alpha = clamp(mix(alpha, max(alpha, 0.22), fogAmount * 0.55), 0.0, 1.0);
   }
 
-  gl_FragColor = vec4(col, alpha);
+  gl_FragColor = vec4(col, alpha * uReveal);
 }`;
 
 /* ───────── motion tuning ───────── */
@@ -233,7 +293,10 @@ interface BubbleModelProps {
   reflectivity: number;
   transparency: number;
   fog: number;
+  metalness?: number;
   photoTexture?: THREE.Texture | null;
+  projectedPhotoTexture?: THREE.Texture | null;
+  projectionStrength: number;
   photoFilter: MemoryPhotoFilter;
   /** Explicit photo visibility. Undefined preserves the legacy morph-driven fade. */
   photoFade?: number;
@@ -241,9 +304,18 @@ interface BubbleModelProps {
   lights: EditableLight[];
   ambients: AmbientFill[];
   onBounds?: (box: THREE.Box3, sphere: THREE.Sphere) => void;
+  /** Lit by the beam from the surface rather than only the editable rig. */
+  underwater?: boolean;
+  /** World position of the form's centre when it isn't the scene origin. */
+  origin?: THREE.Vector3;
+  /** Two-finger turning of the form; off when another scene hosts it. */
+  userSpin?: boolean;
+  /** For hosts that drive reveal, projection, or underwater amount per frame. */
+  materialRef?: React.MutableRefObject<THREE.ShaderMaterial | null>;
+  renderOrder?: number;
 }
 
-function BubbleModel({
+export function BubbleModel({
   form,
   autoRotate,
   morphProgress,
@@ -256,13 +328,21 @@ function BubbleModel({
   reflectivity,
   transparency,
   fog,
+  metalness = DEFAULT_BUBBLE_MATERIAL.metalness,
   photoTexture = null,
+  projectedPhotoTexture = null,
+  projectionStrength,
   photoFilter,
   photoFade,
   lightEditMode = false,
   lights,
   ambients,
   onBounds,
+  underwater = false,
+  origin,
+  userSpin = true,
+  materialRef,
+  renderOrder = 0,
 }: BubbleModelProps) {
   const { geometry, rest } = useArtifactGeometry(form);
   // Made once with the props of the first render; the effects below keep
@@ -283,6 +363,11 @@ function BubbleModel({
         uTransparency: { value: transparency },
         uFog: { value: fog },
         uFogColor: { value: new THREE.Color(BUBBLE_FOG_COLOR) },
+        uMetalness: { value: metalness },
+        uOrigin: { value: new THREE.Vector3() },
+        uReveal: { value: 1 },
+        ...createProjectedPhotoUniforms(projectedPhotoTexture),
+        ...createUnderwaterFormUniforms(underwater ? 1 : 0),
         ...lightUniforms,
       },
       transparent: true,
@@ -302,6 +387,19 @@ function BubbleModel({
     },
     [material, editMaterial],
   );
+  useLayoutEffect(() => {
+    if (!materialRef) return;
+    materialRef.current = material;
+    return () => {
+      materialRef.current = null;
+    };
+  }, [material, materialRef]);
+  useEffect(() => {
+    material.uniforms.uUnderwater.value = underwater ? 1 : 0;
+  }, [material, underwater]);
+  useEffect(() => {
+    (material.uniforms.uOrigin.value as THREE.Vector3).copy(origin ?? new THREE.Vector3());
+  }, [material, origin]);
   const { scene, mesh } = useMemo(() => {
     const mesh = new THREE.Mesh<THREE.BufferGeometry, THREE.Material>(geometry, material);
     mesh.castShadow = false;
@@ -310,9 +408,13 @@ function BubbleModel({
     scene.add(mesh);
     return { scene, mesh };
   }, [geometry, material]);
+  useLayoutEffect(() => {
+    mesh.renderOrder = renderOrder;
+  }, [mesh, renderOrder]);
 
   const groupRef = useRef<THREE.Group>(null!);
-  const clock = useRef(0);
+  // Starts from the page clock so a form handed between canvases keeps its drift.
+  const clock = useRef(underwaterTime());
   /** World units per mesh unit — the wave is sized in world units. */
   const worldPerLocalRef = useRef(1);
   const morphRef = useRef(morphProgress);
@@ -338,7 +440,7 @@ function BubbleModel({
 
   // Two-finger (trackpad scroll / touch) turns the model itself — yaw + limited pitch.
   useEffect(() => {
-    if (lightEditMode) return;
+    if (lightEditMode || !userSpin) return;
     const el = gl.domElement;
 
     const markSpinning = () => {
@@ -416,7 +518,7 @@ function BubbleModel({
       }
       userSpinningRef.current = false;
     };
-  }, [gl, lightEditMode]);
+  }, [gl, lightEditMode, userSpin]);
 
   useLayoutEffect(() => {
     const fit = fitArtifact(rest, fitTargetSize);
@@ -440,7 +542,14 @@ function BubbleModel({
     u.uReflectivity.value = reflectivity;
     u.uTransparency.value = transparency;
     u.uFog.value = fog;
-  }, [material, roughness, reflectivity, transparency, fog]);
+    u.uMetalness.value = metalness;
+  }, [material, roughness, reflectivity, transparency, fog, metalness]);
+
+  useEffect(() => {
+    material.uniforms.uProjectedPhoto.value = projectedPhotoTexture;
+    material.uniforms.uProjectionStrength.value =
+      projectedPhotoTexture ? projectionStrength : 0;
+  }, [material, projectedPhotoTexture, projectionStrength]);
 
   useEffect(() => {
     fillBubbleLightUniforms(
@@ -491,6 +600,8 @@ function BubbleModel({
         groupRef.current.rotation.y += delta * ROTATE_RATE;
       }
     }
+    // Page clock: the light through the photograph keeps its phase across canvases.
+    material.uniforms.uProjectionTime.value = underwaterTime();
 
     const t = clock.current;
     const formBlend = easeSoftMorph(Math.min(1, Math.max(0, morphRef.current)));
@@ -560,6 +671,86 @@ function BubbleModel({
   );
 }
 
+const WRAP_FILM_VERT = /* glsl */ `
+  uniform float uProgress;
+  uniform float uAspect;
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    float fall = smoothstep(0.0, .58, uProgress);
+    float wrap = smoothstep(.46, 1.0, uProgress);
+    float width = 2.75;
+    float height = width / max(.65, uAspect);
+    vec2 q = uv - .5;
+
+    // Still a flexible sheet while it descends from the surface.
+    float air = sin(q.x * 5.2 + uProgress * 5.0) * cos(q.y * 3.7 - uProgress * 3.0);
+    vec3 sheet = vec3(
+      q.x * width,
+      mix(3.35, 1.15, fall) + q.y * height * .82,
+      .28 + q.y * height * .56 + air * .18 * (1.0 - fall)
+    );
+
+    // The centre meets first; the outer film follows around the sphere.
+    float radial = length(q) / .7071;
+    float localWrap = smoothstep(.48 + radial * .18, 1.0, uProgress);
+    float theta = q.x * 2.55;
+    float phi = q.y * min(2.15, 2.55 / max(.7, uAspect));
+    float r = 1.29;
+    vec3 sphere = vec3(
+      sin(theta) * cos(phi),
+      sin(phi),
+      cos(theta) * cos(phi)
+    ) * r;
+    vec3 p = mix(sheet, sphere, localWrap);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+
+const WRAP_FILM_FRAG = /* glsl */ `
+  precision highp float;
+  uniform sampler2D uPhoto;
+  uniform float uProgress;
+  varying vec2 vUv;
+  void main() {
+    vec3 photo = texture2D(uPhoto, vUv).rgb;
+    photo = (photo - .5) * 1.28 + .5;
+    float rim = smoothstep(0.0, .045, min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y)));
+    float fade = 1.0 - smoothstep(.82, 1.0, uProgress);
+    gl_FragColor = vec4(clamp(photo, 0.0, 1.0), rim * fade * .9);
+  }
+`;
+
+function WrappingPhotoFilm({
+  texture,
+  progress,
+}: {
+  texture: THREE.Texture;
+  progress: number;
+}) {
+  const image = texture.image as { width?: number; height?: number } | undefined;
+  const aspect = image?.width && image?.height ? image.width / image.height : 1.5;
+  const uniforms = useMemo(() => ({
+    uPhoto: { value: texture },
+    uProgress: { value: progress },
+    uAspect: { value: aspect },
+  }), [texture, aspect]);
+  useEffect(() => {
+    uniforms.uProgress.value = progress;
+  }, [uniforms, progress]);
+  if (progress <= 0 || progress >= 1) return null;
+  return (
+    <group rotation-x={ARTIFACT_TILT}>
+      <mesh renderOrder={12} frustumCulled={false}>
+        <planeGeometry args={[1, 1, 40, 32]} />
+        <shaderMaterial transparent depthWrite={false} depthTest={false}
+          side={THREE.DoubleSide} vertexShader={WRAP_FILM_VERT}
+          fragmentShader={WRAP_FILM_FRAG} uniforms={uniforms} />
+      </mesh>
+    </group>
+  );
+}
+
 /* ───────── props ───────── */
 
 export interface BubbleViewerProps {
@@ -585,6 +776,8 @@ export interface BubbleViewerProps {
   transparency?: number;
   /** Distance mist toward the water midtone (0 = none). */
   fog?: number;
+  /** 0 = glass bubble; 1 = soft polished metal, still partly see-through. */
+  metalness?: number;
   /**
    * Water behind the bubble: light at the top, deep at the bottom. Defaults to
    * transparent so a full-page gradient can show through without a seam.
@@ -596,11 +789,19 @@ export interface BubbleViewerProps {
   photoFilter?: MemoryPhotoFilter;
   /** Explicit photo visibility. Undefined preserves the legacy morph-driven fade. */
   photoFade?: number;
+  /** Light refracted through the same photograph before it reaches the form. */
+  projectionStrength?: number;
+  /** 0 = on the surface, 1 = transferred to the form overlay. */
+  photoWrapProgress?: number;
   /**
    * 1 = current clear bubble (no frost). 0 = glass-default frost (canvasBlurPx 6).
    * Hidden while the light geometry editor is open.
    */
   vividness?: number;
+  /** Set the form in the underwater stage: beam, caustics, motes. */
+  underwater?: boolean;
+  /** sRGB hex the underwater stage leans toward (the chosen feeling). */
+  underwaterTint?: string | null;
   /** KeyShot-style geometry view: gray mesh + light helpers. */
   lightEditMode?: boolean;
   lights?: EditableLight[];
@@ -623,7 +824,36 @@ export const DEFAULT_BUBBLE_MATERIAL = {
   reflectivity: 0.2,
   transparency: 0.9,
   fog: 0,
+  metalness: 0.35,
 };
+
+// Slightly darker than the water behind it, so the body reads as glass
+// rather than as milk on a light background. Same cool-neutral family as
+// the home field (#ededee / #9b9ba3).
+export const DEFAULT_BUBBLE_TINT = {
+  coreColor: "#8a8c94",
+  rimColor: "#3a3c44",
+  interiorColor: "#e8e9ee",
+};
+
+export const BUBBLE_CAMERA_FOV = 45;
+
+function cameraFitForRadius(radius: number, constrainedViewport: boolean) {
+  const r = Math.max(0.001, radius);
+  const fovRad = (BUBBLE_CAMERA_FOV * Math.PI) / 180;
+  const margin = constrainedViewport ? 1.35 : 1.25;
+  const z = (r / Math.sin(fovRad / 2)) * margin;
+  return { z, near: Math.max(0.01, z - r * 2.5), far: z + r * 6 };
+}
+
+export const bubbleFitTargetSize = (constrainedViewport = false) =>
+  constrainedViewport ? 2.2 : 2.5;
+
+/** Where BubbleViewer's camera settles for a form — known before the first frame. */
+export function bubbleCameraFit(form: ArtifactForm, constrainedViewport = false) {
+  const fit = fitArtifact(getArtifactMesh(form), bubbleFitTargetSize(constrainedViewport));
+  return cameraFitForRadius(fit.sphere.radius, constrainedViewport);
+}
 
 /* ───────── main ───────── */
 
@@ -635,22 +865,24 @@ export function BubbleViewer({
   morphProgress = 1,
   ready: readyProp,
   constrainedViewport = false,
-  // Slightly darker than the water behind it, so the body reads as glass
-  // rather than as milk on a light background. Same cool-neutral family as
-  // the home field (#ededee / #9b9ba3).
-  coreColor = "#8a8c94",
-  rimColor = "#3a3c44",
-  interiorColor = "#e8e9ee",
+  coreColor = DEFAULT_BUBBLE_TINT.coreColor,
+  rimColor = DEFAULT_BUBBLE_TINT.rimColor,
+  interiorColor = DEFAULT_BUBBLE_TINT.interiorColor,
   transmit = 0,
   roughness = DEFAULT_BUBBLE_MATERIAL.roughness,
   reflectivity = DEFAULT_BUBBLE_MATERIAL.reflectivity,
   transparency = DEFAULT_BUBBLE_MATERIAL.transparency,
   fog = DEFAULT_BUBBLE_MATERIAL.fog,
+  metalness = DEFAULT_BUBBLE_MATERIAL.metalness,
   backgroundGradient = "transparent",
   memoryPhotoUrl,
   photoFilter = MEMORY_PHOTO_FILTER_DEFAULTS,
   photoFade,
+  projectionStrength = 0,
+  photoWrapProgress = 0,
   vividness = 1,
+  underwater = false,
+  underwaterTint = null,
   lightEditMode = false,
   lights = DEFAULT_BUBBLE_LIGHTS,
   onLightsChange,
@@ -659,9 +891,7 @@ export function BubbleViewer({
   onSelectLight,
   transformMode = "translate",
 }: BubbleViewerProps) {
-  const fitTargetSize = constrainedViewport ? 2.2 : 2.5;
-  const cameraFov = 45;
-  const cameraZ = constrainedViewport ? 4.2 : 4.8;
+  const fitTargetSize = bubbleFitTargetSize(constrainedViewport);
 
   const ready = readyProp !== undefined ? readyProp : true;
   const controlsRef = useRef<any>(null);
@@ -684,16 +914,19 @@ export function BubbleViewer({
   useEffect(() => {
     setFitCam(null);
   }, [formId]);
+  // The first frame already stands where the fit will put it, so a form
+  // handed over from another canvas doesn't change size on arrival.
+  const firstCam = useMemo(
+    () => bubbleCameraFit(form, constrainedViewport),
+    [formId, constrainedViewport], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   function handleBounds(_box: THREE.Box3, sphere: THREE.Sphere) {
-    const r = Math.max(0.001, sphere.radius);
-    const fovRad = (cameraFov * Math.PI) / 180;
-    const margin = constrainedViewport ? 1.35 : 1.25;
-    const z = (r / Math.sin(fovRad / 2)) * margin;
+    const next = cameraFitForRadius(sphere.radius, constrainedViewport);
     setFitCam((prev) => {
       // Keep an already-settled camera when only the wrap photo changes.
       if (prev) return prev;
-      return { z, near: Math.max(0.01, z - r * 2.5), far: z + r * 6 };
+      return next;
     });
   }
 
@@ -718,12 +951,16 @@ export function BubbleViewer({
     reflectivity,
     transparency,
     fog,
+    metalness,
     photoFilter,
     photoFade,
+    projectedPhotoTexture: photoTexture,
+    projectionStrength,
     lightEditMode,
     lights,
     ambients,
     onBounds: handleBounds,
+    underwater: underwater && !lightEditMode,
   };
 
   if (!ready) return <div className={className} style={containerStyle} />;
@@ -732,10 +969,10 @@ export function BubbleViewer({
     <div className={className} style={containerStyle}>
       <Canvas
         camera={{
-          position: [0, 0, fitCam?.z ?? cameraZ],
-          fov: cameraFov,
-          near: fitCam?.near ?? 0.1,
-          far: fitCam?.far ?? 100,
+          position: [0, 0, (fitCam ?? firstCam).z],
+          fov: BUBBLE_CAMERA_FOV,
+          near: (fitCam ?? firstCam).near,
+          far: (fitCam ?? firstCam).far,
         }}
         style={{
           background: lightEditMode ? "#c8c8c8" : "transparent",
@@ -750,6 +987,7 @@ export function BubbleViewer({
         }}
       >
         <FitCamera fitCam={fitCam} controlsRef={controlsRef} />
+        {underwater && !lightEditMode && <UnderwaterBackdrop tint={underwaterTint} />}
         {lightEditMode && (
           <LightRig
             lights={lights}
@@ -779,6 +1017,9 @@ export function BubbleViewer({
             {...modelShared}
             photoTexture={photoTexture}
           />
+          {photoTexture && (
+            <WrappingPhotoFilm texture={photoTexture} progress={photoWrapProgress} />
+          )}
         </Suspense>
         <OrbitControls
           ref={controlsRef}

@@ -41,8 +41,10 @@ export function ShapeColorPage() {
     asFiniteNumber(location.state?.morphProgress) ??
     asFiniteNumber(draft?.morphProgress) ??
     1;
-  const bubbleMaterial =
-    location.state?.bubbleMaterial ?? draft?.bubbleMaterial ?? DEFAULT_BUBBLE_MATERIAL;
+  const bubbleMaterial = {
+    ...DEFAULT_BUBBLE_MATERIAL,
+    ...(location.state?.bubbleMaterial ?? draft?.bubbleMaterial),
+  };
   const lights = location.state?.lights ?? draft?.lights ?? DEFAULT_BUBBLE_LIGHTS;
   const ambients = location.state?.ambients ?? draft?.ambients ?? DEFAULT_BUBBLE_AMBIENTS;
 
@@ -180,6 +182,7 @@ export function ShapeColorPage() {
           reflectivity={bubbleMaterial.reflectivity}
           transparency={bubbleMaterial.transparency}
           fog={bubbleMaterial.fog}
+          metalness={bubbleMaterial.metalness}
           lights={lights}
           ambients={ambients}
           memoryPhotoUrl={morphProgress < 0.98 ? memoryPhotoUrl : undefined}

@@ -1,10 +1,16 @@
-import { Component, useEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { CHROME_GRAY } from "../lib/colors";
 import { POND_THOUGHTS, type PondPromptCue } from "../lib/pondPrompts";
 import { POND_TRAIL_SLOTS, POND_TRAIL_LIFETIME, samplePondTrail, type TrailPoint, type TrailAnchor } from "../lib/pondTrail";
 import { POND_DROP_SLOTS } from "../lib/voicePeaks";
+import type { AmbientFill, EditableLight } from "../lib/sceneLights";
+import type { ArtifactForm } from "../lib/superformula";
+import { BUBBLE_CAMERA_FOV, BubbleModel, DEFAULT_BUBBLE_TINT, bubbleCameraFit, bubbleFitTargetSize } from "./BubbleViewer";
+import { MEMORY_PHOTO_FILTER_DEFAULTS, configureMemoryPhotoTexture } from "./MemoryPhotoLayer";
+import { PondPhotoPaper, type PondPaper } from "./PondPhotoPaper";
+import { UnderwaterBackdrop } from "./UnderwaterBackdrop";
 
 export interface PondTouch { x: number; y: number; serial: number; strength?: number }
 
@@ -150,6 +156,8 @@ const fragmentShader = /* glsl */ `
     float h = waterHeight(p);
     vec3 n = normalize(vec3((h - waterHeight(p + vec2(.035,0))) / .035, 1.0,
       (h - waterHeight(p + vec2(0,.035))) / .035));
+    float underwater = 1.0 - smoothstep(-.18, .18, cameraPosition.y);
+    n = mix(n, -n, underwater);
     vec3 eye = normalize(cameraPosition - vWorld);
     vec3 reflection = reflect(-eye, n);
     float fresnel = pow(1.0 - max(0.0, dot(n, eye)), 3.0);
@@ -175,12 +183,25 @@ const fragmentShader = /* glsl */ `
     // local normals and displaced coordinates, never a global exposure pulse.
     float surfaceTone = (ribbons - .5) * .022 + fibers * .006;
     color += vec3(surfaceTone);
+    // From below the same surface becomes the silver ceiling of the stage the
+    // form waits in. The change happens only while the camera crosses it, so
+    // there is a clear waterline without a flash or a hard cut.
+    vec3 ceiling = vec3(dot(color, vec3(.3333))) * vec3(.96, .975, 1.0) + .07;
+    color = mix(color, ceiling, underwater * .74);
+    // Outside the bright window overhead, the underside mirrors the water body,
+    // so the stage behind it (beam, caustics) reads through.
+    float overhead = smoothstep(.42, .78, abs(eye.y));
+    float mirrored = underwater * (1.0 - overhead);
+    color = mix(color, vec3(.70, .715, .745), mirrored * .92);
     float haze = 1.0 - exp(-max(0.0, -p.y - 8.0) * .028);
-    color = mix(color, sky, haze);
+    color = mix(color, sky, haze * (1.0 - underwater));
     // Screen-space paper grain stays fine at the horizon as well as nearby.
     color += (hash(gl_FragCoord.xy) - .5) * .017;
-    // Dissolve into the horizon long before any finite geometry edge.
-    gl_FragColor = vec4(color, 1.0 - smoothstep(140.0, 400.0, -p.y));
+    // Dissolve into the horizon long before any finite geometry edge. Under
+    // water the view is short: the far surface is lost in the silver body.
+    float sightline = length(cameraPosition - vWorld);
+    float lost = max(underwater * smoothstep(2.0, 14.0, sightline), mirrored * .88);
+    gl_FragColor = vec4(color, (1.0 - smoothstep(140.0, 400.0, -p.y)) * (1.0 - lost));
   }
 `;
 
@@ -189,6 +210,9 @@ const RING_OUTER = .607;
 const onPond = (p: THREE.Vector3) => p.z > -100 && p.z < 18;
 const RING_FADE_IN = .72;
 const RING_FADE_FULL = .94;
+const SUBMERGE_SECONDS = 5.2;
+const POND_FOV = 48;
+const UNDERWATER_CENTER = new THREE.Vector3(0, -4, -4);
 const smoothunit = (edge0: number, edge1: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
@@ -256,6 +280,60 @@ const ringFragment = /* glsl */ `
   }
 `;
 
+/** What the shape page will open with, so the descent can end on its first frame. */
+export interface UnderwaterHandoff {
+  form: ArtifactForm;
+  lights: EditableLight[];
+  ambients: AmbientFill[];
+  material: {
+    roughness: number;
+    reflectivity: number;
+    transparency: number;
+    fog: number;
+    metalness?: number;
+  };
+}
+
+/**
+ * The shape page's own BubbleModel, standing in the water below the pond
+ * with the same lights, fit, and photo light, still a sphere.
+ */
+function HandoffForm({ handoff, photoUrl, progressRef }: {
+  handoff: UnderwaterHandoff;
+  photoUrl?: string;
+  progressRef: RefObject<number>;
+}) {
+  const materialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+  useEffect(() => {
+    if (!photoUrl) return;
+    let live = true;
+    let loaded: THREE.Texture | null = null;
+    new THREE.TextureLoader().load(photoUrl, (next) => {
+      loaded = next;
+      if (!live) { next.dispose(); return; }
+      configureMemoryPhotoTexture(next);
+      setTexture(next);
+    });
+    return () => { live = false; loaded?.dispose(); setTexture(null); };
+  }, [photoUrl]);
+  useFrame(() => {
+    const u = materialRef.current?.uniforms;
+    if (!u) return;
+    const p = progressRef.current ?? 0;
+    u.uReveal.value = smoothunit(.42, .76, p);
+    u.uUnderwater.value = smoothunit(.4, .9, p);
+    u.uProjectionStrength.value = texture ? smoothunit(.5, .82, p) * .82 : 0;
+  });
+  return <group position={UNDERWATER_CENTER}>
+    <BubbleModel form={handoff.form} autoRotate={!photoUrl} morphProgress={0}
+      fitTargetSize={bubbleFitTargetSize()} {...DEFAULT_BUBBLE_TINT} transmit={0}
+      {...handoff.material} projectedPhotoTexture={texture} projectionStrength={0}
+      photoFilter={MEMORY_PHOTO_FILTER_DEFAULTS} lights={handoff.lights} ambients={handoff.ambients}
+      underwater origin={UNDERWATER_CENTER} userSpin={false} materialRef={materialRef} renderOrder={6} />
+  </group>;
+}
+
 interface PondProps {
   arrival: number;
   reducedMotion: boolean;
@@ -270,11 +348,32 @@ interface PondProps {
   /** Prompt ripples and the cursor ring wait until the invitation has settled. */
   lifeReady?: boolean;
   promptRipples?: boolean;
+  /** A picture let down onto the water; it lands with a ripple of its own. */
+  paper?: PondPaper | null;
+  onPaperLanded?: () => void;
+  /** Move this same camera through the surface toward the waiting sphere. */
+  submerge?: boolean;
+  /** The form and lights waiting below; required for the descent to show them. */
+  handoff?: UnderwaterHandoff | null;
+  onSubmergeComplete?: () => void;
 }
 
-function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true, promptRipples = true }: PondProps) {
+function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hintRevealRef, promptRefs, cueRef, onReady, lifeReady = true, promptRipples = true, paper = null, onPaperLanded, submerge = false, handoff = null, onSubmergeComplete }: PondProps) {
   const { camera, size, gl } = useThree();
   const time = useRef(0);
+  const submergeStarted = useRef<number | null>(null);
+  const submergeProgress = useRef(0);
+  const submergeFinished = useRef(false);
+  // Behind the water: the volume below the surface, shown once the camera is under it.
+  const depthReveal = useRef(0);
+  // Over the water and the floating print: the surface dissolving into the stage.
+  const stageReveal = useRef(0);
+  const underwaterCamera = useMemo(() => {
+    const z = handoff ? bubbleCameraFit(handoff.form).z : 4.8;
+    return UNDERWATER_CENTER.clone().add(new THREE.Vector3(0, 0, z));
+  }, [handoff]);
+  const completionRef = useRef(onSubmergeComplete);
+  completionRef.current = onSubmergeComplete;
   const ready = useRef(false);
   const touchIndex = useRef(0);
   const trailIndex = useRef(0);
@@ -315,13 +414,55 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
     return () => gl.domElement.removeEventListener("webglcontextlost", lost);
   }, [gl, onReady]);
 
+  // The sheet touching down is a touch like any other, in world coordinates.
+  const splash = useCallback((x: number, z: number, strength: number) => {
+    uniforms.uDrops.value[1 + (touchIndex.current++ % (POND_DROP_SLOTS - 1))].set(x, z, time.current, strength);
+  }, [uniforms]);
+
+  useEffect(() => {
+    if (submerge) {
+      submergeStarted.current = null;
+      submergeFinished.current = false;
+    } else {
+      submergeProgress.current = 0;
+      submergeStarted.current = null;
+    }
+  }, [submerge]);
+
   useFrame((_, delta) => {
     if (!document.hidden && !reducedMotion) time.current += Math.min(delta, .05);
     uniforms.uTime.value = time.current;
     // This is a perspective camera, never a CSS-flattened overhead texture.
     const cameraArrival = reducedMotion ? 1 : arrival;
-    camera.position.set(0, 2.95 - cameraArrival * .15, 10 + (1 - cameraArrival) * .4);
-    camera.lookAt(0, .05, -24);
+    const lens = camera as THREE.PerspectiveCamera;
+    if (submerge) {
+      if (submergeStarted.current === null) submergeStarted.current = time.current;
+      const raw = reducedMotion
+        ? 1
+        : Math.min(1, (time.current - submergeStarted.current) / SUBMERGE_SECONDS);
+      const p = smoothunit(0, 1, raw);
+      submergeProgress.current = p;
+      const startCamera = new THREE.Vector3(0, 2.95 - cameraArrival * .15, 10 + (1 - cameraArrival) * .4);
+      const startTarget = new THREE.Vector3(0, .05, -24);
+      camera.position.lerpVectors(startCamera, underwaterCamera, p);
+      const target = startTarget.lerp(UNDERWATER_CENTER, smoothunit(.05, .92, p));
+      camera.lookAt(target);
+      // Arrive on the shape page's lens, not just its position.
+      lens.fov = POND_FOV + (BUBBLE_CAMERA_FOV - POND_FOV) * smoothunit(.3, 1, p);
+      lens.updateProjectionMatrix();
+      depthReveal.current = 1 - smoothunit(-.06, .24, camera.position.y);
+      stageReveal.current = smoothunit(.5, .92, p);
+      if (raw >= 1 && !submergeFinished.current) {
+        submergeFinished.current = true;
+        queueMicrotask(() => completionRef.current?.());
+      }
+    } else {
+      if (lens.fov !== POND_FOV) { lens.fov = POND_FOV; lens.updateProjectionMatrix(); }
+      depthReveal.current = 0;
+      stageReveal.current = 0;
+      camera.position.set(0, 2.95 - cameraArrival * .15, 10 + (1 - cameraArrival) * .4);
+      camera.lookAt(0, .05, -24);
+    }
     camera.updateMatrixWorld();
     if (!ready.current) { ready.current = true; onReady(); }
     const cue = cueRef.current;
@@ -417,13 +558,20 @@ function Water({ arrival, reducedMotion, touch, cursorRef, holdRef, hintRef, hin
   return <>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -900]}>
       <planeGeometry args={[2000, 2000]} />
-      <shaderMaterial transparent vertexShader={vertexShader} fragmentShader={fragmentShader} uniforms={uniforms} />
+      <shaderMaterial transparent side={THREE.DoubleSide}
+        vertexShader={vertexShader} fragmentShader={fragmentShader} uniforms={uniforms} />
     </mesh>
     <mesh ref={ring} visible={false} renderOrder={3} frustumCulled={false}>
       <ringGeometry args={[RING_INNER - .012, RING_OUTER + .012, 192, 8]} />
       <shaderMaterial transparent depthTest={false} depthWrite={false} side={THREE.DoubleSide}
         vertexShader={ringVertex} fragmentShader={ringFragment} uniforms={ringUniforms} />
     </mesh>
+    <PondPhotoPaper paper={paper} timeRef={time} reducedMotion={reducedMotion} onSplash={splash} onLanded={onPaperLanded} />
+    {submerge && <>
+      <UnderwaterBackdrop revealRef={depthReveal} renderOrder={-10} />
+      <UnderwaterBackdrop revealRef={stageReveal} renderOrder={4} />
+      {handoff && <HandoffForm handoff={handoff} photoUrl={paper?.url} progressRef={submergeProgress} />}
+    </>}
   </>;
 }
 
