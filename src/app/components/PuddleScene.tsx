@@ -457,13 +457,15 @@ export function PuddleScene({
      into a different order with differently seeded forms. Each one keeps the
      drop anchor its memory holds on the surface, which is what the water
      ripples to as the rim swings. */
+  // keyed on the override's items, not the override: a preview moving its seats re-provides every frame
+  const overrideItems = override?.items;
   const galleryItems = useMemo<DiveGalleryItem[]>(() => {
     const anchorById = new Map(events.map((e, i) => [e.id, anchors[i]]));
-    return (override?.items ?? buildArchive(liveSaved)).map((artifact) => {
+    return (overrideItems ?? buildArchive(liveSaved)).map((artifact) => {
       const anchor = anchorById.get(artifact.id);
       return { ...artifact, anchor: { x: anchor?.x ?? 0.5, y: anchor?.y ?? 0.5 } };
     });
-  }, [events, anchors, liveSaved, override]);
+  }, [events, anchors, liveSaved, overrideItems]);
 
   /** Dedicated carousel route, or a rim handed over: the scene begins at depth
       so the puddle field never flashes underneath. */

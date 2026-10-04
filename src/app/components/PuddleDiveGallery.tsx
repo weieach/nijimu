@@ -1,7 +1,7 @@
 import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router";
 import { SceneViewer } from "./SceneViewer";
-import { GalleryOverrideContext } from "../lib/galleryOverride";
+import { GalleryOverrideContext, type SeatPlace } from "../lib/galleryOverride";
 import { warmArtifactMeshes } from "../hooks/useArtifactGeometry";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
@@ -201,6 +201,12 @@ export function PuddleDiveGallery({
 }) {
   // a preview may seat something other than the crystal; the live routes provide nothing
   const override = useContext(GalleryOverrideContext);
+  /* The preview's field: while the seats are asked for there, or still on their
+     way between, every memory is mounted, the rim does not step, and the chrome
+     that belongs to the years (the caption, the ruler, the arrows) stands aside. */
+  const field = override?.field;
+  const inField = !!field && (field.on || field.progress > 0);
+  const yearsChrome = !field || (!field.on && field.progress < 0.35);
   const hasOlder = activeIdx > 0;
   const hasNewer = activeIdx < items.length - 1;
   const viewport = useViewport();
@@ -263,7 +269,14 @@ export function PuddleDiveGallery({
 
   const focusIdx = Math.round(rimAt);
   const item = items[focusIdx] ?? items[activeIdx];
-  const captionItem = items[activeIdx] ?? item;
+  // in the field the words belong to the memory under the pointer, if any
+  const captionItem: DiveGalleryItem | null = field?.on
+    ? items.find((it) => it.id === field.hovered) ?? null
+    : items[activeIdx] ?? item;
+  // the last words stay in the block while it fades, so they go out as words and not as a cut
+  const lastCaptionRef = useRef(captionItem);
+  if (captionItem) lastCaptionRef.current = captionItem;
+  const shownCaption = captionItem ?? lastCaptionRef.current;
   const rimSettled = Math.abs(rimAt - activeIdx) < 0.04;
   const rimSettledRef = useRef(rimSettled);
   rimSettledRef.current = rimSettled;
@@ -302,13 +315,14 @@ export function PuddleDiveGallery({
       if (phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "Escape") { onExit(); return; }
+      if (inField) return;
       if (e.key === "ArrowLeft") { if (hasOlder) onNavigate(-1); }
       else if (e.key === "ArrowRight") hasNewer ? onNavigate(1) : onOverscrollExit?.();
-      else if (e.key === "Escape") onExit();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
+  }, [phase, growth, pondDeparture, inField, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
 
   /* A sideways gesture over the carousel is for the artifacts, never for the
      browser's swipe-to-go-back — which unwound the entry and dropped the
@@ -336,7 +350,7 @@ export function PuddleDiveGallery({
     let lockedUntil = 0;
     const leave = onOverscrollExit ?? onExit;
     const handler = (e: WheelEvent) => {
-      if (phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
+      if (phase !== "gallery" || growth < 1 || pondDeparture > 0 || inField) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
@@ -358,12 +372,12 @@ export function PuddleDiveGallery({
     };
     window.addEventListener("wheel", handler, { passive: false });
     return () => window.removeEventListener("wheel", handler);
-  }, [showArrows, phase, growth, pondDeparture, reducedMotion, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
+  }, [showArrows, phase, growth, pondDeparture, inField, reducedMotion, hasOlder, hasNewer, onNavigate, onExit, onOverscrollExit]);
 
   // Touch has the same boundary behavior as a wheel, without interpreting a
   // tap (or an OrbitControls drag on the focused artifact) as overscroll.
   useEffect(() => {
-    if (!showArrows || phase !== "gallery" || growth < 1 || pondDeparture > 0) return;
+    if (!showArrows || phase !== "gallery" || growth < 1 || pondDeparture > 0 || inField) return;
     let start: { x: number; y: number } | null = null;
     const down = (e: TouchEvent) => {
       const target = e.target as HTMLElement;
@@ -392,7 +406,7 @@ export function PuddleDiveGallery({
       window.removeEventListener("touchend", end);
       window.removeEventListener("touchcancel", cancel);
     };
-  }, [showArrows, phase, growth, pondDeparture, hasOlder, hasNewer, onNavigate, onOverscrollExit, onExit]);
+  }, [showArrows, phase, growth, pondDeparture, inField, hasOlder, hasNewer, onNavigate, onOverscrollExit, onExit]);
 
   /* build the forms just off the end of the rim while the page is idle, so
      the memory that swings in on an arrow press never spends its first frame
@@ -562,6 +576,8 @@ export function PuddleDiveGallery({
         { dur: Math.round(resolveMs), scale: "42;14;0" };
 
   const chromeVisible = phase === "gallery" && growth >= 1 && pondDeparture === 0;
+  /** The chrome of the years — caption, ruler, arrows — which the field stands down. */
+  const yearsVisible = chromeVisible && yearsChrome;
   const palette = COLOR_PALETTE[item.colorIndex % COLOR_PALETTE.length];
   const travelMs = reducedMotion ? 0 : ARC_TRAVEL_MS;
   const travelEase = "cubic-bezier(0.33, 0.02, 0.2, 1)";
@@ -580,8 +596,10 @@ export function PuddleDiveGallery({
     if (phase === "diving" && Math.abs(offset) > 0.01) continue;
     if (!neighborsMounted && Math.abs(offset) > 0.01) continue;
     /* Bounds include an invisible distant seat and an offscreen foreground
-       seat: scrolling never unmounts a visible model, even after settling. */
-    if (!carouselContainsOffset(offset)) continue;
+       seat: scrolling never unmounts a visible model, even after settling.
+       A preview with a field keeps every memory mounted — a canvas made or
+       lost at the switch is a long frame — and hides the ones off the curve. */
+    if (!field && !carouselContainsOffset(offset)) continue;
     const slotItem = items[i];
     if (slotItem) slots.push({ offset, item: slotItem });
   }
@@ -624,10 +642,10 @@ export function PuddleDiveGallery({
     padding: 16,
     cursor: "pointer",
     color: "#4a4a4a",
-    opacity: chromeVisible ? 0.35 : 0,
+    opacity: yearsVisible ? 0.35 : 0,
     transition: "opacity 0.6s ease",
     animation: carriedChrome,
-    pointerEvents: chromeVisible ? "auto" : "none",
+    pointerEvents: yearsVisible ? "auto" : "none",
   });
 
   return (
@@ -733,9 +751,10 @@ export function PuddleDiveGallery({
         data-pond-tilt={pondRimPose(pondDeparture, !!reducedMotion).tilt * 180 / Math.PI}
         style={{ opacity: 1, isolation: "isolate" }}>
         {slots.map(({ offset, item: slotItem }) => {
-          const focused = Math.abs(offset) < 0.5;
+          // in the field no seat is the apex: nothing turns in hand, every memory is a thing to pick
+          const focused = Math.abs(offset) < 0.5 && !field?.on;
           const curveDepth = carouselSeat(viewport.w, viewport.h, offset);
-          const depth = override?.adjustSeat ? override.adjustSeat(curveDepth, offset, viewport) : curveDepth;
+          const depth: SeatPlace = override?.adjustSeat ? override.adjustSeat(curveDepth, offset, viewport, slotItem) : curveDepth;
           const seat = pondRimSeat(depth.x, depth.y, geo.cx, geo.apexY, viewport.h, pondDeparture, !!reducedMotion);
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
@@ -761,18 +780,28 @@ export function PuddleDiveGallery({
               data-carousel-offset={offset}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!focused && chromeVisible) onNavigate(Math.round(offset));
+                if (!chromeVisible) return;
+                if (field?.on) {
+                  // a press and release, not the end of a drag across the field
+                  const down = backdropDownRef.current;
+                  if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+                  field.onPick(slotItem);
+                  return;
+                }
+                if (!focused) onNavigate(Math.round(offset));
               }}
+              onPointerEnter={field?.on ? () => field.onHover(slotItem.id) : undefined}
+              onPointerLeave={field?.on ? () => field.onHover(null) : undefined}
               style={{
                 position: "absolute",
                 left: 0,
                 top: 0,
                 width: geo.size,
                 height: geo.size,
-                transform: `translate(-50%, -50%) translate(${seat.x.toFixed(2)}px, ${seat.y.toFixed(2)}px) scale(${depth.scale * seat.scale})`,
-                zIndex: 100000 + Math.round(offset * 100 + seat.z),
+                transform: `translate(-50%, -50%) translate(${seat.x.toFixed(2)}px, ${seat.y.toFixed(2)}px) scale(${depth.scale * seat.scale})${depth.rotate ? ` rotate(${depth.rotate.toFixed(2)}deg)` : ""}`,
+                zIndex: 100000 + Math.round((depth.order ?? offset * 100) + seat.z),
                 cursor: focused ? "default" : "pointer",
-                pointerEvents: chromeVisible ? "auto" : "none",
+                pointerEvents: chromeVisible && depth.opacity > 0.02 ? "auto" : "none",
               }}
             >
               {/* the arrival / departure, on its own layer so the depth
@@ -832,6 +861,7 @@ export function PuddleDiveGallery({
                     focused,
                     still: !focused && rimSettled,
                     frameloop: focused || !rimSettled || pondDeparture > 0 ? "always" : "demand",
+                    haze: depth.haze,
                   }) : <SceneViewer
                     measureUnscaled
                     form={slotItem.shape.form}
@@ -889,7 +919,7 @@ export function PuddleDiveGallery({
           items={items}
           activeIdx={rimAt}
           viewport={viewport}
-          visible={chromeVisible}
+          visible={yearsVisible}
           travelMs={0}
           travelEase={travelEase}
           enterAnimation={carriedChrome}
@@ -903,26 +933,27 @@ export function PuddleDiveGallery({
           top: (CAPTION_TOP_VH + CAPTION_DOWN_VH) * viewport.h,
           padding: "0 clamp(24px, 6vw, 80px)",
           fontFamily: SERIF,
-          opacity: chromeVisible ? 1 : 0,
-          transition: "opacity 0.8s ease",
+          // in the field the words come only while a memory is under the pointer
+          opacity: chromeVisible && (field?.on ? !!captionItem : yearsChrome) ? 1 : 0,
+          transition: field?.on ? "opacity 0.45s ease" : "opacity 0.8s ease",
           zIndex: 30,
           pointerEvents: caption ? "auto" : "none",
         }}
       >
-        <div
-          key={captionItem.id}
+        {shownCaption && <div
+          key={shownCaption.id}
           style={{
             /* the opening fade waits for the memory; once the rim is in
                motion the words stay put and simply change with the step */
             animation:
-              caption || reducedMotion || rimReady || carriedIds.has(captionItem.id)
+              caption || reducedMotion || rimReady || carriedIds.has(shownCaption.id)
                 ? undefined
                 : `diveCaptionIn ${travelMs}ms ease`,
             pointerEvents: caption ? "auto" : "none",
           }}
         >
-          {caption ?? <StaticCaption title={captionItem.event} year={captionItem.year} />}
-        </div>
+          {caption ?? <StaticCaption title={shownCaption.event} year={shownCaption.year} />}
+        </div>}
       </div>
 
       {/* ═══ ARROWS ═══ */}
@@ -982,9 +1013,16 @@ export function PuddleDiveGallery({
         view="carousel"
         icon={toggleIcon}
         onToggle={toggleIcon === "plus" ? openPondFromPlus : (onToggleGrid ?? (() => {}))}
-        visible={!hideHeader && chromeVisible && (toggleIcon === "plus" ? !!onOverscrollExit : !!onToggleGrid)}
+        visible={!hideHeader && yearsVisible && (toggleIcon === "plus" ? !!onOverscrollExit : !!onToggleGrid)}
         enterAnimation={carriedChrome}
       />
+
+      {/* the preview's own chrome, arriving and leaving with the gallery's */}
+      {override?.chrome && !hideHeader && (
+        <div style={{ opacity: chromeVisible ? 1 : 0, transition: "opacity 0.8s ease", pointerEvents: chromeVisible ? "auto" : "none" }}>
+          {override.chrome}
+        </div>
+      )}
 
       <style>{`
         /* The slots are scaled with a CSS transform, and r3f sizes its canvas

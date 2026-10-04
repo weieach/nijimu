@@ -477,6 +477,68 @@ right three, the Cursor browser could not confirm motion by canvas
 read-back (frames read identical while rAF ran at 52/s; `Page.captureScreenshot`
 could).
 
+**The field (2026-10-04, evening) — a second view of the vessel gallery.**
+The user asked for another view of `/lab/gallery` with the same ten vessels
+as its matter, not ordered by time but hung in space with near and far —
+stars in a galaxy, the far ones hazed — and a transition between the two
+views that is light, smooth and cinematic, with arcs. It is built by
+extension of `GalleryOverride`, so the live gallery is unchanged when no
+override is present. `galleryOverride.ts`: `adjustSeat` takes the item and
+returns a `SeatPlace` (a `SeatDepth` plus `haze`, `rotate`, `order`);
+`ArtifactSeat` carries `haze`; `field` (`GalleryField`: `on`, `progress`,
+`hovered`, `onHover`, `onPick`) and `chrome` (a node drawn with the
+gallery's chrome) are new. `PuddleDiveGallery` reads them: with a field
+present every memory stays mounted (a canvas made or lost at the switch was
+a long frame — `loseContext` took 4 s in a profile — and the ones off the
+curve are hidden by the preview instead); the transform takes `rotate` and
+the z-order `order`; while `field.on` no seat is the apex, a press and
+release on a seat is `field.onPick`, the pointer over one `field.onHover`,
+and the caption shows the hovered memory's words (the last words stay in the
+block while it fades); the wheel, touch and arrow keys do not step the rim
+while in or between the views; the caption, ruler, arrows and plus stand down
+when `field.on` or `progress` ≥ .35 and return in the last third of the way
+back. `PuddleScene` and `MemoryCarouselPage` key their item memos on
+`override.items`, not the override, since the preview re-provides every
+frame. `src/app/lab/vesselField.ts` is the layout and the flight, pure:
+`FIELD_PLACES` (ten hand-set places — screen fraction at the eye's rest and
+depth; the near ones frame the view, the far ones gather toward the middle
+and stay in frame when leaning in; the band under the centre where the
+caption falls is left to small far things) taken in `FIELD_ORDER`;
+`fieldSeat` (a pinhole projection, `FIELD_FOCAL` 1.15 deep is the apex's
+size; haze from depth `(d − 1.4)/1.9`, so the vessel's own distance step
+does the fogging — the mist, the softened photo, the loosened edges — with a
+little CSS blur over it, fading with haze; what comes within .55 of the eye
+softens and goes, its size capped so the hidden canvas stays small);
+`surfacingSeat` (the same place `SURFACE_FROM` deeper, unseen — where a
+memory with no seat on the curve begins); `easeFlight` (smoothstep eased out
+again: lifts at once, long settle); `blendSeat` (a quadratic arc bowed
+upward or outward by a fifth of the way plus a little, varied per seat; size
+in log space with a 7% swell at the middle; a 4° sway with the direction of
+travel; haze late in and early out as `share^1.4`). `VesselGalleryPreview`
+keeps the clock: `FieldDriver` — each seat's share 0…1 with its own delay
+(leaving, the outer rings first and the one in hand last, `STAGGER_MS` 55
+per ring; coming home, the picked one first), `FLIGHT_MS` 1500, the whole's
+progress, the camera (`DOLLY_IN` −.35 → 0 as the field forms, the eye
+coming forward into it; parallax from the pointer `PARALLAX_X/Y`; the wheel
+dollies `DOLLY_MIN` −.5 … `DOLLY_MAX` 1 at `DOLLY_PER_PX`), the hover lerp
+(a hovered seat 5% nearer and 40% clearer). One rAF loop runs while anything
+moves and bumps `frame`, which re-provides the override; the vessel's tune
+with the seat's haze folded in is cached per hundredth (`tuneFor`) and the
+seat is `memo(VesselArtifact)` with stable pick handlers, so a seat whose
+distance has not changed is left alone; while the driver is busy every seat's
+`frameloop` is `always`. `FieldToggle` (fixed, right 156, beside the plus)
+switches; `?speed=0.2` slows the flight. Seen in the Cursor browser: the
+curve lifts into the field and gathers back with no errors, the pick on a
+far sphere made it the apex and the years re-formed round it, hover put its
+words in the caption place, the dolly passed the near ones blurred and
+fading; frame counts ~80–110/s with the main thread mostly idle (the 1000 ms
+gaps in the counts are the webview's rAF throttle). Not yet judged by the
+user: the places themselves (set for a landscape view; a portrait window
+will crowd them), the arc's bow and sway, the stagger, whether the chrome
+should return later, the haze curve by depth, and whether a picked memory
+should also open (it only gathers the years round it). No reduced-motion
+path for the flight.
+
 The lab is one shot, not the live route. Do not wire it in until asked.
 
 Done inside the lab since the first cut:
@@ -828,7 +890,7 @@ nijimu/
 │   ├── app/
 │   │   ├── App.tsx                 # ROUTER + GlobalControls (music/profile)
 │   │   ├── components/             # one file per live screen, plus shared UI
-│   │   ├── lab/                    # /lab/descent — in-progress create shot; /lab/film — the photo's film look, flat; /lab/vessel — the memory as a glass vessel, still; /lab/gallery — the dive gallery seated with ten vessels; wrapCloud.ts — the point cloud, kept aside (?cloud=1)
+│   │   ├── lab/                    # /lab/descent — in-progress create shot; /lab/film — the photo's film look, flat; /lab/vessel — the memory as a glass vessel, still; /lab/gallery — the dive gallery seated with ten vessels, with a second view (the field, vesselField.ts) they fly to and from; wrapCloud.ts — the point cloud, kept aside (?cloud=1)
 │   │   ├── archive/                # unused former record-loop pages
 │   │   ├── hooks/                  # reusable behavior (see §7)
 │   │   ├── lib/                    # pure/shared modules (see §6)

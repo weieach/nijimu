@@ -33,7 +33,8 @@ export function MemoryCarouselPage({
 }) {
   const navigate = useNavigate();
   const override = useContext(GalleryOverrideContext);
-  const items = useMemo(() => override?.items ?? buildArchive(), [naming, override]);
+  const overrideItems = override?.items;
+  const items = useMemo(() => overrideItems ?? buildArchive(), [naming, overrideItems]);
   const galleryFocusId = requestedFocusId ?? items[defaultCarouselIndex(items.length)]?.id;
   const [activeIdx, setActiveIdx] = useState(() => {
     if (!galleryFocusId) return 0;

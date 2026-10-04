@@ -9,6 +9,13 @@ import type { carouselSeat } from "./carouselLayout";
  * behind the apex is left out and a seat's place on the curve is adjusted.
  * Nothing provides this on the live routes, so they read null and draw as
  * they always have. The lab at /lab/gallery provides it.
+ *
+ * A preview may also hold a second arrangement of the same seats — the
+ * field, where the memories hang in the air by distance rather than along
+ * the years — and move the seats between the two. The gallery then mounts
+ * every memory, takes each seat's place from `adjustSeat` (which blends the
+ * two itself), and in the field reads a press on a memory as a pick and the
+ * pointer over one as the caption's subject, instead of stepping the rim.
  */
 
 export interface ArtifactSeat {
@@ -16,9 +23,32 @@ export interface ArtifactSeat {
   focused: boolean;
   still: boolean;
   frameloop: "always" | "demand";
+  /** How far away the seat reads (the vessel's own distance, 0 clear); set by the field. */
+  haze?: number;
 }
 
 export type SeatDepth = ReturnType<typeof carouselSeat>;
+
+/** A seat's place with what the field adds to it. */
+export interface SeatPlace extends SeatDepth {
+  haze?: number;
+  /** A turn of the seat on the page, in degrees. */
+  rotate?: number;
+  /** Draws over seats with a smaller order; the curve orders by the chronological offset × 100. */
+  order?: number;
+}
+
+export interface GalleryField {
+  /** Whether the seats are asked for in the field (the target state). */
+  on: boolean;
+  /** How far the whole has gone: 0 the curve, 1 the field. */
+  progress: number;
+  /** The memory under the pointer in the field — the caption shows its words. */
+  hovered: string | null;
+  onHover: (id: string | null) => void;
+  /** A press and release on a memory in the field. */
+  onPick: (item: ArchiveArtifact) => void;
+}
 
 export interface GalleryOverride {
   items: ArchiveArtifact[];
@@ -26,7 +56,10 @@ export interface GalleryOverride {
   /** false leaves out the memory's colour wash behind the focused seat. */
   wash?: boolean;
   /** Adjusts where a seat sits and how large it is, given the curve's own answer and the seat's offset from the apex. */
-  adjustSeat?: (depth: SeatDepth, offset: number, viewport: { w: number; h: number }) => SeatDepth;
+  adjustSeat?: (depth: SeatDepth, offset: number, viewport: { w: number; h: number }, item: ArchiveArtifact) => SeatPlace;
+  field?: GalleryField;
+  /** Chrome of the preview's own, shown and hidden with the gallery's. */
+  chrome?: ReactNode;
 }
 
 export const GalleryOverrideContext = createContext<GalleryOverride | null>(null);
