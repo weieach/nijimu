@@ -223,6 +223,101 @@ defaults are the user's own settling (size 2.26, hung from 180° at height
 .03, soft .7) — a sheet much longer than the strip, pressed along most of
 its length and peeling only at the end.
 
+A fourth lab, **`/lab/gallery`** (`src/app/lab/VesselGalleryPreview.tsx`,
+2026-10-04), is the live dive gallery with its crystals replaced by ten of
+these vessels — the user's ask: ten different forms, each with one of ten
+photos, the photo sized to its form, draped + refraction as the default,
+negative off, the perforations reduced, and the gallery's text, layout and
+interaction left exactly as they are. It is done by substitution, not a
+copy: `GalleryOverrideContext` (`src/app/lib/galleryOverride.ts`) carries
+`{ items, renderArtifact(item, seat) }`; `MemoryCarouselPage`, `PuddleScene`
+and `PuddleDiveGallery` read it and, when it is `null` (every live route),
+behave as before — `buildArchive()` for the items and `SceneViewer` in the
+seat. The preview provides it and renders `MemoryCarouselPage` itself, so
+the S-curve (`carouselSeat`), caption, timescale, arrows, wheel/keys,
+overscroll to the pond and the exit are the gallery's own. The route is a
+child of `RootLayout` so `GlobalControls` is there. Its ten items are
+`LIFE_EVENTS` 0, 2, 3, 5, 7, 8, 9, 11, 13, 15 with a fresh form in each of
+sphere, rounded box, cylinder, prism, diamond, flower, star, gear, hybrid,
+torn (`createArtifactForm({ seed: "vessel|<id>", category })`, `evolve`
+.6; the star and the gear take a named `draw` — `vessel|star|5`,
+`vessel|gear|2` — because those categories mostly come out as flat discs
+with no side for a picture), and `look.photoUrl` from
+`src/assets/vessel-gallery/01–10.jpg`
+(`import.meta.glob`, sorted by name — drop differently named files there to
+change the set; 1600 px long side, from the user's "nijimu photo test"
+folder, 01–08 landscape, 09–10 portrait cropped into the frame). The tune is
+`VESSEL_GALLERY_TUNE` = `VESSEL_TUNE_DEFAULT` with holeSize .6, holeWidth
+.75, holeFade .75, holeRim .25, mono 0, negative 0, pitch 4, turn 0 and no
+ground (no table, no reflection over the water); the sheet's `face` is
+"glass"; the room is `VESSEL_GALLERY_ROOM` (#e6e7ea above / white below) —
+the lab's grey wall, reflected by the glass and shown through it wherever
+the frame behind is clear, read as a dark grey cast on every vessel over the
+pale water (the user asked why everything was dark grey; the photos do go
+through `filmLook`, and several of the ten are dark to begin with). The
+override also asks for `wash: false` (no colour wash behind the apex) and
+gives an `adjustSeat` that, from the first newer neighbour on, scales the
+near seats down by up to 28% and moves them out toward the lower right
+(`.09w`, `.1h`) so the outer foreground seat no longer covers the first and
+second neighbours; both are read by `PuddleDiveGallery` only when an
+override is present.
+
+Pressing the vessel at the apex (a press and release without a drag,
+`onPick`) opens the lab as an editor for that one memory: the preview
+renders `VesselPreview` in place of the gallery with `initial` = the
+memory's `VesselState` (tune incl. its fitted `sheetSize`, mode, sheetMode,
+face, room, url, seed, form), `photos` = the ten gallery stills,
+`yaw` = −anchorAngle, and "← back to the gallery" (`onBack`); `onChange`
+hands the whole state back after each change, kept per memory in the
+preview's page state with a version that keys the seat's geometry
+(`VesselArtifact` `cacheKey` "id|version"; a new key for the same id
+disposes the old build), and the memory's `sheetSize` prop then comes from
+its tune rather than the fit. Returning renders `MemoryCarouselPage` with
+`galleryFocusId` = that memory and `galleryCarried`, so the gallery opens
+on it without diving. `VesselPreview` took those optional props for this
+(`VesselPreviewProps`; without them the `/lab/vessel` page is unchanged),
+and `Stage` a `yaw0`. One resolution fix: the seat canvases are measured
+`offsetSize` (as `SceneViewer`'s `measureUnscaled` does) — the seats are
+scaled by CSS transforms the resize observer never sees, so a canvas
+mounted far down the curve was rendered at that tiny size and stretched at
+the apex (the "2003 is blurry" report).
+
+Each seat is a `VesselArtifact` (`src/app/lab/VesselArtifact.tsx`): its own
+`<Canvas alpha>` with the lab's two-pass refraction, built once per
+`cacheKey` and kept in a module map so a seat that leaves and comes back
+does not rebuild its cloth. The sheet is sized to the cavity by
+`fitSheetSize(glass)` so the picture covers the side it hangs on — the
+user's ask, after a first cut at .86 of the height capped by the waist left
+most pictures at half the form: the strip's width (its height, hung
+upright) is the glass's full height, so the frame spans about .69 of the
+side with the stock's bands above and below; only a form much taller than
+it is round holds the strip back to ~.58 of the body's circumference
+(1.15·π·bodyRadius, bodyRadius the mean radius of the waist) so the cloth
+wraps the near half of the wall and not the back. The eye is set back so
+the body fills the seat — by its height and 1.45× its mean radius, not its
+farthest point, so a flat or spiky form is not shrunk by one spike. It
+opens on the sheet's side of the wall (`yaw` = −`anchorAngle`), so with the
+face on the glass the picture faces the viewer squarely and right-reading;
+at the apex a drag on the canvas turns it round (.01 rad/px) and up or down
+(`pitch`, .25°/px, `PITCH_MIN`…`PITCH_MAX`), pointer-captured, cursor grab —
+the gallery already treats a press-and-release off an artifact as handling,
+not leaving. `turn` is 0 in the gallery tune since a slow turn would carry
+the picture away from the viewer. The `frameloop` is the one the gallery
+gives the seat (`always` while focused or moving, `demand` when still). To share the
+shaders the lab's uniform plumbing is exported from `VesselPreview.tsx`
+(`createSheetUniformSet`/`writeSheetUniforms`, `createGlassUniformSet`/
+`writeGlassUniforms`, `fitSheetSize`, the builders and fragments, `lookFor`,
+`photoLoader`), and the lab's `Stage` now calls the same writers. One shader
+change for the transparent canvas: the refraction's `behind()` samples
+`vec4` and the body is `mix(env(0.0), frame.rgb/frame.a, frame.a)`, so where
+the render target is clear the glass shows the room, not black — the lab is
+unchanged since its backdrop has alpha 1. Not yet judged by the user: the
+glass body over the gallery's pale ground (`bodyAlpha` .85), how the
+full-height sheet folds in the lobed forms (flower, torn: it is wider than
+their waist and bows into the bowl), the star and gear draws, and the first
+frame after a resize, which can be dark until the render target has been
+drawn once.
+
 The lab is one shot, not the live route. Do not wire it in until asked.
 
 Done inside the lab since the first cut:
@@ -574,7 +669,7 @@ nijimu/
 │   ├── app/
 │   │   ├── App.tsx                 # ROUTER + GlobalControls (music/profile)
 │   │   ├── components/             # one file per live screen, plus shared UI
-│   │   ├── lab/                    # /lab/descent — in-progress create shot; /lab/film — the photo's film look, flat; /lab/vessel — the memory as a glass vessel, still; wrapCloud.ts — the point cloud, kept aside (?cloud=1)
+│   │   ├── lab/                    # /lab/descent — in-progress create shot; /lab/film — the photo's film look, flat; /lab/vessel — the memory as a glass vessel, still; /lab/gallery — the dive gallery seated with ten vessels; wrapCloud.ts — the point cloud, kept aside (?cloud=1)
 │   │   ├── archive/                # unused former record-loop pages
 │   │   ├── hooks/                  # reusable behavior (see §7)
 │   │   ├── lib/                    # pure/shared modules (see §6)

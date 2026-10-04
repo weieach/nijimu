@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { GalleryOverrideContext } from "../lib/galleryOverride";
 // import NewMomoryIdle from "../../imports/NewMomoryIdle"; // button hidden — cursor hint replaces it
 import { LIFE_EVENTS, MemoryEvent } from "../data/memoryData";
 import { loadMemories, toMemoryEvent, SavedMemory } from "../lib/memoryStore";
@@ -436,6 +437,7 @@ export function PuddleScene({
      placeholder above has words and a year in storage. Same indices as
      `anchors` (a saved memory is appended, and the draft was appended last),
      so the surface captions and the intro order can read from here. */
+  const override = useContext(GalleryOverrideContext);
   const liveSaved = useMemo(
     () => (naming ? savedMemories : loadMemories()),
     [naming, savedMemories],
@@ -457,11 +459,11 @@ export function PuddleScene({
      ripples to as the rim swings. */
   const galleryItems = useMemo<DiveGalleryItem[]>(() => {
     const anchorById = new Map(events.map((e, i) => [e.id, anchors[i]]));
-    return buildArchive(liveSaved).map((artifact) => {
+    return (override?.items ?? buildArchive(liveSaved)).map((artifact) => {
       const anchor = anchorById.get(artifact.id);
       return { ...artifact, anchor: { x: anchor?.x ?? 0.5, y: anchor?.y ?? 0.5 } };
     });
-  }, [events, anchors, liveSaved]);
+  }, [events, anchors, liveSaved, override]);
 
   /** Dedicated carousel route, or a rim handed over: the scene begins at depth
       so the puddle field never flashes underneath. */

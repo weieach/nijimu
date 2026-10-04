@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { GalleryOverrideContext } from "../lib/galleryOverride";
 import { isPuddleSupported } from "../lib/puddle/simulation";
 import { PuddleScene } from "./PuddleScene";
 import { PageHeader } from "./PageHeader";
@@ -31,7 +32,8 @@ export function MemoryCarouselPage({
   hideHeader?: boolean;
 }) {
   const navigate = useNavigate();
-  const items = useMemo(() => buildArchive(), [naming]);
+  const override = useContext(GalleryOverrideContext);
+  const items = useMemo(() => override?.items ?? buildArchive(), [naming, override]);
   const galleryFocusId = requestedFocusId ?? items[defaultCarouselIndex(items.length)]?.id;
   const [activeIdx, setActiveIdx] = useState(() => {
     if (!galleryFocusId) return 0;

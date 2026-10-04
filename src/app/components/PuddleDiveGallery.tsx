@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { SceneViewer } from "./SceneViewer";
+import { GalleryOverrideContext } from "../lib/galleryOverride";
 import { warmArtifactMeshes } from "../hooks/useArtifactGeometry";
 import { BackButton } from "./BackButton";
 import { GalleryViewToggle } from "./GalleryViewToggle";
@@ -197,6 +198,8 @@ export function PuddleDiveGallery({
   pondDeparture?: number;
   hideHeader?: boolean;
 }) {
+  // a preview may seat something other than the crystal; the live routes provide nothing
+  const override = useContext(GalleryOverrideContext);
   const hasOlder = activeIdx > 0;
   const hasNewer = activeIdx < items.length - 1;
   const viewport = useViewport();
@@ -658,7 +661,7 @@ export function PuddleDiveGallery({
           height: "clamp(700px, 78vw, 1000px)",
           borderRadius: "50%",
           backgroundColor: washColor(palette.color),
-          opacity:
+          opacity: override?.wash === false ? 0 :
             inkArrival
               ? DIVE_TUNING.artifactWashOpacity * washIn
               : (chromeVisible || !waterEffect)
@@ -730,7 +733,8 @@ export function PuddleDiveGallery({
         style={{ opacity: 1, isolation: "isolate" }}>
         {slots.map(({ offset, item: slotItem }) => {
           const focused = Math.abs(offset) < 0.5;
-          const depth = carouselSeat(viewport.w, viewport.h, offset);
+          const curveDepth = carouselSeat(viewport.w, viewport.h, offset);
+          const depth = override?.adjustSeat ? override.adjustSeat(curveDepth, offset, viewport) : curveDepth;
           const seat = pondRimSeat(depth.x, depth.y, geo.cx, geo.apexY, viewport.h, pondDeparture, !!reducedMotion);
           const slotPalette =
             COLOR_PALETTE[slotItem.colorIndex % COLOR_PALETTE.length];
@@ -823,7 +827,11 @@ export function PuddleDiveGallery({
                     transition: "none",
                   }}
                 >
-                  <SceneViewer
+                  {override ? override.renderArtifact(slotItem, {
+                    focused,
+                    still: !focused && rimSettled,
+                    frameloop: focused || !rimSettled || pondDeparture > 0 ? "always" : "demand",
+                  }) : <SceneViewer
                     measureUnscaled
                     form={slotItem.shape.form}
                     fluidity={slotItem.shape.fluidity}
@@ -860,7 +868,7 @@ export function PuddleDiveGallery({
                       matColor: slotPalette.color,
                     }}
                     style={{ width: "100%", height: "100%" }}
-                  />
+                  />}
                 </div>
               </div>
               {/* A neighbour is a destination, not a toy: this lid keeps the

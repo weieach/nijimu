@@ -33,6 +33,7 @@ import { StyleGuidePage } from "./components/StyleGuidePage";
 import { DescentPrototype } from "./lab/DescentPrototype";
 import { FilmPreview } from "./lab/FilmPreview";
 import { VesselPreview } from "./lab/VesselPreview";
+import { VesselGalleryPreview } from "./lab/VesselGalleryPreview";
 
 const SOUNDTRACK_URL =
   "https://cdn.jsdelivr.net/gh/Noyok1vas/figbuildAssets/prodarmaan%20-%20somber%20springtime.mp3";
@@ -130,6 +131,7 @@ const router = createBrowserRouter([
         ],
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
+      { path: "/lab/gallery", Component: VesselGalleryPreview },
       { path: SHAPE_GROW_PATH, Component: ShapeGrowPage },
       { path: SHAPE_FEELING_PATH, Component: ShapeGrowPage },
       { path: SHAPE_DISTANCE_PATH, Component: ShapeGrowPage },
