@@ -323,6 +323,42 @@ their waist and bows into the bowl), the star and gear draws, and the first
 frame after a resize, which can be dark until the render target has been
 drawn once.
 
+**Distance in the vessel (2026-10-04, evening).** The live distance step
+("time blurs the edges, not the feeling") is a CSS `backdrop-filter` blur
+over the whole canvas (`FrostOverlay`, `vividness` 1→0) and, in the descent,
+a `uFrost` milk mix; the vessel had nothing. It now has a "distance" knob
+group at the top of the panel (`?haze=` opens there): `haze` is the signal
+the step would drive, 0 clear (the default everywhere, so nothing else
+changed), and the rest say what a full haze does — `hazeBlur` (the finished
+frame blurred, px; a post pass in the lab's `Stage` only: the frame goes to a
+second target and reaches the screen through a separable 13-tap Gaussian,
+`blurFragment`, `frame` → `pong` → screen), `hazePhoto` (mip levels added to
+`filmLook`'s bias on both faces; `lookFor` also pushes the dye's `soft` to 1
+with it and, with the wash, lowers contrast and saturation and lifts the
+blacks), `hazeMist` / `hazeSpread` (the mist: three copies of the glass stood
+off it along its normals, `mistVertex`/`mistFragment`, `MIST_SHELLS`, the
+`Mist` component — a veil the air's colour, flat through each shell's middle
+and thinning to nothing at its own edge, uneven as breath, drawn FrontSide
+over the glass on its layer, so the silhouette is a gradient reaching past
+the glass rather than a line), `hazeWash` (glass and sheet mix toward
+`uAir`, the backdrop behind the form's upper half — `airOf`/`airFor` — and
+thin), `hazeEdge` (the refraction's dark rim line, mirror and film ring, the
+frost look's spec, the sheet's gloss and perforation rim go; the glass's
+alpha stops gathering at the silhouette; the strip's cut feathers out over
+up to 5× its wear; the perforations become a mark; the furred edge comes to
+both sheets). The shaders take each part already multiplied by the haze
+(`uHazePhoto`, `uHazeEdge`, `uHazeWash`, `uHazeMist`, `uHazeSpread`, `uAir`
+in both uniform sets); `SheetWrite`/`GlassWrite` took an `air`. The gallery
+seat (`VesselArtifact`) draws the same materials and the mist, so a memory
+hazed in its editor comes back hazed; only the post blur is the lab's own.
+Seen: at .5 the picture is soft and the outline fogged with the vessel still
+itself; at 1 a pale grey form in the air; the shells alone, with no post
+blur, already make the outline a gradient. Not yet judged by the user: the
+defaults (blur 7, photo 2.6, mist .5, reach .16, wash .5, edge .85), whether
+the mist should be denser toward the surface or more even, and whether a
+hazed memory in the gallery wants the post blur too (a premultiplied blur on
+the seat's transparent canvas; not built).
+
 The lab is one shot, not the live route. Do not wire it in until asked.
 
 Done inside the lab since the first cut:

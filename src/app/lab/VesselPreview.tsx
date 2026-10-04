@@ -53,7 +53,11 @@ import photoB from "../../assets/memory-photo-02.png";
  * bundled still, or an image URL, ?glass=frost the first glass look (the
  * refracting one is the default), ?show=glass|sheet one layer alone,
  * ?sheet=pressed the wall-relief sheet (draped is the default), ?face=glass the
- * strip turned over so its picture side faces the wall (inside is the default).
+ * strip turned over so its picture side faces the wall (inside is the default),
+ * ?haze= (0–1) how far the memory has receded — the "distance" knob group: the
+ * photo blurs (mip bias), the frame softens (a post blur), the cut and the rim
+ * lines let go, the whole fades toward the air, and a mist of three shells
+ * stands off the glass so the outline is a gradient rather than a line.
  */
 
 const PHOTOS = [photoA, photoB];
@@ -106,6 +110,8 @@ export interface VesselTune {
   pitch: number; distance: number; turn: number;
   // scene
   ground: number; warmth: number;
+  // distance (the distance step: time blurs the edges — the whole thing recedes into the air)
+  haze: number; hazeBlur: number; hazePhoto: number; hazeMist: number; hazeSpread: number; hazeWash: number; hazeEdge: number;
 }
 
 /** The two glass looks: frost patches on a toned shell, or the frame behind refracted. */
@@ -142,6 +148,7 @@ export const VESSEL_TUNE_DEFAULT: VesselTune = {
   keyAzimuth: -32, keyElevation: 64, keyIntensity: 1.08,
   pitch: PITCH, distance: 9, turn: TURN,
   ground: 0.5, warmth: 0.4,
+  haze: unitParam("haze", 0), hazeBlur: 7, hazePhoto: 2.6, hazeMist: 0.5, hazeSpread: 0.16, hazeWash: 0.5, hazeEdge: 0.85,
 };
 
 /* ───────── the backdrop, as the page and the canvas both draw it ───────── */
@@ -172,9 +179,9 @@ export const LOOK_Y = -0.05;
 export const FOV = 18;
 const HALF_TAN = Math.tan((FOV / 2) * (Math.PI / 180));
 
-interface Backdrop { stops: [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]]; at: [number, number] }
+export interface Backdrop { stops: [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]]; at: [number, number] }
 /** The film lab's paper, leaning warmer with the knob; or the refraction look's room. */
-function backdropFor(t: VesselTune, mode: GlassMode, room: Room): Backdrop {
+export function backdropFor(t: VesselTune, mode: GlassMode, room: Room): Backdrop {
   if (mode === "refract") {
     const above = envColor(room.above, t.envAbove, t.warmth), below = envColor(room.below, t.envBelow, t.warmth);
     // the eye pitched down by p sees a level ray p above the screen's centre
@@ -188,13 +195,24 @@ function backdropFor(t: VesselTune, mode: GlassMode, room: Room): Backdrop {
 const backdropCss = ({ stops, at }: Backdrop) =>
   `linear-gradient(${rgb(stops[0])}, ${rgb(stops[1])} ${(at[0] * 100).toFixed(1)}%, ${rgb(stops[2])} ${(at[1] * 100).toFixed(1)}%)`;
 
-/** The film lab's look with the vessel's dye knobs written over it. */
+/** The air: the colour a thing at a distance fades toward — the frame behind the
+    form's upper half, 0–1. */
+export function airOf({ stops }: Backdrop): readonly [number, number, number] {
+  return [0, 1, 2].map((i) => (stops[0][i] + stops[1][i]) / 510) as unknown as readonly [number, number, number];
+}
+export const airFor = (t: VesselTune, mode: GlassMode, room: Room) => airOf(backdropFor(t, mode, room));
+
+/** The film lab's look with the vessel's dye knobs written over it. At a distance
+    the picture is softer, flatter and paler — the diffusion goes toward 1 with the
+    photo blur, the tone fades with the wash. */
 export function lookFor(t: VesselTune): FilmLook {
+  const blur = Math.min(1, (t.haze * t.hazePhoto) / 2), fade = t.haze * t.hazeWash;
   return {
     ...FILM_LOOK_DEFAULT,
-    bloom: 0.3, halation: 0.1, mottle: 0.25, vignette: 0.1,
-    lift: t.dyeLift, contrast: t.dyeContrast, shoulder: t.dyeShoulder, saturation: t.dyeSaturation,
-    grain: t.dyeGrain, soft: t.dyeSoft, exposure: t.dyeExposure, leak: t.dyeLeak,
+    bloom: 0.3 + t.haze * 0.3, halation: 0.1, mottle: 0.25, vignette: 0.1,
+    lift: t.dyeLift + fade * 0.1, contrast: t.dyeContrast * (1 - fade * 0.35), shoulder: t.dyeShoulder,
+    saturation: t.dyeSaturation * (1 - fade * 0.4),
+    grain: t.dyeGrain, soft: t.dyeSoft + (1 - t.dyeSoft) * blur, exposure: t.dyeExposure, leak: t.dyeLeak,
   };
 }
 
@@ -667,6 +685,13 @@ export const sheetFragment = /* glsl */ `
   uniform float uGrain;
   uniform vec3 uKey;
   uniform float uKeyIntensity;
+  /* distance (each already scaled by the haze): the photo seen through that many more
+     mip levels, the edges letting go (the cut feathers out over millimetres), and
+     the whole sheet fading toward the air's colour */
+  uniform float uHazePhoto;
+  uniform float uHazeEdge;
+  uniform float uHazeWash;
+  uniform vec3 uAir;
   varying vec3 vRest;
   varying float vLift;
   varying float vCrease;
@@ -684,7 +709,7 @@ export const sheetFragment = /* glsl */ `
     if (uFlip > .5) mm.x = -mm.x;
     float d = stripTornOutline(mm, uSeed);
     float dh = stripHole(mm);
-    float alpha = stripCoverage(mm, uSeed, d, dh, uWear);
+    float alpha = stripCoverage(mm, uSeed, d, dh, uWear * (1.0 + uHazeEdge * 4.0));
     if (alpha < .01) discard;
 
     // the window, and one corner where the dye has bled past it into the stock
@@ -693,7 +718,7 @@ export const sheetFragment = /* glsl */ `
     float toCorner = length(mm - corner) + (filmNoise(mm * .45 + uSeed * 8.0) - .5) * 7.0;
     inFrame = max(inFrame, (1.0 - smoothstep(2.0, 9.0, toCorner)) * uBleed);
 
-    float bias = facing ? 0.0 : 1.6;
+    float bias = (facing ? 0.0 : 1.6) + uHazePhoto;
     vec3 color;
     float a;
     stripFace(mm, uSeed, d, dh, inFrame, uPhoto, uImageAspect, bias, uEdgePrint, 1.45, color, a);
@@ -728,6 +753,9 @@ export const sheetFragment = /* glsl */ `
       color = mix(vec3(.80, .82, .84), color, uBackFace) * vec3(.975, .99, 1.015);
       a *= .85;
     }
+    // at a distance the sheet recedes into the air: its colour goes toward the air's, its dye thins
+    color = mix(color, uAir, uHazeWash * .55);
+    a *= 1.0 - uHazeWash * .3;
     // a fine screen-space grain, so the flats are not plastic
     float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - .5;
     color += grain * uGrain;
@@ -766,6 +794,15 @@ const GLASS_COMMON_GLSL = /* glsl */ `
   uniform float uSeed;
   uniform float uWarmth;
   uniform vec3 uPatch[3];
+  /* distance (each already scaled by the haze): the view through the glass smeared
+     further, the rim lines and the gathering of alpha at the silhouette letting go,
+     the body fading toward the air; and the mist that stands off the glass. */
+  uniform float uHazePhoto;
+  uniform float uHazeEdge;
+  uniform float uHazeWash;
+  uniform float uHazeMist;
+  uniform float uHazeSpread;
+  uniform vec3 uAir;
   varying vec3 vNormalW;
   varying vec3 vViewW;
   varying vec3 vModel;
@@ -811,6 +848,8 @@ export const glassFragment = /* glsl */ `
     vec3 body = mix(vec3(.84, .87, .88), vec3(.87, .86, .85), uWarmth);
     vec3 color = mix(body, rimColor, fresnel);
     float alpha = (.09 + .6 * fresnel * uRim) * thickness;
+    // at a distance the edge lets go: the alpha no longer gathers at the silhouette
+    alpha = mix(alpha, .2 * thickness, uHazeEdge * .6);
 
     vec3 dir = normalize(vModel);
     float frost = frostAt(dir);
@@ -818,9 +857,11 @@ export const glassFragment = /* glsl */ `
     color = mix(color, milk, frost * .85);
     alpha = mix(alpha, .5 + .3 * fresnel, frost);
 
-    float spec = pow(max(0.0, dot(reflect(-v, n), uKey)), 28.0) * .28 * uKeyIntensity;
+    float spec = pow(max(0.0, dot(reflect(-v, n), uKey)), 28.0) * .28 * uKeyIntensity * (1.0 - uHazeEdge);
     color += spec;
     alpha += spec * .7;
+    color = mix(color, uAir, uHazeWash * .5);
+    alpha *= 1.0 - uHazeWash * .25;
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
@@ -900,23 +941,27 @@ export const glassRefractFragment = /* glsl */ `
     vec2 shift = -nv.xy * uBend * (.004 + .05 * g * g) * vec2(uResolution.y / uResolution.x, 1.0);
     // the far wall sits behind the sheet, so it must not bend the sheet: no shift there
     shift *= 1.0 - back;
-    float smear = uGlassSoft * (.002 + .05 * thick * thick);
+    // at a distance the view through the glass is smeared a little further everywhere
+    float smear = uGlassSoft * (.002 + .05 * thick * thick) + uHazePhoto * .004;
     vec4 frame = behind(clamp(suv + shift, .002, .998), smear);
     vec3 body = mix(env(0.0), frame.rgb / max(frame.a, 1e-3), frame.a);
     // the feet: the glass is thickest low down where it stands
     float foot = smoothstep(.25, 1.0, thick) * (.35 + .65 * low) * mix(1.0, .5, back);
-    body *= 1.0 - uThickDark * .7 * foot;
+    body *= 1.0 - uThickDark * .7 * foot * (1.0 - uHazeWash);
     // at a grazing angle the surface reflects the room instead
     vec3 refl = env(reflect(-v, n).y);
-    float mirror = pow(g, 4.0) * uRim * .6;
+    float mirror = pow(g, 4.0) * uRim * .6 * (1.0 - uHazeEdge * .7);
     vec3 color = mix(body, refl, mirror);
     // the live bubble's rim: a dark line just inside the silhouette (its rimPower
     // 3.3) — here the frame itself, darkened, so it still reads as glass
-    float rimLine = pow(g, 3.3) * uRim;
+    float rimLine = pow(g, 3.3) * uRim * (1.0 - uHazeEdge * .85);
     color = mix(color, body * .55, rimLine * .5);
     // the view is fully through the glass; what the alpha carries is how much the
     // glass itself asserts over the frame — more toward the edge, and in the feet
     float alpha = uBodyAlpha * mix(.35, 1.0, g * g) * uneven + uThickDark * .25 * foot + rimLine * .35 + mirror * .5;
+    // at a distance the edge lets go: the alpha no longer gathers at the silhouette,
+    // so the outline is left to the mist outside it
+    alpha = mix(alpha, uBodyAlpha * .5 * uneven, uHazeEdge * .6);
 
     vec3 dir = normalize(vModel);
     float frost = frostAt(dir);
@@ -928,13 +973,60 @@ export const glassRefractFragment = /* glsl */ `
     // filmPower 20), where the surface turns toward a large soft key
     float film = pow(g, 20.0) * (1.0 - smoothstep(.93, 1.0, g));
     float toward = smoothstep(-.4, .8, dot(n, uKey));
-    float line = film * toward * uHighlight * uKeyIntensity * mix(1.0, .3, back);
+    float line = film * toward * uHighlight * uKeyIntensity * mix(1.0, .3, back) * (1.0 - uHazeEdge);
     color += line * .9;
     alpha += line * .6;
     alpha *= mix(1.0, .55, back);
+    // and the body fades toward the air
+    color = mix(color, uAir, uHazeWash * .5);
+    alpha *= 1.0 - uHazeWash * .25;
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
+
+/* The mist: what gives the outline its softness at a distance. Three copies of
+   the glass stand off it along its normals, each a little further out
+   (uShell 0, .5, 1 → .3, .65, 1 of the reach), drawn as a pale veil the air's
+   colour that is thickest looking through the middle of each shell and thins to
+   nothing at its own edge — so the silhouette is no longer a line but a
+   gradient reaching past the glass, uneven as breath is. Drawn over the glass,
+   facing side only. Alpha carries the haze: nothing is drawn at 0. */
+export const mistVertex = /* glsl */ `
+  uniform float uHazeSpread;
+  uniform float uShell;
+  varying vec3 vNormalW;
+  varying vec3 vViewW;
+  varying vec3 vModel;
+  varying vec3 vWorld;
+  varying vec3 vCentre;
+  void main() {
+    vec3 p = position + normal * uHazeSpread * mix(.3, 1.0, uShell);
+    vec4 world = modelMatrix * vec4(p, 1.0);
+    vModel = position;
+    vWorld = world.xyz;
+    vCentre = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vNormalW = normalize(mat3(modelMatrix) * normal);
+    vViewW = normalize(cameraPosition - world.xyz);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+export const mistFragment = /* glsl */ `
+  ${GLASS_COMMON_GLSL}
+  uniform float uShell;
+  void main() {
+    vec3 n = normalize(vNormalW);
+    vec3 v = normalize(vViewW);
+    float facing = max(0.0, dot(n, v));
+    // flat through the middle, thinning to nothing toward the shell's own edge; the outer shells thin sooner
+    float body = pow(smoothstep(0.0, .75, facing), 1.0 + uShell);
+    float uneven = .6 + .64 * (gNoise(vModel * 1.3 + uSeed + uShell * 5.0) * .7 + gNoise(vModel * 3.6 - uSeed) * .3);
+    vec3 milk = uAir * (.97 + .05 * max(0.0, dot(n, uKey)) * uKeyIntensity) + .015;
+    float alpha = uHazeMist * .4 * body * uneven * mix(1.0, .5, uShell);
+    gl_FragColor = vec4(milk, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
+  }
+`;
+/** Where each shell stands, 0 nearest the glass. */
+export const MIST_SHELLS = [0, 0.5, 1] as const;
 
 /* The frame behind everything, drawn in the canvas so the glass can refract
    it: three stops down the screen (the paper), or two meeting at a soft
@@ -967,6 +1059,25 @@ export const blitFragment = /* glsl */ `
   uniform sampler2D tScene;
   varying vec2 vUv;
   void main() { gl_FragColor = texture2D(tScene, vUv); }
+`;
+
+/* The softness at a distance: the finished frame blurred, once across and once
+   down (a 13-tap Gaussian, sigma 2.5 taps, uStep one tap in uv). The backdrop
+   is a gradient and the ground is already soft, so only the vessel changes. */
+const blurFragment = /* glsl */ `
+  uniform sampler2D tScene;
+  uniform vec2 uStep;
+  varying vec2 vUv;
+  void main() {
+    vec4 c = texture2D(tScene, vUv) * .161;
+    c += (texture2D(tScene, vUv + uStep) + texture2D(tScene, vUv - uStep)) * .1486;
+    c += (texture2D(tScene, vUv + uStep * 2.0) + texture2D(tScene, vUv - uStep * 2.0)) * .1169;
+    c += (texture2D(tScene, vUv + uStep * 3.0) + texture2D(tScene, vUv - uStep * 3.0)) * .0784;
+    c += (texture2D(tScene, vUv + uStep * 4.0) + texture2D(tScene, vUv - uStep * 4.0)) * .0448;
+    c += (texture2D(tScene, vUv + uStep * 5.0) + texture2D(tScene, vUv - uStep * 5.0)) * .0217;
+    c += (texture2D(tScene, vUv + uStep * 6.0) + texture2D(tScene, vUv - uStep * 6.0)) * .0090;
+    gl_FragColor = c;
+  }
 `;
 
 /* The table: a faint contact shadow and a tone under the object that fades
@@ -1048,6 +1159,10 @@ export function createSheetUniformSet(edgePrint: THREE.Texture) {
     uKeyIntensity: { value: 1 },
     uReflect: { value: 0 },
     uGroundY: { value: 0 },
+    uHazePhoto: { value: 0 },
+    uHazeEdge: { value: 0 },
+    uHazeWash: { value: 0 },
+    uAir: { value: new THREE.Vector3(0.9, 0.9, 0.9) },
   };
 }
 export type SheetUniformSet = ReturnType<typeof createSheetUniformSet>;
@@ -1080,6 +1195,12 @@ export function createGlassUniformSet(scene: THREE.Texture) {
     uResolution: { value: new THREE.Vector2(1, 1) },
     uReflect: { value: 0 },
     uGroundY: { value: 0 },
+    uHazePhoto: { value: 0 },
+    uHazeEdge: { value: 0 },
+    uHazeWash: { value: 0 },
+    uHazeMist: { value: 0 },
+    uHazeSpread: { value: 0 },
+    uAir: { value: new THREE.Vector3(0.9, 0.9, 0.9) },
   };
 }
 export type GlassUniformSet = ReturnType<typeof createGlassUniformSet>;
@@ -1089,11 +1210,15 @@ export interface SheetWrite {
   key: THREE.Vector3; edgePrint: THREE.Texture; groundY: number;
   /** −1 for the thing itself; a reflection's strength otherwise. */
   reflect: number;
+  /** What the sheet fades toward at a distance (`airFor`). */
+  air: readonly [number, number, number];
 }
 /** The knobs written into a sheet's uniforms. */
 export function writeSheetUniforms(u: SheetUniformSet, w: SheetWrite) {
   const { tune, seed, sheet } = w;
   const stock = STOCKS[Math.min(STOCKS.length - 1, Math.max(0, Math.round(tune.stock)))];
+  // the distance, as the shader takes it: each part already scaled by the haze
+  const edge = tune.haze * tune.hazeEdge;
   setFilmLook(u, lookFor(tune));
   setStock(u, stock);
   u.uFilmSeed.value = seed;
@@ -1101,10 +1226,11 @@ export function writeSheetUniforms(u: SheetUniformSet, w: SheetWrite) {
   u.uPhotoOpacity.value = tune.photoOpacity;
   u.uStockThick.value = tune.stockThick;
   u.uStockThin.value = tune.stockThin;
-  u.uHoleRim.value = tune.holeRim;
+  u.uHoleRim.value = tune.holeRim * (1 - edge);
   // the knobs say how much perforation is left; the shader takes how much is gone
   u.uHoleShrink.value.set(1 - tune.holeSize * tune.holeWidth, 1 - tune.holeSize);
-  u.uHoleFade.value = tune.holeFade;
+  // at a distance the perforations are a mark, not a cut
+  u.uHoleFade.value = tune.holeFade + (1 - tune.holeFade) * edge;
   u.uMono.value = tune.mono;
   u.uNegative.value = tune.negative;
   u.uArc.value = sheet.arc;
@@ -1116,24 +1242,38 @@ export function writeSheetUniforms(u: SheetUniformSet, w: SheetWrite) {
   u.uFlip.value = w.face === "glass" ? 1 : 0;
   // the feel belongs to the draped sheet; the pressed film keeps its own look
   const draped = w.sheetMode === "draped";
+  const softRim = draped ? tune.softRim : 0;
   u.uSheer.value = draped ? tune.sheer : 1;
-  u.uSoftRim.value = draped ? tune.softRim : 0;
+  // at a distance the furred edge comes to both sheets, and the film's hard highlight goes
+  u.uSoftRim.value = softRim + (1 - softRim) * edge * 0.6;
   u.uSheen.value = draped ? tune.sheen : 0;
-  u.uGloss.value = draped ? tune.gloss : 1;
+  u.uGloss.value = (draped ? tune.gloss : 1) * (1 - edge);
   u.uGrain.value = draped ? tune.grain : 0;
   u.uKey.value.copy(w.key);
   u.uKeyIntensity.value = tune.keyIntensity;
   u.uReflect.value = w.reflect;
   u.uGroundY.value = w.groundY;
   u.uEdgePrint.value = w.edgePrint;
+  u.uHazePhoto.value = tune.haze * tune.hazePhoto;
+  u.uHazeEdge.value = edge;
+  u.uHazeWash.value = tune.haze * tune.hazeWash;
+  u.uAir.value.set(w.air[0], w.air[1], w.air[2]);
 }
 
 export interface GlassWrite {
   tune: VesselTune; seed: number; key: THREE.Vector3; patches: THREE.Vector3[]; room: Room; groundY: number; reflect: number;
+  /** What the glass fades toward at a distance, and the mist's colour (`airFor`). */
+  air: readonly [number, number, number];
 }
 /** The knobs written into a glass's uniforms. */
 export function writeGlassUniforms(u: GlassUniformSet, w: GlassWrite) {
   const { tune } = w;
+  u.uHazePhoto.value = tune.haze * tune.hazePhoto;
+  u.uHazeEdge.value = tune.haze * tune.hazeEdge;
+  u.uHazeWash.value = tune.haze * tune.hazeWash;
+  u.uHazeMist.value = tune.haze * tune.hazeMist;
+  u.uHazeSpread.value = tune.hazeSpread;
+  u.uAir.value.set(w.air[0], w.air[1], w.air[2]);
   u.uKey.value.copy(w.key);
   u.uKeyIntensity.value = tune.keyIntensity;
   u.uRim.value = tune.rim;
@@ -1183,6 +1323,22 @@ export function fitSheetSize(glass: Glass): number {
   return Math.min(kHeight, kWrap) * STRIP_MM.length;
 }
 
+/** The mist's three shells over one glass, sharing its uniform set (each adds only
+    which shell it is). Drawn after the glass, on its layer; nothing when `on` is
+    false, so a clear vessel costs nothing. */
+export function Mist({ geometry, uniforms, layer, renderOrder, on }: {
+  geometry: THREE.BufferGeometry; uniforms: GlassUniformSet; layer: number; renderOrder: number; on: boolean;
+}) {
+  const sets = useMemo(() => MIST_SHELLS.map((s) => ({ ...uniforms, uShell: { value: s } })), [uniforms]);
+  return <>
+    {sets.map((u, i) => (
+      <mesh key={i} geometry={geometry} renderOrder={renderOrder + i} frustumCulled={false} layers={layer} visible={on}>
+        <shaderMaterial transparent depthWrite={false} side={THREE.FrontSide} vertexShader={mistVertex} fragmentShader={mistFragment} uniforms={u} />
+      </mesh>
+    ))}
+  </>;
+}
+
 interface StageProps {
   tune: VesselTune;
   mode: GlassMode;
@@ -1213,12 +1369,21 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
      to a target, the target is copied to the screen, and the facing surface
      is drawn over it sampling the target. Under the frost look the scene is
      drawn straight. The backdrop is a quad in the scene so it is in the
-     target too. */
+     target too. At a distance (haze × hazeBlur > 0) the finished frame goes
+     to a second target instead and reaches the screen through the blur, once
+     across into `pong` and once down. */
   const pass = useMemo(() => {
     const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
+    const frame = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
+    const pong = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false, stencilBuffer: false });
     const blit = new THREE.ShaderMaterial({
       vertexShader: backdropVertex, fragmentShader: blitFragment,
       uniforms: { tScene: { value: target.texture } },
+      depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+    });
+    const blur = new THREE.ShaderMaterial({
+      vertexShader: backdropVertex, fragmentShader: blurFragment,
+      uniforms: { tScene: { value: frame.texture }, uStep: { value: new THREE.Vector2() } },
       depthTest: false, depthWrite: false, blending: THREE.NoBlending,
     });
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blit);
@@ -1226,31 +1391,56 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     const scene = new THREE.Scene();
     scene.add(quad);
     const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    return { target, blit, quad, scene, ortho };
+    return { target, frame, pong, blit, blur, quad, scene, ortho };
   }, []);
-  useEffect(() => () => { pass.target.dispose(); pass.blit.dispose(); pass.quad.geometry.dispose(); }, [pass]);
+  useEffect(() => () => {
+    pass.target.dispose(); pass.frame.dispose(); pass.pong.dispose(); pass.blit.dispose(); pass.blur.dispose(); pass.quad.geometry.dispose();
+  }, [pass]);
   useEffect(() => {
     const dpr = gl.getPixelRatio();
-    pass.target.setSize(Math.round(size.width * dpr), Math.round(size.height * dpr));
+    const w = Math.round(size.width * dpr), h = Math.round(size.height * dpr);
+    pass.target.setSize(w, h);
+    pass.frame.setSize(w, h);
+    pass.pong.setSize(w, h);
   }, [pass, gl, size]);
+  const blurPx = tune.haze * tune.hazeBlur;
   useFrame(({ gl: renderer, scene, camera: view }) => {
+    // the softness in device pixels; under a quarter pixel the frame goes straight to the screen
+    const px = blurPx * renderer.getPixelRatio();
+    const out = px > 0.25 ? pass.frame : null;
     if (mode !== "refract") {
       view.layers.enableAll();
+      renderer.setRenderTarget(out);
       renderer.render(scene, view);
-      return;
+    } else {
+      for (const u of glassUniformSets) u.uResolution.value.set(pass.target.width, pass.target.height);
+      view.layers.set(0);
+      renderer.setRenderTarget(pass.target);
+      renderer.render(scene, view);
+      renderer.setRenderTarget(out);
+      pass.quad.material = pass.blit;
+      renderer.render(pass.scene, pass.ortho);
+      renderer.clearDepth();
+      view.layers.set(FRONT_LAYER);
+      renderer.autoClear = false;
+      renderer.render(scene, view);
+      renderer.autoClear = true;
+      view.layers.enableAll();
     }
-    for (const u of glassUniformSets) u.uResolution.value.set(pass.target.width, pass.target.height);
-    view.layers.set(0);
-    renderer.setRenderTarget(pass.target);
-    renderer.render(scene, view);
+    if (out) {
+      const step = px / 6;
+      pass.quad.material = pass.blur;
+      pass.blur.uniforms.tScene.value = pass.frame.texture;
+      pass.blur.uniforms.uStep.value.set(step / pass.frame.width, 0);
+      renderer.setRenderTarget(pass.pong);
+      renderer.render(pass.scene, pass.ortho);
+      pass.blur.uniforms.tScene.value = pass.pong.texture;
+      pass.blur.uniforms.uStep.value.set(0, step / pass.frame.height);
+      renderer.setRenderTarget(null);
+      renderer.render(pass.scene, pass.ortho);
+      pass.quad.material = pass.blit;
+    }
     renderer.setRenderTarget(null);
-    renderer.render(pass.scene, pass.ortho);
-    renderer.clearDepth();
-    view.layers.set(FRONT_LAYER);
-    renderer.autoClear = false;
-    renderer.render(scene, view);
-    renderer.autoClear = true;
-    view.layers.enableAll();
   }, 1);
 
   const backdropUniforms = useMemo(() => ({
@@ -1286,11 +1476,12 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
   }), []);
 
   // the knobs are written straight into the uniforms on every render
+  const air = airOf(backdrop);
   sheetUniformSets.forEach((u, i) => writeSheetUniforms(u, {
-    tune, seed, sheet, sheetMode, face, key, edgePrint, groundY, reflect: i === 0 ? -1 : 0.22 * tune.ground * tableFade.current,
+    tune, seed, sheet, sheetMode, face, key, edgePrint, groundY, reflect: i === 0 ? -1 : 0.22 * tune.ground * tableFade.current, air,
   }));
   glassUniformSets.forEach((u, i) => writeGlassUniforms(u, {
-    tune, seed, key, patches, room, groundY, reflect: i === 0 ? -1 : 0.22 * tune.ground * tableFade.current,
+    tune, seed, key, patches, room, groundY, reflect: i === 0 ? -1 : 0.22 * tune.ground * tableFade.current, air,
   }));
   groundUniforms.uGround.value = tune.ground * tableFade.current;
   groundUniforms.uWarmth.value = tune.warmth;
@@ -1357,6 +1548,8 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
         <shaderMaterial key={mode} transparent depthWrite={false} side={THREE.FrontSide}
           vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={g} />
       </mesh>}
+      {/* the mist stands off the glass, over everything, and only at a distance */}
+      {show !== "sheet" && <Mist geometry={glass.geometry} uniforms={g} layer={refract ? FRONT_LAYER : 0} renderOrder={base + 3} on={tune.haze * tune.hazeMist > 0} />}
     </>;
   };
 
@@ -1382,6 +1575,17 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
   // the form itself, as the shape step has it: a category, a deviation inside it, and how far it has grown from its sphere
   { group: "form", knobs: [
     { key: "morph", label: "grown from the sphere  (the shape step's morph)", min: 0, max: 1, step: 0.01 },
+  ] },
+  // the distance step: how far the memory has receded. `haze` is the signal the step
+  // would drive; the rest say what a full haze does
+  { group: "distance", knobs: [
+    { key: "haze", label: "haze  (the distance step's signal; 0 is clear)", min: 0, max: 1, step: 0.01 },
+    { key: "hazeBlur", label: "softness  px  (the frame, blurred)", min: 0, max: 24, step: 0.5 },
+    { key: "hazePhoto", label: "photo blur  (mip levels)", min: 0, max: 5, step: 0.1 },
+    { key: "hazeMist", label: "mist  (the outline fogs)", min: 0, max: 1, step: 0.01 },
+    { key: "hazeSpread", label: "mist reach", min: 0, max: 0.5, step: 0.005 },
+    { key: "hazeWash", label: "fades into the air", min: 0, max: 1, step: 0.01 },
+    { key: "hazeEdge", label: "edges let go  (rim lines, cuts, gloss)", min: 0, max: 1, step: 0.01 },
   ] },
   { group: "glass", knobs: [
     { key: "frostPatches", label: "frost patches", min: 0, max: 3, step: 1 },

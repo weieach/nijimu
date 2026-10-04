@@ -5,7 +5,7 @@ import type { ArtifactForm } from "../lib/superformula";
 import { prepareFilmPhoto } from "../lib/filmLook";
 import { createEdgePrint } from "./filmStrip";
 import {
-  BLANK_PHOTO, FOV, FRONT_LAYER, LOOK_Y, PITCH_MAX, PITCH_MIN, backdropVertex, blitFragment, buildDrapedSheet, buildGlass, buildSheet,
+  BLANK_PHOTO, FOV, FRONT_LAYER, LOOK_Y, Mist, PITCH_MAX, PITCH_MIN, airFor, backdropVertex, blitFragment, buildDrapedSheet, buildGlass, buildSheet,
   createGlassUniformSet, createSheetUniformSet, fitSheetSize, glassFragment, glassRefractFragment, glassVertex, hash2,
   keyFrom, photoLoader, seedDirections, sheetFragment, sheetVertex, writeGlassUniforms, writeSheetUniforms,
   type Glass, type GlassMode, type Room, type Sheet, type SheetFace, type SheetMode, type VesselTune,
@@ -170,8 +170,10 @@ function VesselObject({
   const sheetU = useMemo(() => createSheetUniformSet(edgePrint), [edgePrint]);
   const glassU = useMemo(() => createGlassUniformSet(pass.target.texture), [pass]);
   const groundY = built.glass.lo - 0.02;
-  writeSheetUniforms(sheetU, { tune, seed, sheet: built.sheet, sheetMode, face, key, edgePrint, groundY, reflect: -1 });
-  writeGlassUniforms(glassU, { tune, seed, key, patches, room, groundY, reflect: -1 });
+  // the air a receded memory fades toward: the room, as the lab's backdrop would show it
+  const air = airFor(tune, glassMode, room);
+  writeSheetUniforms(sheetU, { tune, seed, sheet: built.sheet, sheetMode, face, key, edgePrint, groundY, reflect: -1, air });
+  writeGlassUniforms(glassU, { tune, seed, key, patches, room, groundY, reflect: -1, air });
 
   useEffect(() => {
     sheetU.uPhoto.value = BLANK_PHOTO;
@@ -227,6 +229,8 @@ function VesselObject({
       <shaderMaterial key={glassMode} transparent depthWrite={false} side={THREE.FrontSide}
         vertexShader={glassVertex} fragmentShader={refract ? glassRefractFragment : glassFragment} uniforms={glassU} />
     </mesh>
+    {/* the distance's mist, as the editor shows it (the editor's post blur is the lab's own and is not drawn here) */}
+    <Mist geometry={built.glass.geometry} uniforms={glassU} layer={refract ? FRONT_LAYER : 0} renderOrder={3} on={tune.haze * tune.hazeMist > 0} />
   </>;
 }
 
