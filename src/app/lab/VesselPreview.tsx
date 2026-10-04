@@ -23,8 +23,8 @@ import photoB from "../../assets/memory-photo-02.png";
  * clipboard as VESSEL_TUNE_DEFAULT would be written.
  *
  * Five layers, outside to inside, each doing one thing: the glass shell
- * (Fresnel rim, uneven thickness, frost in two or three patches, a seed
- * bubble or two); the gap (air pockets where the sheet touches the wall); the
+ * (Fresnel rim, uneven thickness, frost in two or three patches); the gap
+ * (air pockets where the sheet touches the wall); the
  * sheet (the film lab's strip on the curved wall, a fold or two, one end
  * lifting); the image (the photo as dye through filmLook, deeper than the
  * film lab has it, bled at one corner; mirrored and dimmer from behind); and
@@ -69,7 +69,7 @@ const TURN = PARAMS.has("turn") && Number.isFinite(Number(PARAMS.get("turn"))) ?
 
 export interface VesselTune {
   // glass
-  frostPatches: number; frostSize: number; frostStrength: number; rim: number; thickness: number; bubbles: number;
+  frostPatches: number; frostSize: number; frostStrength: number; rim: number; thickness: number;
   // sheet
   inset: number; arc: number; band: number; lift: number; foldScale: number; stock: number;
   stockThick: number; stockThin: number; wear: number; backFace: number; holeRim: number;
@@ -108,7 +108,7 @@ const SHEET_FACE: SheetFace = PARAMS.get("face") === "glass" ? "glass" : "inside
 
 /** What the lab opens with. */
 export const VESSEL_TUNE_DEFAULT: VesselTune = {
-  frostPatches: 2, frostSize: 0.85, frostStrength: unitParam("frost", GLASS_MODE === "refract" ? 0.15 : 0.4), rim: 1.0, thickness: 0.5, bubbles: 1,
+  frostPatches: 2, frostSize: 0.85, frostStrength: unitParam("frost", GLASS_MODE === "refract" ? 0.15 : 0.4), rim: 1.0, thickness: 0.5,
   inset: 0.92, arc: 211, band: 1.2, lift: 0.048, foldScale: 1.7, stock: 0,
   stockThick: 0.6, stockThin: 0.4, wear: 1.16, backFace: 0.44, holeRim: 0.55,
   sheetSize: 2.26, anchorAngle: 180, anchorHeight: 1.0, tilt: 2, contact: 30.5,
@@ -130,9 +130,19 @@ const mixHex = (a: string, b: string, t: number) => {
   return [ch(16), ch(8), ch(0)] as const;
 };
 const rgb = (c: readonly [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-const envGrey = (l: number, warmth: number): readonly [number, number, number] => {
+const hexRgb = (hex: string): readonly [number, number, number] => {
+  const p = parseInt(hex.slice(1), 16);
+  return [((p >> 16) & 255) / 255, ((p >> 8) & 255) / 255, (p & 255) / 255];
+};
+/** The refraction look's room: the colour above the horizon and the colour
+    below it, each at its lightness knob, leaning warmer with `warmth`. White
+    at a lightness is the grey the room began as. */
+export interface Room { above: string; below: string }
+export const ROOM_DEFAULT: Room = { above: "#ffffff", below: "#ffffff" };
+const envColor = (hex: string, l: number, warmth: number): readonly [number, number, number] => {
   const tint = [0.975 + 0.045 * warmth, 1, 1.02 - 0.045 * warmth];
-  return [0, 1, 2].map((i) => Math.round(Math.min(1, l * tint[i]) * 255)) as unknown as readonly [number, number, number];
+  const c = hexRgb(hex);
+  return [0, 1, 2].map((i) => Math.round(Math.min(1, c[i] * l * tint[i]) * 255)) as unknown as readonly [number, number, number];
 };
 /* Where a ray at the horizon's slope lands on screen follows from the camera
    (y .6 looking at −.05, fov 18). */
@@ -142,9 +152,9 @@ const HALF_TAN = Math.tan((18 / 2) * (Math.PI / 180));
 
 interface Backdrop { stops: [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]]; at: [number, number] }
 /** The film lab's paper, leaning warmer with the knob; or the refraction look's room. */
-function backdropFor(t: VesselTune, mode: GlassMode): Backdrop {
+function backdropFor(t: VesselTune, mode: GlassMode, room: Room): Backdrop {
   if (mode === "refract") {
-    const above = envGrey(t.envAbove, t.warmth), below = envGrey(t.envBelow, t.warmth);
+    const above = envColor(room.above, t.envAbove, t.warmth), below = envColor(room.below, t.envBelow, t.warmth);
     const centre = 0.5 - (Math.asin(Math.max(-1, Math.min(1, t.horizon))) - CAMERA_TILT) / (2 * HALF_TAN);
     const soft = t.horizonSoft / (2 * HALF_TAN);
     return { stops: [above, above, below], at: [Math.max(0, centre - soft), Math.min(1, centre + soft)] };
@@ -719,8 +729,7 @@ const glassVertex = /* glsl */ `
 `;
 
 /* What both glass looks share: the uniforms, the noise, the frost in two or
-   three soft patches (breath on a cold window, placed by the seed), and a
-   seed bubble or two where the glass was poured. */
+   three soft patches (breath on a cold window, placed by the seed). */
 const GLASS_COMMON_GLSL = /* glsl */ `
   ${REFLECT_GLSL}
   uniform vec3 uKey;
@@ -730,11 +739,9 @@ const GLASS_COMMON_GLSL = /* glsl */ `
   uniform float uFrostSize;
   uniform float uFrostStrength;
   uniform float uThickness;
-  uniform float uBubbles;
   uniform float uSeed;
   uniform float uWarmth;
   uniform vec3 uPatch[3];
-  uniform vec3 uBubble[2];
   varying vec3 vNormalW;
   varying vec3 vViewW;
   varying vec3 vModel;
@@ -760,23 +767,12 @@ const GLASS_COMMON_GLSL = /* glsl */ `
     }
     return clamp(breath, 0.0, 1.0) * uFrostStrength * (.7 + .3 * gNoise(vModel * 9.0 - uSeed));
   }
-  // the ring of a seed bubble, 0–1
-  float bubbleAt(vec3 dir) {
-    float ring = 0.0;
-    for (int i = 0; i < 2; i++) {
-      if (float(i) < uBubbles - .5) {
-        float db = length(dir - uBubble[i]);
-        ring += smoothstep(.018, .028, db) * (1.0 - smoothstep(.034, .05, db));
-      }
-    }
-    return ring;
-  }
 `;
 
 /* Thin clear glass, from the descent's formFragment: the rim is light and
    the facing surface nearly disappears. Its thickness is not quite even, so
    the rim is heavier in places; the frost patches; one soft highlight from
-   the key; the bubbles. */
+   the key. */
 const glassFragment = /* glsl */ `
   ${GLASS_COMMON_GLSL}
   void main() {
@@ -801,10 +797,6 @@ const glassFragment = /* glsl */ `
     float spec = pow(max(0.0, dot(reflect(-v, n), uKey)), 28.0) * .28 * uKeyIntensity;
     color += spec;
     alpha += spec * .7;
-
-    float ring = bubbleAt(dir);
-    color += ring * .18;
-    alpha += ring * .45;
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
 `;
@@ -827,6 +819,8 @@ const glassRefractFragment = /* glsl */ `
   uniform vec2 uResolution;
   uniform float uEnvAbove;
   uniform float uEnvBelow;
+  uniform vec3 uAboveColor;
+  uniform vec3 uBelowColor;
   uniform float uHorizon;
   uniform float uHorizonSoft;
   uniform float uBend;
@@ -838,7 +832,7 @@ const glassRefractFragment = /* glsl */ `
   vec3 env(float y) {
     float t = smoothstep(uHorizon - uHorizonSoft, uHorizon + uHorizonSoft, y);
     vec3 tint = mix(vec3(.975, 1.0, 1.02), vec3(1.02, 1.0, .975), uWarmth);
-    return mix(vec3(uEnvBelow), vec3(uEnvAbove), t) * tint;
+    return mix(uBelowColor * uEnvBelow, uAboveColor * uEnvAbove, t) * tint;
   }
   // the frame behind, smeared over a small radius
   vec3 behind(vec2 uv, float radius) {
@@ -910,10 +904,6 @@ const glassRefractFragment = /* glsl */ `
     float line = film * toward * uHighlight * uKeyIntensity * mix(1.0, .3, back);
     color += line * .9;
     alpha += line * .6;
-
-    float ring = bubbleAt(dir) * (1.0 - back);
-    color += ring * .18;
-    alpha += ring * .45;
     alpha *= mix(1.0, .55, back);
     gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0) * reflectFade(vWorld));
   }
@@ -987,7 +977,7 @@ const BLANK_PHOTO = (() => {
   return texture;
 })();
 
-/** Directions on the form for the frost patches and bubbles, from the seed. */
+/** Directions on the form for the frost patches, from the seed. */
 function seedDirections(seed: number, count: number, salt: number): THREE.Vector3[] {
   return Array.from({ length: count }, (_, i) => {
     const u = hash2(seed * 3.1 + i, salt), v = hash2(seed * 1.7 - i, salt + 4.2);
@@ -1010,6 +1000,7 @@ interface StageProps {
   face: SheetFace;
   show: Show;
   backdrop: Backdrop;
+  room: Room;
   url: string;
   seed: number;
   form: ArtifactForm;
@@ -1020,7 +1011,7 @@ interface StageProps {
 /** The glass's facing surface draws on its own layer so it can refract the rest. */
 const FRONT_LAYER = 1;
 
-function Stage({ tune, mode, sheetMode, face, show, backdrop, url, seed, form, held, drag }: StageProps) {
+function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, form, held, drag }: StageProps) {
   const { camera, gl, size } = useThree();
   const group = useRef<THREE.Group>(null);
   const mirror = useRef<THREE.Group>(null);
@@ -1095,7 +1086,6 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, url, seed, form, h
   const look = lookFor(tune);
   const key = keyFrom(tune.keyAzimuth, tune.keyElevation);
   const patches = useMemo(() => seedDirections(seed, 3, 1.1), [seed]);
-  const bubbles = useMemo(() => seedDirections(seed, 2, 9.3), [seed]);
 
   // the sheet and the glass each twice: the thing and its reflection under the table
   const sheetUniformSets = useMemo(() => [0, 1].map(() => ({
@@ -1131,13 +1121,13 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, url, seed, form, h
     uFrostSize: { value: 1 },
     uFrostStrength: { value: 0 },
     uThickness: { value: 0 },
-    uBubbles: { value: 0 },
     uSeed: { value: 0 },
     uWarmth: { value: 0 },
     uPatch: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
-    uBubble: { value: [new THREE.Vector3(), new THREE.Vector3()] },
     uEnvAbove: { value: 0 },
     uEnvBelow: { value: 1 },
+    uAboveColor: { value: new THREE.Color(1, 1, 1) },
+    uBelowColor: { value: new THREE.Color(1, 1, 1) },
     uHorizon: { value: 0 },
     uHorizonSoft: { value: 0.1 },
     uBend: { value: 0 },
@@ -1193,13 +1183,13 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, url, seed, form, h
     u.uFrostSize.value = tune.frostSize;
     u.uFrostStrength.value = tune.frostStrength;
     u.uThickness.value = tune.thickness;
-    u.uBubbles.value = tune.bubbles;
     u.uSeed.value = seed;
     u.uWarmth.value = tune.warmth;
     u.uPatch.value.forEach((p, j) => p.copy(patches[j]));
-    u.uBubble.value.forEach((b, j) => b.copy(bubbles[j]));
     u.uEnvAbove.value = tune.envAbove;
     u.uEnvBelow.value = tune.envBelow;
+    u.uAboveColor.value.set(room.above);
+    u.uBelowColor.value.set(room.below);
     u.uHorizon.value = tune.horizon;
     u.uHorizonSoft.value = tune.horizonSoft;
     u.uBend.value = tune.bend;
@@ -1290,12 +1280,11 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "frostStrength", label: "frost strength", min: 0, max: 1, step: 0.01 },
     { key: "rim", label: "rim", min: 0, max: 1.5, step: 0.01 },
     { key: "thickness", label: "thickness variation", min: 0, max: 1, step: 0.01 },
-    { key: "bubbles", label: "seed bubbles", min: 0, max: 2, step: 1 },
   ] },
   // shown only under the refraction look
   { group: "refraction", knobs: [
-    { key: "envAbove", label: "backdrop  above the horizon", min: 0, max: 1, step: 0.01 },
-    { key: "envBelow", label: "ground  below it", min: 0, max: 1, step: 0.01 },
+    { key: "envAbove", label: "lightness  above the horizon", min: 0, max: 1, step: 0.01 },
+    { key: "envBelow", label: "lightness  below it", min: 0, max: 1, step: 0.01 },
     { key: "horizon", label: "horizon  (0 is eye level)", min: -0.5, max: 0.3, step: 0.005 },
     { key: "horizonSoft", label: "horizon softness", min: 0.01, max: 0.6, step: 0.005 },
     { key: "bend", label: "bend  (pulls the view in)", min: 0, max: 2, step: 0.01 },
@@ -1367,11 +1356,13 @@ export function VesselPreview() {
   const [mode, setMode] = useState<GlassMode>(GLASS_MODE);
   const [sheetMode, setSheetMode] = useState<SheetMode>(SHEET_MODE);
   const [face, setFace] = useState<SheetFace>(SHEET_FACE);
+  const [room, setRoom] = useState<Room>(ROOM_DEFAULT);
   const [show, setShow] = useState<Show>(SHOW);
   const refract = mode === "refract";
-  const backdrop = backdropFor(tune, mode);
-  // the title sits on the backdrop, which is dark under the refraction look
-  const ink = refract && tune.envAbove < 0.55 ? "rgba(226, 228, 228, 0.82)" : CHROME_GRAY;
+  const backdrop = backdropFor(tune, mode, room);
+  // the caption sits on the backdrop's top, which may be dark under the refraction look
+  const topLuma = (0.2126 * backdrop.stops[0][0] + 0.7152 * backdrop.stops[0][1] + 0.0722 * backdrop.stops[0][2]) / 255;
+  const ink = topLuma < 0.55 ? "rgba(226, 228, 228, 0.82)" : CHROME_GRAY;
   // ?photo= is one of the bundled stills by index, or any image URL
   const [url, setUrl] = useState<string>(() => {
     const p = PARAMS.get("photo") ?? "";
@@ -1395,7 +1386,7 @@ export function VesselPreview() {
   const copy = async () => {
     const lines = (Object.keys(VESSEL_TUNE_DEFAULT) as (keyof VesselTune)[]).map((k) => `  ${k}: ${Number(tune[k].toFixed(3))},`);
     try {
-      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}\n// glass: ${mode}, sheet: ${sheetMode}, face: ${face}, show: ${show}, stock: ${STOCKS[tune.stock]?.name ?? tune.stock}, seed: ${seed.toFixed(3)}`);
+      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}\n// glass: ${mode}, sheet: ${sheetMode}, face: ${face}, room: ${room.above} / ${room.below}, show: ${show}, stock: ${STOCKS[tune.stock]?.name ?? tune.stock}, seed: ${seed.toFixed(3)}`);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch { /* clipboard refused — the values are still on screen */ }
@@ -1421,18 +1412,10 @@ export function VesselPreview() {
       <Canvas camera={{ position: [0, 0.6, CAMERA_Z], fov: 18, near: 0.1, far: 50 }}
         dpr={[1, 2]} gl={{ antialias: true, alpha: true }}
         style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: "calc(100% - 260px)" }}>
-        <Stage tune={tune} mode={mode} sheetMode={sheetMode} face={face} show={show} backdrop={backdrop} url={url} seed={seed} form={form} held={held} drag={drag} />
+        <Stage tune={tune} mode={mode} sheetMode={sheetMode} face={face} show={show} backdrop={backdrop} room={room} url={url} seed={seed} form={form} held={held} drag={drag} />
       </Canvas>
 
       <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20, color: ink }}>lab — vessel</p>
-
-      <div style={{ position: "absolute", left: "calc(50% - 130px)", top: 56, transform: "translateX(-50%)", width: "min(30em, 70vw)",
-        textAlign: "center", pointerEvents: "none" }}>
-        <p style={{ ...TITLE, margin: 0, color: ink }}>the memory, as a vessel</p>
-        <p style={{ margin: "8px 0 0", fontFamily: SERIF, fontSize: NOTE_SIZE, lineHeight: 1.45, color: ink }}>
-          drop a photo anywhere, or choose one below. hold to stop the turn; drag to turn it yourself.
-        </p>
-      </div>
 
       {/* hold to stop the turn, drag to turn */}
       <button type="button" aria-label="hold to stop the turn, drag to turn"
@@ -1464,6 +1447,24 @@ export function VesselPreview() {
         {KNOBS.filter(({ group, only }) => (group !== "refraction" || refract) && (!only || only === sheetMode)).map(({ group, knobs }) => (
           <section key={group} style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
             <p style={{ ...META, margin: "0 0 2px", color: CHROME_GRAY }}>{group}</p>
+            {group === "refraction" && (
+              <div style={{ display: "flex", gap: 18, marginBottom: 4 }}>
+                {(["above", "below"] as const).map((side) => {
+                  // what is picked is what is seen: the lightness knob goes to 1 with a pick, and can dim it after
+                  const shown = rgb(envColor(room[side], tune[side === "above" ? "envAbove" : "envBelow"], tune.warmth));
+                  return (
+                    <label key={side} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, cursor: "pointer", whiteSpace: "nowrap" }}>
+                      <span style={{ position: "relative", width: 22, height: 22, borderRadius: 11, background: shown, border: "1px solid rgba(123,123,135,.3)", overflow: "hidden" }}>
+                        <input type="color" aria-label={`room colour ${side} the horizon`} value={room[side]}
+                          onChange={(e) => { const hex = e.target.value; setRoom((r) => ({ ...r, [side]: hex })); setTune((t) => ({ ...t, [side === "above" ? "envAbove" : "envBelow"]: 1 })); }}
+                          style={{ position: "absolute", inset: -8, width: 40, height: 40, opacity: 0, cursor: "pointer", border: "none", padding: 0 }} />
+                      </span>
+                      {side === "above" ? "above the horizon" : "below"}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
             {group === "sheet" && (
               <div role="radiogroup" aria-label="sheet" style={{ display: "flex", gap: 16, marginBottom: 4 }}>
                 {(["pressed", "draped"] as const).map((m) => {
@@ -1558,7 +1559,7 @@ export function VesselPreview() {
         ))}
         <div style={{ display: "flex", gap: 18, marginTop: 14, flexWrap: "wrap" }}>
           <TextButton label="another strip" onClick={() => setSeed(Math.random() * 10)} style={{ fontSize: NOTE_SIZE }} />
-          <TextButton label="reset" onClick={() => setTune(VESSEL_TUNE_DEFAULT)} style={{ fontSize: NOTE_SIZE }} />
+          <TextButton label="reset" onClick={() => { setTune(VESSEL_TUNE_DEFAULT); setRoom(ROOM_DEFAULT); }} style={{ fontSize: NOTE_SIZE }} />
           <TextButton label={copied ? "copied" : "copy values"} onClick={() => void copy()} style={{ fontSize: NOTE_SIZE }} />
         </div>
       </aside>

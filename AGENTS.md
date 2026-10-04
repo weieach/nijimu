@@ -125,6 +125,18 @@ question), the key highlight line, how the sheet sits for a portrait photo
 the back-wall fix. The second step the user named — the sheet wrap inside the
 descent behind `?wrap=sheet` — was not started.
 
+Small changes the same day: the seed bubble in the glass (a ring the user
+read as a stray dot) is removed entirely — shader, knob, uniforms. The lab's
+title and its line of instructions are gone; only the "lab — vessel" caption
+stays. The refraction look's room takes colour: two colour pickers at the
+head of the refraction group, above the horizon and below (`Room`,
+`ROOM_DEFAULT` white/white, page state, reset with "reset", noted in "copy
+values"); the lightness knobs multiply the colour (a pick sets its lightness
+to 1 so what is picked is what is seen), and the horizon and its softness
+remain the gradient. The glass's grazing reflection (`env()`) and the
+backdrop quad read the same colours, so the glass reflects the room it sits
+in. The caption's ink now follows the actual top colour's luma.
+
 The vessel's sheet has two builds since 2026-10-04, switched by a
 "pressed to the wall / draped" radio at the top of the sheet group
 (`?sheet=draped`; pressed is the default and unchanged). The user's ask: the
