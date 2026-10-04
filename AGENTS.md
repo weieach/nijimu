@@ -137,9 +137,48 @@ remain the gradient. The glass's grazing reflection (`env()`) and the
 backdrop quad read the same colours, so the glass reflects the room it sits
 in. The caption's ink now follows the actual top colour's luma.
 
+The turn is the eye's, since 2026-10-04: the camera orbits the form
+(`yaw` from the slow turn and the horizontal drag, `pitch` and `distance`
+from the "camera" knob group, the vertical drag writing `pitch`; `?pitch=`,
+−35…85°, 4° is the still life) while the form, the key light and the room
+stay in the world, so walking round it the lit side comes and goes and the
+horizon's reflection slides over the glass — the lighting change the user
+asked for comes from that, not from a moving light. The backdrop's horizon
+follows the pitch (`backdropFor`). Under the table there is no table: the
+ground tone and the mirrored reflection fade as the eye goes below it
+(`tableFade`; `uReflect` −1 now marks the thing itself, 0 a reflection faded
+out). The perforations are knobs too (the "sheet" group): `holeSize` (0
+removes them), `holeWidth`, `holeFade` (1 leaves a faint mark where the cut
+would be, not a hole) and the existing rim — in `filmStrip.ts` as
+`uHoleShrink`/`uHoleFade`, 0 unless set so the descent and the film lab draw
+true 35mm unchanged. The photo can be drained and inverted the same way:
+`mono` and `negative` (0–1) at the foot of the "dye" group, applied in
+`stripFace` after `filmLook` as `uMono`/`uNegative` (0 unless set), the
+dye's density following what is left so a negative's clear sky holds dark.
+
+The form can be changed in the panel too, to try the vessel on softer
+bodies without a new mechanism: a "form" group at the top with the twelve
+superformula categories as radios (choosing one draws a fresh deviation
+inside it through `createArtifactForm`, as the shape step's debug picker
+does; "another form" draws again in the same category; `?form=`/`?category=`
+still set the opening form), the form described under them
+(`describeForm`), and `morph` as a knob (0–1, the shape step's
+morphProgress — how far the body has grown from its sphere; was the fixed
+`?morph=`, default .6). The glass, its wall map and the sheet rebuild from
+it. "copy values" writes the form's description above the values. The
+softest bodies the mechanism makes are sphere (the BLOB variant, m 4, n
+1.6–2.6) and rounded box (m 4, n 3–8); the user's question was whether the
+sheet reads better in one of those than in the star-like default.
+
 The vessel's sheet has two builds since 2026-10-04, switched by a
 "pressed to the wall / draped" radio at the top of the sheet group
-(`?sheet=draped`; pressed is the default and unchanged). The user's ask: the
+(`?sheet=pressed`; draped became the default once the user had tuned it —
+the pressed build is unchanged). `VESSEL_TUNE_DEFAULT` and `ROOM_DEFAULT`
+(#b3b3b3 above / #ffffff below) hold the user's settling of the refraction
+look with the draped sheet: glass rim .38, thickness .3, frost size 1.25;
+refraction bend .75, smear .64, thick-dark .21, highlight .34, lightness 1 /
+.84; feel sheer .92, furred edge .2, sheen .31, gloss .43; dye lift .06,
+soft .45, leak .72, photo opacity .83. The user's ask: the
 fold should not run along the inner wall but hang like soft fabric, bending
 when it wants to and leaving natural air between its face and the wall.
 `buildDrapedSheet` is its own cloth — a 72×24 grid in true strip mm

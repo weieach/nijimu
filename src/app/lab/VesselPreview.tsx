@@ -8,7 +8,7 @@ import { FILM_LOOK_DEFAULT, FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto, 
 import { SHEET_GLSL, STOCKS, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, setStock, sheetUniforms, stockHex } from "./filmStrip";
 import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
 import {
-  ARTIFACT_CATEGORIES, computeMeshNormals, createArtifactForm, type ArtifactCategory, type ArtifactForm,
+  ARTIFACT_CATEGORIES, CATEGORY_LABELS, computeMeshNormals, createArtifactForm, describeForm, type ArtifactCategory, type ArtifactForm,
 } from "../lib/superformula";
 import photoA from "../../assets/memory-photo.jpg";
 import photoB from "../../assets/memory-photo-02.png";
@@ -17,10 +17,14 @@ import photoB from "../../assets/memory-photo-02.png";
  * Lab: the memory as a glass vessel, with the film tucked inside. A still
  * life of the end state under a new idea — one form of thin, almost clear
  * glass, and pressed loosely along its inner wall the 35mm strip from the
- * film lab, carrying the photo. Nothing moves but a slow turn; hold to stop
- * it, drag to turn it yourself. The photo is a thing inside the glass, not a
- * map on its surface. Sliders down the right; "copy values" puts them on the
- * clipboard as VESSEL_TUNE_DEFAULT would be written.
+ * film lab, carrying the photo. Nothing moves but a slow turn — the eye's,
+ * walking round the still life while the form, the key and the room stay put,
+ * so the light on it changes as it would; hold to stop it, drag across to
+ * turn it yourself, up and down to look down on the form or up at it from
+ * under the table (the "camera" group: pitch, distance, turn; ?pitch= to
+ * open there). The photo is a thing inside the glass, not a map on its
+ * surface. Sliders down the right; "copy values" puts them on the clipboard
+ * as VESSEL_TUNE_DEFAULT would be written.
  *
  * Five layers, outside to inside, each doing one thing: the glass shell
  * (Fresnel rim, uneven thickness, frost in two or three patches); the gap
@@ -41,13 +45,14 @@ import photoB from "../../assets/memory-photo-02.png";
  * soaked paper rather than film (the "feel" group: sheer, furred edge,
  * sheen, gloss, grain — neutral when pressed).
  *
- * ?morph= (0–1) sets how far the form has grown from its sphere, ?frost= the
- * strength the frost knob opens at, ?form= the seed the form is drawn from,
- * ?category= its category, ?yaw= the turn it opens at in degrees (180 is
+ * ?morph= (0–1) sets how far the form has grown from its sphere (the "form"
+ * group's knob; its categories redraw the form as the shape step's picker
+ * does), ?frost= the strength the frost knob opens at, ?form= the seed the
+ * form is drawn from, ?category= its category, ?yaw= the turn it opens at in degrees (180 is
  * the far face), ?turn= the turn speed (0 holds it still), ?photo=0|1 the
  * bundled still, or an image URL, ?glass=frost the first glass look (the
  * refracting one is the default), ?show=glass|sheet one layer alone,
- * ?sheet=draped the hanging sheet (pressed is the default), ?face=glass the
+ * ?sheet=pressed the wall-relief sheet (draped is the default), ?face=glass the
  * strip turned over so its picture side faces the wall (inside is the default).
  */
 
@@ -66,13 +71,23 @@ const CATEGORY = (ARTIFACT_CATEGORIES as readonly string[]).includes(PARAMS.get(
 const YAW = ((Number(PARAMS.get("yaw")) || 0) * Math.PI) / 180;
 /** The turn speed the lab opens at, rad/s; ?turn=0 holds it still for a comparison. */
 const TURN = PARAMS.has("turn") && Number.isFinite(Number(PARAMS.get("turn"))) ? Math.max(0, Number(PARAMS.get("turn"))) : 0.06;
+/** The view's elevation, degrees: 0 is level with the form, positive looks down on
+    it, negative up at it from under the table (the table and its reflection fade
+    as the eye goes under). The opening one is ?pitch=, else the still life's 4°. */
+const PITCH_MIN = -35, PITCH_MAX = 85;
+const PITCH = PARAMS.has("pitch") && Number.isFinite(Number(PARAMS.get("pitch")))
+  ? Math.min(PITCH_MAX, Math.max(PITCH_MIN, Number(PARAMS.get("pitch")))) : 4;
 
 export interface VesselTune {
+  // glass
+  // form
+  morph: number;
   // glass
   frostPatches: number; frostSize: number; frostStrength: number; rim: number; thickness: number;
   // sheet
   inset: number; arc: number; band: number; lift: number; foldScale: number; stock: number;
   stockThick: number; stockThin: number; wear: number; backFace: number; holeRim: number;
+  holeSize: number; holeWidth: number; holeFade: number;
   // drape (the second sheet: its own cloth, hung from the wall)
   sheetSize: number; anchorAngle: number; anchorHeight: number; tilt: number; contact: number;
   sag: number; peel: number; curl: number; twist: number; gap: number; soft: number;
@@ -81,13 +96,16 @@ export interface VesselTune {
   // dye
   dyeLift: number; dyeContrast: number; dyeShoulder: number; dyeSaturation: number; dyeGrain: number;
   dyeSoft: number; dyeExposure: number; dyeLeak: number; photoOpacity: number; bleed: number;
+  mono: number; negative: number;
   // refraction (the second glass look)
   envAbove: number; envBelow: number; horizon: number; horizonSoft: number;
   bend: number; glassSoft: number; bodyAlpha: number; thickDark: number; highlight: number;
   // light
   keyAzimuth: number; keyElevation: number; keyIntensity: number;
+  // camera (the eye orbits the form; the light stays in the room)
+  pitch: number; distance: number; turn: number;
   // scene
-  turn: number; ground: number; warmth: number;
+  ground: number; warmth: number;
 }
 
 /** The two glass looks: frost patches on a toned shell, or the frame behind refracted. */
@@ -99,7 +117,7 @@ const SHOW: Show = PARAMS.get("show") === "glass" || PARAMS.get("show") === "she
 /** The two sheets: pressed along the wall (the glass inset, a relief of folds), or
     draped — its own cloth, hung from a line of contact, curling away from the wall. */
 export type SheetMode = "pressed" | "draped";
-const SHEET_MODE: SheetMode = PARAMS.get("sheet") === "draped" ? "draped" : "pressed";
+const SHEET_MODE: SheetMode = PARAMS.get("sheet") === "pressed" ? "pressed" : "draped";
 /** Which side of the sheet carries the emulsion — the near face (sharp, lit, the
     picture the right way round): facing the inside of the vessel, or turned
     over to face the glass wall. */
@@ -108,18 +126,22 @@ const SHEET_FACE: SheetFace = PARAMS.get("face") === "glass" ? "glass" : "inside
 
 /** What the lab opens with. */
 export const VESSEL_TUNE_DEFAULT: VesselTune = {
-  frostPatches: 2, frostSize: 0.85, frostStrength: unitParam("frost", GLASS_MODE === "refract" ? 0.15 : 0.4), rim: 1.0, thickness: 0.5,
+  morph: MORPH,
+  frostPatches: 2, frostSize: 1.25, frostStrength: unitParam("frost", GLASS_MODE === "refract" ? 0.15 : 0.4), rim: 0.38, thickness: 0.3,
   inset: 0.92, arc: 211, band: 1.2, lift: 0.048, foldScale: 1.7, stock: 0,
   stockThick: 0.6, stockThin: 0.4, wear: 1.16, backFace: 0.44, holeRim: 0.55,
+  holeSize: 1, holeWidth: 1, holeFade: 0,
   sheetSize: 2.26, anchorAngle: 180, anchorHeight: 1.0, tilt: 2, contact: 30.5,
   sag: 21, peel: 69, curl: 0.35, twist: 15, gap: 0.03, soft: 0.7,
-  sheer: 0.8, softRim: 0.35, sheen: 0.35, gloss: 0.15, grain: 0.04,
-  dyeLift: 0.04, dyeContrast: 0.96, dyeShoulder: 0.5, dyeSaturation: 0.9, dyeGrain: 0.03,
-  dyeSoft: 0.3, dyeExposure: 0.01, dyeLeak: 0.3, photoOpacity: 0.8, bleed: 0.53,
-  envAbove: 0.3, envBelow: 0.9, horizon: 0.06, horizonSoft: 0.35,
-  bend: 0.8, glassSoft: 0.6, bodyAlpha: 0.85, thickDark: 0.5, highlight: 0.7,
+  sheer: 0.92, softRim: 0.2, sheen: 0.31, gloss: 0.43, grain: 0.04,
+  dyeLift: 0.06, dyeContrast: 0.96, dyeShoulder: 0.5, dyeSaturation: 0.9, dyeGrain: 0.03,
+  dyeSoft: 0.45, dyeExposure: 0.01, dyeLeak: 0.72, photoOpacity: 0.83, bleed: 0.53,
+  mono: 0, negative: 0,
+  envAbove: 1, envBelow: 0.84, horizon: 0.06, horizonSoft: 0.35,
+  bend: 0.75, glassSoft: 0.64, bodyAlpha: 0.85, thickDark: 0.21, highlight: 0.34,
   keyAzimuth: -32, keyElevation: 64, keyIntensity: 1.08,
-  turn: TURN, ground: 0.5, warmth: 0.4,
+  pitch: PITCH, distance: 9, turn: TURN,
+  ground: 0.5, warmth: 0.4,
 };
 
 /* ───────── the backdrop, as the page and the canvas both draw it ───────── */
@@ -138,24 +160,25 @@ const hexRgb = (hex: string): readonly [number, number, number] => {
     below it, each at its lightness knob, leaning warmer with `warmth`. White
     at a lightness is the grey the room began as. */
 export interface Room { above: string; below: string }
-export const ROOM_DEFAULT: Room = { above: "#ffffff", below: "#ffffff" };
+export const ROOM_DEFAULT: Room = { above: "#b3b3b3", below: "#ffffff" };
 const envColor = (hex: string, l: number, warmth: number): readonly [number, number, number] => {
   const tint = [0.975 + 0.045 * warmth, 1, 1.02 - 0.045 * warmth];
   const c = hexRgb(hex);
   return [0, 1, 2].map((i) => Math.round(Math.min(1, c[i] * l * tint[i]) * 255)) as unknown as readonly [number, number, number];
 };
 /* Where a ray at the horizon's slope lands on screen follows from the camera
-   (y .6 looking at −.05, fov 18). */
-const CAMERA_Z = 9.0;
-const CAMERA_TILT = Math.atan2(-0.05 - 0.6, CAMERA_Z);
-const HALF_TAN = Math.tan((18 / 2) * (Math.PI / 180));
+   (looking at the form's middle from `distance` away at `pitch`, fov 18). */
+const LOOK_Y = -0.05;
+const FOV = 18;
+const HALF_TAN = Math.tan((FOV / 2) * (Math.PI / 180));
 
 interface Backdrop { stops: [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]]; at: [number, number] }
 /** The film lab's paper, leaning warmer with the knob; or the refraction look's room. */
 function backdropFor(t: VesselTune, mode: GlassMode, room: Room): Backdrop {
   if (mode === "refract") {
     const above = envColor(room.above, t.envAbove, t.warmth), below = envColor(room.below, t.envBelow, t.warmth);
-    const centre = 0.5 - (Math.asin(Math.max(-1, Math.min(1, t.horizon))) - CAMERA_TILT) / (2 * HALF_TAN);
+    // the eye pitched down by p sees a level ray p above the screen's centre
+    const centre = 0.5 - (Math.asin(Math.max(-1, Math.min(1, t.horizon))) + (t.pitch * Math.PI) / 180) / (2 * HALF_TAN);
     const soft = t.horizonSoft / (2 * HALF_TAN);
     return { stops: [above, above, below], at: [Math.max(0, centre - soft), Math.min(1, centre + soft)] };
   }
@@ -581,12 +604,13 @@ function buildDrapedSheet(glass: Glass, inset: number, d: Drape): Sheet {
 /* ───────── shaders ───────── */
 
 /* Shared by glass and sheet: a mirrored copy under the ground fades with its
-   depth below the table (uReflect is its strength; 0 is the thing itself). */
+   depth below the table (uReflect is its strength, which may be 0 once the eye
+   has gone under the table; the thing itself carries −1). */
 const REFLECT_GLSL = /* glsl */ `
   uniform float uReflect;
   uniform float uGroundY;
   float reflectFade(vec3 world) {
-    return uReflect > 0.0 ? uReflect * (1.0 - smoothstep(0.0, 1.3, uGroundY - world.y)) : 1.0;
+    return uReflect >= 0.0 ? uReflect * (1.0 - smoothstep(0.0, 1.3, uGroundY - world.y)) : 1.0;
   }
 `;
 
@@ -1013,10 +1037,9 @@ const FRONT_LAYER = 1;
 
 function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, form, held, drag }: StageProps) {
   const { camera, gl, size } = useThree();
-  const group = useRef<THREE.Group>(null);
-  const mirror = useRef<THREE.Group>(null);
   const yaw = useRef(YAW);
-  useEffect(() => { camera.lookAt(0, -0.05, 0); }, [camera]);
+  // how much of the table is there: 1 with the eye above it, 0 once it has gone under
+  const tableFade = useRef(1);
 
   /* The refraction pass: everything but the glass's facing surface is drawn
      to a target, the target is copied to the screen, and the facing surface
@@ -1070,7 +1093,8 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
   backdropUniforms.uAt1.value = backdrop.at[0];
   backdropUniforms.uAt2.value = backdrop.at[1];
 
-  const glass = useMemo(() => buildGlass(form, MORPH), [form]);
+  const morph = tune.morph;
+  const glass = useMemo(() => buildGlass(form, morph), [form, morph]);
   useEffect(() => () => glass.geometry.dispose(), [glass]);
   const { inset, arc, band, lift, foldScale } = tune;
   const { sheetSize, anchorAngle, anchorHeight, tilt, contact, sag, peel, curl, twist, gap, soft } = tune;
@@ -1155,6 +1179,11 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     u.uStockThick.value = tune.stockThick;
     u.uStockThin.value = tune.stockThin;
     u.uHoleRim.value = tune.holeRim;
+    // the knobs say how much perforation is left; the shader takes how much is gone
+    u.uHoleShrink.value.set(1 - tune.holeSize * tune.holeWidth, 1 - tune.holeSize);
+    u.uHoleFade.value = tune.holeFade;
+    u.uMono.value = tune.mono;
+    u.uNegative.value = tune.negative;
     u.uArc.value = sheet.arc;
     u.uYScale.value = sheet.yScale;
     u.uWear.value = tune.wear / 1.6;
@@ -1171,7 +1200,7 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     u.uGrain.value = draped ? tune.grain : 0;
     u.uKey.value.copy(key);
     u.uKeyIntensity.value = tune.keyIntensity;
-    u.uReflect.value = i === 0 ? 0 : 0.22 * tune.ground;
+    u.uReflect.value = i === 0 ? -1 : 0.22 * tune.ground * tableFade.current;
     u.uGroundY.value = groundY;
     u.uEdgePrint.value = edgePrint;
   });
@@ -1197,10 +1226,10 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     u.uBodyAlpha.value = tune.bodyAlpha;
     u.uThickDark.value = tune.thickDark;
     u.uHighlight.value = tune.highlight;
-    u.uReflect.value = i === 0 ? 0 : 0.22 * tune.ground;
+    u.uReflect.value = i === 0 ? -1 : 0.22 * tune.ground * tableFade.current;
     u.uGroundY.value = groundY;
   });
-  groundUniforms.uGround.value = tune.ground;
+  groundUniforms.uGround.value = tune.ground * tableFade.current;
   groundUniforms.uWarmth.value = tune.warmth;
   groundUniforms.uRadius.value = radius;
 
@@ -1220,16 +1249,29 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
     return () => { live = false; texture?.dispose(); };
   }, [url, sheetUniformSets]);
 
-  const turn = tune.turn;
+  /* The eye orbits the form; the form, the key and the room stay where they
+     are, so turning it is walking round a still life — the lit side comes and
+     goes, the horizon's reflection slides over the glass, the sheet is seen
+     through and then against the light. Yaw is the slow turn plus the drag;
+     pitch and distance are knobs (the drag writes pitch too). */
+  const { turn, pitch, distance, ground } = tune;
   useFrame((_, dt) => {
-    if (!group.current || !mirror.current) return;
     let y = yaw.current;
     if (!held.current) y += turn * Math.min(dt, 0.1);
     y += drag.current ?? 0;
     drag.current = 0;
     yaw.current = y;
-    group.current.rotation.y = y;
-    mirror.current.rotation.y = y;
+    const p = (pitch * Math.PI) / 180;
+    camera.position.set(-Math.sin(y) * Math.cos(p) * distance, LOOK_Y + Math.sin(p) * distance, Math.cos(y) * Math.cos(p) * distance);
+    camera.lookAt(0, LOOK_Y, 0);
+    // under the table there is no table: its tone and the reflection in it go
+    const fade = smooth01((camera.position.y - groundY + 0.45) / 0.7);
+    if (fade !== tableFade.current) {
+      tableFade.current = fade;
+      sheetUniformSets[1].uReflect.value = 0.22 * ground * fade;
+      glassUniformSets[1].uReflect.value = 0.22 * ground * fade;
+      groundUniforms.uGround.value = ground * fade;
+    }
   });
 
   // the material is keyed by the look so the shader is rebuilt on a switch; the far
@@ -1265,8 +1307,8 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
       <shaderMaterial transparent depthWrite={false} vertexShader={groundVertex} fragmentShader={groundFragment} uniforms={groundUniforms} />
     </mesh>
     {/* the reflection: the same meshes mirrored in the table, fading with depth */}
-    <group ref={mirror} scale={[1, -1, 1]} position={[0, 2 * groundY, 0]}>{layers(true)}</group>
-    <group ref={group}>{layers(false)}</group>
+    <group scale={[1, -1, 1]} position={[0, 2 * groundY, 0]}>{layers(true)}</group>
+    <group>{layers(false)}</group>
   </>;
 }
 
@@ -1274,6 +1316,10 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
 
 interface Knob { key: keyof VesselTune; label: string; min: number; max: number; step: number; only?: SheetMode }
 const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
+  // the form itself, as the shape step has it: a category, a deviation inside it, and how far it has grown from its sphere
+  { group: "form", knobs: [
+    { key: "morph", label: "grown from the sphere  (the shape step's morph)", min: 0, max: 1, step: 0.01 },
+  ] },
   { group: "glass", knobs: [
     { key: "frostPatches", label: "frost patches", min: 0, max: 3, step: 1 },
     { key: "frostSize", label: "frost size", min: 0.4, max: 2.5, step: 0.05 },
@@ -1302,7 +1348,10 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "stockThick", label: "stock alpha  thick", min: 0.2, max: 1, step: 0.01 },
     { key: "stockThin", label: "stock alpha  thin", min: 0.1, max: 0.95, step: 0.01 },
     { key: "wear", label: "edge wear  mm", min: 0.05, max: 1.6, step: 0.01 },
-    { key: "holeRim", label: "perforation rim", min: 0, max: 1, step: 0.01 },
+    { key: "holeSize", label: "perforations  size  (0 is none)", min: 0, max: 1, step: 0.01 },
+    { key: "holeWidth", label: "perforations  width", min: 0, max: 1, step: 0.01 },
+    { key: "holeFade", label: "perforations  fade  (1 is a mark, not a cut)", min: 0, max: 1, step: 0.01 },
+    { key: "holeRim", label: "perforations  rim", min: 0, max: 1, step: 0.01 },
     { key: "backFace", label: "far face", min: 0, max: 1, step: 0.01 },
   ] },
   // shown only under the draped sheet: how it hangs
@@ -1337,14 +1386,21 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "dyeLeak", label: "light leak", min: 0, max: 1, step: 0.01 },
     { key: "photoOpacity", label: "photo opacity", min: 0.3, max: 1, step: 0.01 },
     { key: "bleed", label: "bled corner", min: 0, max: 1, step: 0.01 },
+    { key: "mono", label: "drained to grey", min: 0, max: 1, step: 0.01 },
+    { key: "negative", label: "negative  (1 is the inverted film)", min: 0, max: 1, step: 0.01 },
   ] },
   { group: "light", knobs: [
     { key: "keyAzimuth", label: "key azimuth °", min: -180, max: 180, step: 1 },
     { key: "keyElevation", label: "key elevation °", min: 0, max: 90, step: 1 },
     { key: "keyIntensity", label: "intensity", min: 0, max: 2, step: 0.01 },
   ] },
-  { group: "scene", knobs: [
+  // the eye: orbiting, so the light on the form changes as it would walking round it
+  { group: "camera", knobs: [
+    { key: "pitch", label: "pitch °  (down on it … up at it)", min: PITCH_MIN, max: PITCH_MAX, step: 0.5 },
+    { key: "distance", label: "distance", min: 5, max: 16, step: 0.1 },
     { key: "turn", label: "turn  rad/s", min: 0, max: 0.4, step: 0.005 },
+  ] },
+  { group: "scene", knobs: [
     { key: "ground", label: "ground", min: 0, max: 1, step: 0.01 },
     { key: "warmth", label: "background warmth", min: 0, max: 1, step: 0.01 },
   ] },
@@ -1371,10 +1427,18 @@ export function VesselPreview() {
   });
   const [seed, setSeed] = useState(() => 3.7);
   const [copied, setCopied] = useState(false);
-  const [form] = useState(() => createArtifactForm({ seed: FORM_SEED, category: CATEGORY }));
+  // the form as the shape step would hand it on: ?form= and ?category= to start, then a
+  // category chosen in the panel draws a fresh deviation inside it, "another form" another
+  const [form, setForm] = useState(() => createArtifactForm({ seed: FORM_SEED, category: CATEGORY }));
+  const formDraws = useRef(0);
+  const drawForm = (category: ArtifactCategory) => {
+    formDraws.current++;
+    setForm(createArtifactForm({ seed: `${FORM_SEED}|${category}|${formDraws.current}`, category }));
+  };
   const held = useRef(false);
   const drag = useRef(0);
   const lastX = useRef(0);
+  const lastY = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const takeFile = (file: File | undefined) => {
@@ -1386,7 +1450,7 @@ export function VesselPreview() {
   const copy = async () => {
     const lines = (Object.keys(VESSEL_TUNE_DEFAULT) as (keyof VesselTune)[]).map((k) => `  ${k}: ${Number(tune[k].toFixed(3))},`);
     try {
-      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}\n// glass: ${mode}, sheet: ${sheetMode}, face: ${face}, room: ${room.above} / ${room.below}, show: ${show}, stock: ${STOCKS[tune.stock]?.name ?? tune.stock}, seed: ${seed.toFixed(3)}`);
+      await navigator.clipboard.writeText(`{\n${lines.join("\n")}\n}\n// form: ${describeForm(form)}\n// glass: ${mode}, sheet: ${sheetMode}, face: ${face}, room: ${room.above} / ${room.below}, show: ${show}, stock: ${STOCKS[tune.stock]?.name ?? tune.stock}, seed: ${seed.toFixed(3)}`);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch { /* clipboard refused — the values are still on screen */ }
@@ -1398,18 +1462,23 @@ export function VesselPreview() {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic events have no pointer to capture */ }
     held.current = true;
     lastX.current = e.clientX;
+    lastY.current = e.clientY;
   };
+  // across turns the view round the form; up and down raise and lower the eye
   const onPointerMove = (e: ReactPointerEvent<HTMLButtonElement>) => {
     if (!held.current) return;
     drag.current += (e.clientX - lastX.current) * 0.008;
+    const dy = e.clientY - lastY.current;
     lastX.current = e.clientX;
+    lastY.current = e.clientY;
+    if (dy !== 0) setTune((t) => ({ ...t, pitch: Math.min(PITCH_MAX, Math.max(PITCH_MIN, t.pitch - dy * 0.25)) }));
   };
 
   return (
     <main onDragOver={(e) => e.preventDefault()} onDrop={onDrop}
       style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: backdropCss(backdrop) }}>
       {/* a long lens, as the still-life references are shot: the far wall projects nearly as large as the near one */}
-      <Canvas camera={{ position: [0, 0.6, CAMERA_Z], fov: 18, near: 0.1, far: 50 }}
+      <Canvas camera={{ position: [0, 0.6, 9], fov: FOV, near: 0.1, far: 50 }}
         dpr={[1, 2]} gl={{ antialias: true, alpha: true }}
         style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: "calc(100% - 260px)" }}>
         <Stage tune={tune} mode={mode} sheetMode={sheetMode} face={face} show={show} backdrop={backdrop} room={room} url={url} seed={seed} form={form} held={held} drag={drag} />
@@ -1417,8 +1486,8 @@ export function VesselPreview() {
 
       <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20, color: ink }}>lab — vessel</p>
 
-      {/* hold to stop the turn, drag to turn */}
-      <button type="button" aria-label="hold to stop the turn, drag to turn"
+      {/* hold to stop the turn, drag across to turn, up and down to look down on it or up at it */}
+      <button type="button" aria-label="hold to stop the turn, drag to look round the form"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
         onContextMenu={(e) => e.preventDefault()}
@@ -1447,6 +1516,29 @@ export function VesselPreview() {
         {KNOBS.filter(({ group, only }) => (group !== "refraction" || refract) && (!only || only === sheetMode)).map(({ group, knobs }) => (
           <section key={group} style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
             <p style={{ ...META, margin: "0 0 2px", color: CHROME_GRAY }}>{group}</p>
+            {group === "form" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 4 }}>
+                <div role="radiogroup" aria-label="category" style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px" }}>
+                  {ARTIFACT_CATEGORIES.map((c) => {
+                    const on = c === form.category;
+                    return (
+                      <button key={c} type="button" role="radio" aria-checked={on} onClick={() => drawForm(c)}
+                        style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                          color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                        {CATEGORY_LABELS[c]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={describeForm(form)}>
+                    {describeForm(form)}
+                  </span>
+                  <TextButton label="another form" onClick={() => drawForm(form.category)} style={{ fontSize: NOTE_SIZE, flexShrink: 0 }} />
+                </div>
+              </div>
+            )}
             {group === "refraction" && (
               <div style={{ display: "flex", gap: 18, marginBottom: 4 }}>
                 {(["above", "below"] as const).map((side) => {

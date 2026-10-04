@@ -15,14 +15,22 @@ export const STRIP_GLSL = /* glsl */ `
   const float PITCH = 4.75;
   const float HOLE_Y = 14.1;
   const vec2 HOLE = vec2(.99, 1.395);
+  /* The perforations can be made less of: uHoleShrink takes that fraction off each
+     side (x across the strip's length, y its width; 1 and they are gone), uHoleFade
+     is how far the cut stops short of going through (1 and it is only a mark).
+     Both are 0 unless set, so a shader that does not carry them draws true 35mm. */
+  uniform vec2 uHoleShrink;
+  uniform float uHoleFade;
   float stripRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
   }
-  /** Signed distance to the nearest perforation, mm. */
+  /** Signed distance to the nearest perforation, mm; far away once they are gone. */
   float stripHole(vec2 mm) {
+    vec2 b = HOLE * clamp(1.0 - uHoleShrink, 0.0, 1.0);
+    if (min(b.x, b.y) < .02) return 1e3;
     float hx = mod(mm.x + PITCH * .5, PITCH) - PITCH * .5;
-    return stripRoundedBox(vec2(hx, abs(mm.y) - HOLE_Y), HOLE, .42);
+    return stripRoundedBox(vec2(hx, abs(mm.y) - HOLE_Y), b, min(.42, min(b.x, b.y)));
   }
 `;
 
@@ -78,6 +86,14 @@ export const SHEET_DEFAULT = {
   stockThin: 0.6,
   /** How much the perforations' cut edges catch the light, 0–1. */
   holeRim: 1,
+  /** How much is taken off the perforations, along and across the strip (0 is true 35mm, 1 none). */
+  holeShrink: [0, 0] as [number, number],
+  /** How far short of cutting through the perforations stop (0 cut, 1 a faint mark). */
+  holeFade: 0,
+  /** The photo drained to grey (0 as the film look leaves it, 1 grey). */
+  mono: 0,
+  /** The photo as a negative (0 the positive print, 1 the negative). */
+  negative: 0,
 };
 
 /**
@@ -96,6 +112,10 @@ export const SHEET_GLSL = /* glsl */ `
   uniform float uStockThick;
   uniform float uStockThin;
   uniform float uHoleRim;
+  /* The photo after its film look: uMono drains its colour to grey, uNegative turns
+     it into the negative (both 0…1, 0 unless set — the positive print as developed). */
+  uniform float uMono;
+  uniform float uNegative;
 
   /* The stock: an even base with a slow drift between two tints across the strip, a stain
      or two, a little darker toward the long edges. Then its thickness, which is not even —
@@ -137,7 +157,7 @@ export const SHEET_GLSL = /* glsl */ `
     float inside = -d;
     float rim = smoothstep(0.0, .22, inside) * (1.0 - smoothstep(.22, .8, inside));
     float shade = smoothstep(.8, 1.5, inside) * (1.0 - smoothstep(1.5, 2.8, inside));
-    float holeRim = smoothstep(0.0, .18, dh) * (1.0 - smoothstep(.18, .6, dh)) * uHoleRim;
+    float holeRim = smoothstep(0.0, .18, dh) * (1.0 - smoothstep(.18, .6, dh)) * uHoleRim * (1.0 - uHoleFade);
     color += rim * .07 + holeRim * .06 - shade * .022;
     a += (1.0 - smoothstep(0.0, .9, inside)) * .22 + holeRim * .18;
   }
@@ -175,7 +195,9 @@ export const STRIP_FACE_GLSL = /* glsl */ `
     float alpha = 1.0 - smoothstep(-feather - aa, aa, d);
     float scuff = filmNoise(vec2(mm.x * .45, mm.y * 2.0) + seed * 4.0);
     alpha *= 1.0 - smoothstep(13.0, 17.0, abs(mm.y)) * smoothstep(.45, .85, scuff) * .35;
-    alpha *= smoothstep(-fwidth(dh) - .12, fwidth(dh), dh);
+    // the perforation: cut through, or with uHoleFade only part way — a thinner place in the stock
+    float cut = smoothstep(-fwidth(dh) - .12, fwidth(dh), dh);
+    alpha *= mix(cut, mix(.55, 1.0, cut), uHoleFade);
     return alpha;
   }
   /* The face: the stock, and in its window the photo developed through filmLook and laid in as
@@ -196,6 +218,9 @@ export const STRIP_FACE_GLSL = /* glsl */ `
     if (boxAspect > imageAspect) uv.y *= imageAspect / boxAspect;
     else uv.x *= boxAspect / imageAspect;
     vec3 image = filmLook(photo, uv + .5, bias);
+    // grey, then the negative; the dye's density follows what is left
+    image = mix(image, vec3(filmLuma(image)), uMono);
+    image = mix(image, 1.0 - image, uNegative);
     float luma = filmLuma(image);
     float windowAlpha = sheetDyeAlpha(luma);
     // the stock's own tint shows through the dye a little
@@ -228,6 +253,10 @@ export function sheetUniforms(stock: StockPalette = STOCKS[STOCK_DEFAULT]) {
     uStockThick: { value: SHEET_DEFAULT.stockThick },
     uStockThin: { value: SHEET_DEFAULT.stockThin },
     uHoleRim: { value: SHEET_DEFAULT.holeRim },
+    uHoleShrink: { value: new THREE.Vector2(...SHEET_DEFAULT.holeShrink) },
+    uHoleFade: { value: SHEET_DEFAULT.holeFade },
+    uMono: { value: SHEET_DEFAULT.mono },
+    uNegative: { value: SHEET_DEFAULT.negative },
   };
   setStock(uniforms, stock);
   return uniforms;
