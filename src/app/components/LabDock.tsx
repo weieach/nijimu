@@ -5,19 +5,24 @@ import { SHAPE_DISTANCE_PATH, SHAPE_FEELING_PATH, SHAPE_GROW_PATH } from "../lib
 
 /**
  * Shortcuts from the landing field to the editors that open on their own,
- * without walking the create flow. The three labs carry their own sliders.
- * The three shape steps are the live ones; they open on a sample form.
+ * without walking the create flow. The four labs carry their own sliders;
+ * the gallery lab is the dive gallery seated with vessels. The three shape
+ * steps are the live ones; they open on a sample form.
  */
 const ENTRIES: { to: string; label: string; hint: string; icon: IconName }[] = [
   { to: "/lab/descent", label: "descent", hint: "the shot, with its knobs", icon: "descent" },
   { to: "/lab/film", label: "film", hint: "the photo's look", icon: "film" },
   { to: "/lab/vessel", label: "vessel", hint: "the glass, with its sliders", icon: "vessel" },
+  { to: "/lab/gallery", label: "gallery", hint: "the memories as vessels", icon: "gallery" },
   { to: SHAPE_GROW_PATH, label: "shape", hint: "the form", icon: "shape" },
   { to: SHAPE_FEELING_PATH, label: "color", hint: "how it feels", icon: "color" },
   { to: SHAPE_DISTANCE_PATH, label: "distance", hint: "how much it holds", icon: "distance" },
 ];
 
-type IconName = "descent" | "film" | "vessel" | "shape" | "color" | "distance";
+/** Where the gap sits: after the labs, before the live steps. */
+const LIVE_FROM = 4;
+
+type IconName = "descent" | "film" | "vessel" | "gallery" | "shape" | "color" | "distance";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -51,6 +56,16 @@ function Icon({ name }: { name: IconName }) {
       <svg {...common}>
         <path d="M9 4.5c.4 1.6-.2 2.4-1.2 3.2C6 9 5 10.4 5 13.2 5 17 8 19.5 12 19.5s7-2.5 7-6.3c0-2.8-1-4.2-2.8-5.5-1-.8-1.6-1.6-1.2-3.2" />
         <path d="M9.2 4.5h5.6" />
+      </svg>
+    );
+  }
+  if (name === "gallery") {
+    // three vessels along the gallery's curve, the near one largest
+    return (
+      <svg {...common}>
+        <path d="M3 8.5c.6 1.6 1.9 2.4 3.2 1.6s1.3-2.4.6-3.4" />
+        <path d="M8.8 11.4c.5 2.2 2.3 3.4 4.2 2.6 1.9-.8 2.2-2.9 1.4-4.6" />
+        <path d="M14.2 14.8c.4 2.9 2.8 4.7 5 3.8 2.1-.9 2.3-3.5 1.4-5.6" />
       </svg>
     );
   }
@@ -105,7 +120,7 @@ export function LabDock() {
             alignItems: "center",
             gap: 8,
             margin: 0,
-            marginTop: i === 3 ? 10 : 0,
+            marginTop: i === LIVE_FROM ? 10 : 0,
             padding: "5px 8px",
             border: "none",
             background: "transparent",

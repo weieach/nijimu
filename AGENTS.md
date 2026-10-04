@@ -236,11 +236,12 @@ behave as before — `buildArchive()` for the items and `SceneViewer` in the
 seat. The preview provides it and renders `MemoryCarouselPage` itself, so
 the S-curve (`carouselSeat`), caption, timescale, arrows, wheel/keys,
 overscroll to the pond and the exit are the gallery's own. The route is a
-child of `RootLayout` so `GlobalControls` is there, and the live gallery
-offers it top-left: a small "vessels" link beside the back arrow in
-`PuddleDiveGallery` (a router `Link`, drawn only when no override is
-present, so the preview itself does not show it) — the one visible change
-to a live screen from this work. Its ten items are
+child of `RootLayout` so `GlobalControls` is there, and it can be reached
+from the landing's top-left dock (`LabDock`, a "gallery" entry under
+vessel) and from the live gallery, where a small "vessels" link sits beside
+the back arrow in `PuddleDiveGallery` (a router `Link`, drawn only when no
+override is present, so the preview itself does not show it) — the two
+visible changes to live screens from this work. Its ten items are
 `LIFE_EVENTS` 0, 2, 3, 5, 7, 8, 9, 11, 13, 15 with a fresh form in each of
 sphere, rounded box, cylinder, prism, diamond, flower, star, gear, hybrid,
 torn (`createArtifactForm({ seed: "vessel|<id>", category })`, `evolve`
