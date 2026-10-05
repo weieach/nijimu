@@ -393,8 +393,9 @@ export function buildSheet(glass: Glass, inset: number, arcDeg: number, band: nu
 
 /** The wall as a radius per direction, binned from the glass's own vertices, so a
     point can be asked how far out it may go: the form is star-shaped about its
-    centre (the superformula is radial), so inside is |p| < wallR(dir). */
-function buildWallMap(glass: Glass): (x: number, y: number, z: number) => number {
+    centre (the superformula is radial), so inside is |p| < wallR(dir). Only the
+    positions are read, so a live geometry's array can be asked as it grows. */
+export function buildWallMap(glass: Pick<Glass, "positions">): (x: number, y: number, z: number) => number {
   const LON = 96, LAT = 48;
   const sum = new Float64Array(LON * LAT), count = new Float64Array(LON * LAT);
   const p = glass.positions;
@@ -693,12 +694,15 @@ export function buildDrapedSheet(glass: Glass, inset: number, d: Drape): Sheet {
 
 /* Shared by glass and sheet: a mirrored copy under the ground fades with its
    depth below the table (uReflect is its strength, which may be 0 once the eye
-   has gone under the table; the thing itself carries −1). */
+   has gone under the table; the thing itself carries −1). uReveal is how much
+   of the vessel is there at all — 1 here and in the gallery; the descent brings
+   it up out of the water. */
 const REFLECT_GLSL = /* glsl */ `
   uniform float uReflect;
   uniform float uGroundY;
+  uniform float uReveal;
   float reflectFade(vec3 world) {
-    return uReflect >= 0.0 ? uReflect * (1.0 - smoothstep(0.0, 1.3, uGroundY - world.y)) : 1.0;
+    return (uReflect >= 0.0 ? uReflect * (1.0 - smoothstep(0.0, 1.3, uGroundY - world.y)) : 1.0) * uReveal;
   }
 `;
 
@@ -762,6 +766,9 @@ export const sheetFragment = /* glsl */ `
   uniform float uHazeEdge;
   uniform float uHazeWash;
   uniform vec3 uAir;
+  /* how far the picture has come up in the window, 0…1.45 (darks first, as the film's
+     develop); 1.45 is the developed print, which the lab and the gallery hold */
+  uniform float uDevelop;
   varying vec3 vRest;
   varying float vLift;
   varying float vCrease;
@@ -791,7 +798,7 @@ export const sheetFragment = /* glsl */ `
     float bias = (facing ? 0.0 : 1.6) + uHazePhoto;
     vec3 color;
     float a;
-    stripFace(mm, uSeed, d, dh, inFrame, uPhoto, uImageAspect, bias, uEdgePrint, 1.45, color, a);
+    stripFace(mm, uSeed, d, dh, inFrame, uPhoto, uImageAspect, bias, uEdgePrint, uDevelop, color, a);
 
     // creases read whiter; where the sheet lies on the wall, a trapped pocket of air is a shade lighter
     color += vCrease * .10;
@@ -1429,6 +1436,8 @@ export function createSheetUniformSet(edgePrint: THREE.Texture) {
     uKeyIntensity: { value: 1 },
     uReflect: { value: 0 },
     uGroundY: { value: 0 },
+    uReveal: { value: 1 },
+    uDevelop: { value: 1.45 },
     uHazePhoto: { value: 0 },
     uHazeEdge: { value: 0 },
     uHazeWash: { value: 0 },
@@ -1465,6 +1474,7 @@ export function createGlassUniformSet(scene: THREE.Texture) {
     uResolution: { value: new THREE.Vector2(1, 1) },
     uReflect: { value: 0 },
     uGroundY: { value: 0 },
+    uReveal: { value: 1 },
     uHazePhoto: { value: 0 },
     uHazeEdge: { value: 0 },
     uHazeWash: { value: 0 },

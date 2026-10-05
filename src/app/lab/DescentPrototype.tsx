@@ -25,22 +25,23 @@ import { PillButton } from "../components/PillButton";
 import { OklchColorField } from "../components/OklchColorField";
 import { CAPTION_TITLE_GAP, CAPTION_TITLE_STYLE, CAPTION_YEAR_STYLE } from "../components/PuddleDiveGallery";
 import { MODEL_SPACE } from "../components/SceneViewer";
-import {
-  MEMORY_PHOTO_FILTER_DEFAULTS,
-  buildPhotoUv,
-  createMemoryPhotoMaterial,
-} from "../components/MemoryPhotoLayer";
+import { buildPhotoUv } from "../components/MemoryPhotoLayer";
 import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
 import { computeMeshNormals, type ArtifactForm } from "../lib/superformula";
 import { assignMemoryShape, isMemoryAssignment, type MemoryAssignment } from "../lib/memoryShape";
 import { requestMemoryAssessment } from "../lib/assessMemory";
-import { DEFAULT_OKLCH, meshCoreFromOklch, oklchToHex, rimFromOklch, sampleField, uvFromOklch, type Oklch } from "../lib/oklch";
+import { DEFAULT_OKLCH, oklchToHex, sampleField, uvFromOklch, type Oklch } from "../lib/oklch";
 import { FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto } from "../lib/filmLook";
 import { SHEET_GLSL, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, sheetUniforms } from "./filmStrip";
 import {
   CLOUD_KNOBS, CLOUD_TRACKS, CLOUD_TUNE_DEFAULT, buildCloudGeometry, cloudPhaseBlocks, createCloudMaterial, createCloudUniforms,
   setCloudUniforms, type CloudTune, type PhaseBlock, type TuneKnob,
 } from "./wrapCloud";
+import {
+  FOV, FRONT_LAYER, Mist, VESSEL_TUNE_DEFAULT, backdropVertex, blitFragment, buildDrapedSheet, buildGlass, buildWallMap,
+  createGlassUniformSet, createSheetUniformSet, fitSheetSize, glassRefractFragment, glassVertex, keyFrom, seedDirections,
+  sheetFragment, sheetVertex, writeGlassUniforms, writeSheetUniforms, type Room, type SheetUniformSet, type VesselTune,
+} from "./VesselPreview";
 import photoA from "../../assets/memory-photo.jpg";
 import photoB from "../../assets/memory-photo-02.png";
 
@@ -55,6 +56,13 @@ import photoB from "../../assets/memory-photo-02.png";
  * tray; the form then rises, breaks the surface, and is named where it
  * floats. (With `?cloud=1` the photo instead leaves the film as a point
  * cloud that falls onto the form — `wrapCloud.ts`, kept out of the shot.)
+ *
+ * The form is the vessel of /lab/vessel (VesselPreview.tsx): thin refracting
+ * glass with the 35mm strip draped along its inner wall, the photo a thing
+ * inside the glass, there from the moment the form surfaces (`?print=wrap`
+ * has the strip hang blank until the wrap, when the photo develops into it).
+ * The distance step is the vessel's own haze; the colour step reaches the
+ * glass only through the room it reflects.
  *
  * The water is the pond's own wave field (POND_WAVES_GLSL) with an underside
  * added. While the form is being handled the water loses color and
@@ -87,6 +95,24 @@ const HOLD_S = 1.1;
 const DESCENT_S = 6.2;
 const FORM_AT = new THREE.Vector3(0, -5, -1.2);
 const FORM_REVEAL_S: [number, number] = [3.9, 7];
+/** The turn the form opens at: the sheet hangs on the vessel's −z wall (anchorAngle 180),
+    and the view looks down −z, so a half turn puts the picture toward the eye. */
+const OPEN_YAW = Math.PI;
+/** The vessel's radius as a fraction of the screen's half-height in the lab (radius ~1,
+    `distance` 9, fov 18) — the size its refraction knobs were tuned at. */
+const LAB_ON_SCREEN = 1 / (9 * Math.tan((FOV / 2) * Math.PI / 180));
+/* The vessel as the gallery seats it (VesselGalleryPreview's tune): draped sheet, face
+   to the glass, the perforations reduced, no table; `haze` is written each frame from the
+   distance step, `frostStrength` is pinned so the descent's own ?frost= does not reach it. */
+const VESSEL_TUNE: VesselTune = {
+  ...VESSEL_TUNE_DEFAULT,
+  morph: 0, frostStrength: 0.15,
+  holeSize: 0.6, holeWidth: 0.75, holeFade: 0.75, holeRim: 0.25,
+  mono: 0, negative: 0,
+  pitch: 4, turn: 0, ground: 0, haze: 0,
+};
+/** The room the glass reflects, before the water's colours are written over it each frame. */
+const VESSEL_ROOM: Room = { above: "#e6e7ea", below: "#ffffff" };
 /** How far the water gives way to paper while the form is being handled. */
 const WATER_WASH = 1.0;
 /** The wash comes in as the form surfaces out of the water, seconds into the descent. */
@@ -106,28 +132,29 @@ interface WrapTune extends CloudTune {
   cameraY: number; cameraZ: number; lookY: number; lookZ: number; formY: number; formZ: number; viewSink: number;
   // the view turned about the look point, in degrees — to watch the fall from another side; the shot itself does not change
   orbitYaw: number; orbitPitch: number;
-  // the rise has its own turn: taken up over the first part of the rise, held while the form is in the water,
-  // and let go between riseViewUntil and riseViewBack (fractions of the rise) as it comes up to the pond view
-  riseYaw: number; risePitch: number; riseViewUntil: number; riseViewBack: number;
+  // the rise: the eye keeps the wrap's offset to the form and goes up with it, looking at it, until
+  // riseViewUntil of the rise; between there and riseViewBack it crosses to the pond view, where the memory is named.
+  // riseAbove lifts the eye's offset a little as it follows, so the form is seen from slightly above by the surface
+  riseViewUntil: number; riseViewBack: number; riseAbove: number;
   /** How much the form grows for the wrap, as a fraction of its size: .3 is 1.3× across, ~2.2× the volume. */
   grow: number;
   /** Seen from under the water the film is backlit; this is how much of its image still shows (was .42). */
   filmBelow: number;
-  // timing: the emulsion lets go over releaseS (the cloud's release spread is fixed when it is built — on "again"); the wrap ends at fallS
+  // timing: the cloud (?cloud=1 only) releases over releaseS, fixed when it is built — on "again"; the wrap ends at fallS
   releaseS: number; fallS: number;
-  // the print develops on the form over overlayIn…overlayOut (seconds after the emulsion begins to let go):
-  // the darks lead by developDarks, the top of the image by developSweep, each part coming up over developSoft
-  overlayIn: number; overlayOut: number; developDarks: number; developSweep: number; developSoft: number;
+  // the print develops into the strip inside the glass over overlayIn…overlayOut (seconds after the
+  // emulsion begins to let go) — darks first, as the film's own develop brings an image up
+  overlayIn: number; overlayOut: number;
 }
 const WRAP_TUNE_DEFAULT: WrapTune = {
   ...CLOUD_TUNE_DEFAULT,
   cameraY: -3.0, cameraZ: 8.6, lookY: -1.1, lookZ: 2.0, formY: -2.8, formZ: 2.0, viewSink: 0.45,
   orbitYaw: 0, orbitPitch: 0,
-  riseYaw: -18, risePitch: -49, riseViewUntil: 0.45, riseViewBack: 0.85,
+  riseViewUntil: 0.5, riseViewBack: 0.92, riseAbove: 0.6,
   grow: 0.3,
   filmBelow: 0.6,
   releaseS: 2.2, fallS: 8.0,
-  overlayIn: 3.2, overlayOut: 7.0, developDarks: 0.8, developSweep: 0.6, developSoft: 0.35,
+  overlayIn: 3.2, overlayOut: 7.0,
 };
 /* The transport: pause, speed, and a seek along the wrap and the rise. The
    page writes `paused`, `speed` and `seek`; the stage reads them each frame
@@ -150,26 +177,16 @@ const WRAP_FORM_AT = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.formY, WRAP_TUNE_DEF
 const WRAP_MOVE_S = 2.2;
 /* The rise: up through the surface, to the seat where the memory is named. */
 const RISE_S = 6.0;
+/** The film thins away as the eye passes under it on the way down (camera depth, world units) and does not return. */
+const FILM_GONE_DEPTH: [number, number] = [0.05, 0.9];
 const NAME_FORM_AT = new THREE.Vector3(0, 0.95, 2.0);
-const RISE_PATH = new THREE.CatmullRomCurve3([
-  WRAP_CAMERA.clone(),
-  new THREE.Vector3(0, -1.8, 7.6),
-  new THREE.Vector3(0, 0.5, 8.8),
-  new THREE.Vector3(0, 2.3, 9.7),
-  POND_CAMERA.clone(),
-], false, "centripetal");
-const RISE_LOOK = new THREE.CatmullRomCurve3([
-  WRAP_LOOK.clone(),
-  new THREE.Vector3(0, -1.0, 1.0),
-  new THREE.Vector3(0, 0.2, 1.6),
-  new THREE.Vector3(0, 0.8, 1.9),
-  NAME_FORM_AT.clone(),
-], false, "centripetal");
+/* The form comes straight up under the film to its seat; the first point is the
+   wrap's seat, written live from the panel. The eye has no path of its own: it
+   follows the form (see the frame loop) and crosses to the pond view at the end. */
 const RISE_FORM = new THREE.CatmullRomCurve3([
   WRAP_FORM_AT.clone(),
-  new THREE.Vector3(0, -2.2, 0.4),
-  new THREE.Vector3(0, -0.6, 1.4),
-  new THREE.Vector3(0, 0.6, 1.9),
+  new THREE.Vector3(0, -1.7, 2.0),
+  new THREE.Vector3(0, -0.3, 2.0),
   NAME_FORM_AT.clone(),
 ], false, "centripetal");
 
@@ -211,6 +228,9 @@ const CAMERA_ENABLED = PARAMS.get("camera") !== "off";
 const FROM: "wrap" | null = PARAMS.get("from") === "wrap" ? "wrap" : null;
 /** `?cloud=1`: the photo leaves the film as a point cloud (`wrapCloud.ts`). Off by default — not part of the shot. */
 const CLOUD = PARAMS.get("cloud") === "1";
+/** The photo is in the strip inside the glass from the moment the form surfaces, as the
+    gallery seats it; `?print=wrap` has it develop into the strip at the wrap instead. */
+const PRINT_EARLY = PARAMS.get("print") !== "wrap";
 const toggleCloud = () => {
   const url = new URL(window.location.href);
   if (CLOUD) url.searchParams.delete("cloud"); else url.searchParams.set("cloud", "1");
@@ -413,6 +433,7 @@ const filmFragment = /* glsl */ `
   uniform float uDissolve;
   uniform float uBelow;
   uniform float uDevelop;
+  uniform float uFade;
   varying vec2 vLocal;
   varying vec3 vWorld;
   varying vec3 vNormal;
@@ -427,7 +448,7 @@ const filmFragment = /* glsl */ `
     // the dissolve: the emulsion lets go in a drifting grain, image first
     float grain = filmNoise(mm * vec2(.9, 1.6) + uSeed * 5.0) * .7 + filmNoise(mm * 4.0) * .3;
     float gone = 1.0 - smoothstep(uDissolve - .3, uDissolve, grain * .8 + .1);
-    alpha *= 1.0 - gone;
+    alpha *= (1.0 - gone) * uFade;
     if (alpha < .01) discard;
 
     // the face: stock, the photo developing into the window as dye, the cut edge, the edge print
@@ -478,52 +499,16 @@ const motesFragment = /* glsl */ `
   }
 `;
 
-const formVertex = /* glsl */ `
-  varying vec3 vNormalW;
-  varying vec3 vViewW;
-  void main() {
-    vec4 world = modelMatrix * vec4(position, 1.0);
-    vNormalW = normalize(mat3(modelMatrix) * normal);
-    vViewW = normalize(cameraPosition - world.xyz);
-    gl_Position = projectionMatrix * viewMatrix * world;
-  }
-`;
-/* Glass in the water. uFrost mists it (the distance step); uCore / uRim dye it
-   once the color step has a pick (uDye). Above the surface (uAir) it hardens a
-   little: more rim, less of the water's own color inside it. */
-const formFragment = /* glsl */ `
-  ${VOLUME_GLSL}
-  uniform float uReveal;
-  uniform float uFrost;
-  uniform float uDye;
-  uniform float uAir;
-  uniform vec3 uCore;
-  uniform vec3 uRim;
-  varying vec3 vNormalW;
-  varying vec3 vViewW;
-  void main() {
-    vec3 n = normalize(vNormalW);
-    vec3 v = normalize(vViewW);
-    float facing = max(0.0, dot(n, v));
-    float fresnel = pow(1.0 - facing, 2.2);
-    vec3 core = mix(vec3(.62, .70, .70), uCore, uDye);
-    // against the dark water the edge is light; against the paper it turns a cool grey, as the landing blobs do
-    vec3 rimBase = mix(vec3(.93, .96, .95), vec3(.66, .71, .73), uWash * .85);
-    vec3 rim = mix(rimBase, mix(uRim, rimBase, .5), uDye);
-    vec3 color = mix(core, rim, fresnel);
-    color += pow(max(0.0, dot(reflect(-v, n), normalize(vec3(-.3, 1.0, .4)))), 40.0) * .35;
-    // frost: the body goes milky and opaque, the rim softens; lit a little from above so it keeps its volume
-    vec3 milk = mix(vec3(.87, .89, .895), core, .35) * (.94 + .08 * n.y);
-    color = mix(color, milk, uFrost * (.75 - .35 * fresnel));
-    float alpha = mix(.18 + .7 * fresnel, .62 + .3 * fresnel, uFrost);
-    // in air the glass is clearer and its edge darker
-    color = mix(color, mix(color, uRim * .85 + .1, fresnel * .5), uAir * uDye);
-    alpha = mix(alpha, alpha * .9 + .08 * fresnel, uAir);
-    // it surfaces out of the water's own color rather than fading in on top of it
-    color = mix(color, volumeColor(-v), (1.0 - uReveal) * .9);
-    gl_FragColor = vec4(color, alpha * uReveal);
-  }
-`;
+/* The water's colours as the vessel's room: what the glass reflects at a grazing
+   angle and fades toward at a distance. Under the water the body's high and
+   mid tones; while the form is handled, the paper the water washes to; in the
+   air above, the sky. The colour pick reaches them as the water's tint does. */
+const ROOM_WATER_ABOVE = new THREE.Color(0.80, 0.86, 0.84);
+const ROOM_WATER_BELOW = new THREE.Color(0.55, 0.64, 0.63);
+const ROOM_PAPER_ABOVE = new THREE.Color(0.93, 0.93, 0.934);
+const ROOM_PAPER_BELOW = new THREE.Color(0.784, 0.788, 0.808);
+const ROOM_SKY = new THREE.Color(0.888, 0.902, 0.897);
+const ROOM_SURFACE = new THREE.Color(0.86, 0.89, 0.88);
 
 /* The touch. While the form is being handled the frame is drawn once more
    through the water near the hands: a soft lens gathers around each hand and
@@ -645,7 +630,7 @@ interface StageProps {
 }
 
 function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, glowRef, hintRef, pickRef, captionRef, onFallStart, onSettled, onDescend, onUnder, onWrapped, onRisen, onRewound }: StageProps) {
-  const { camera, size, gl } = useThree();
+  const { camera, size, gl, scene } = useThree();
   const time = useRef(0);
   const jumped = useRef(false);
   const dropIndex = useRef(0);
@@ -656,6 +641,8 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
   const developAt = useRef<number | null>(null);
   const landedAt = useRef<number | null>(null);
   const settled = useRef(false);
+  /** How far the film has thinned away under the descending eye, 0…1; only ever rises. */
+  const filmGone = useRef(0);
   const hold = useRef(0);
   const wasHolding = useRef(false);
   const descentAt = useRef<number | null>(null);
@@ -666,9 +653,11 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
   const risen = useRef(false);
   const broke = useRef(false);
   const film = useRef<THREE.Mesh>(null);
-  const form = useRef<THREE.Mesh>(null);
+  /** The vessel: glass, sheet and mist under one transform. */
+  const form = useRef<THREE.Group>(null);
+  const glassMesh = useRef<THREE.Mesh>(null);
+  const mist = useRef<THREE.Group>(null);
   const particles = useRef<THREE.Points>(null);
-  const photoMaterial = useRef<THREE.ShaderMaterial | null>(null);
   const smooth = useRef({ morph: 0, frost: 0, wash: 0, dye: 0, spin: 0 });
   const written = useRef(-1);
   const touches = useRef([
@@ -682,15 +671,55 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     flat: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, FILM_YAW, 0, "YXZ")),
     cameraAt: new THREE.Vector3(), lookAt: new THREE.Vector3(), formAt: new THREE.Vector3(),
     wrapCamera: WRAP_CAMERA.clone(), wrapLook: WRAP_LOOK.clone(), wrapForm: WRAP_FORM_AT.clone(),
+    roomAbove: new THREE.Color(), roomBelow: new THREE.Color(),
   }), []);
 
   /* The form: a superformula artifact of its own, grown from its sphere pose.
-     Growth is written on the CPU, as BubbleViewer does, so the photo overlay —
-     which shares the geometry — follows every vertex. */
+     Growth is written on the CPU, as BubbleViewer does; the glass is this
+     geometry, and the sheet inside follows it (below). */
   const artifact = useMemo(() => createArtifactGeometry(artifactForm), [artifactForm]);
   const normals = useMemo(() => new Float32Array(artifact.rest.normals.length), [artifact]);
-  useEffect(() => { written.current = -1; }, [artifact]);
+  const vesselMorphed = useRef(false);
+  useEffect(() => { written.current = -1; vesselMorphed.current = false; }, [artifact]);
   useEffect(() => () => artifact.geometry.dispose(), [artifact]);
+
+  /* The vessel's sheet: the strip draped along the inner wall, settled once
+     against the sphere pose (the cloth solve is not a per-frame thing), its
+     size fitted to that cavity. As the glass grows out of the sphere each
+     vertex of the cloth goes with the wall in its own direction — the
+     superformula is radial about its centre, so the wall is a radius per
+     direction (buildWallMap) and the cloth keeps its place against it. */
+  const vessel = useMemo(() => {
+    const sphere = buildGlass(artifactForm, 0);
+    const sheetSize = fitSheetSize(sphere);
+    const t = VESSEL_TUNE;
+    const sheet = buildDrapedSheet(sphere, t.inset, {
+      sheetSize, anchorAngle: t.anchorAngle, anchorHeight: t.anchorHeight, tilt: t.tilt, contact: t.contact,
+      sag: t.sag, peel: t.peel, curl: t.curl, twist: t.twist, gap: t.gap, soft: t.soft,
+    });
+    const rest = (sheet.geometry.getAttribute("position").array as Float32Array).slice();
+    const wall0 = buildWallMap(sphere);
+    const base = new Float32Array(rest.length / 3);
+    for (let v = 0; v < base.length; v++) base[v] = wall0(rest[v * 3], rest[v * 3 + 1], rest[v * 3 + 2]);
+    return { sheet, rest, base, normals: new Float32Array(rest.length), groundY: sphere.lo - 0.02, sphere };
+  }, [artifactForm]);
+  useEffect(() => () => { vessel.sheet.geometry.dispose(); vessel.sphere.geometry.dispose(); }, [vessel]);
+  const followWall = () => {
+    const wall = buildWallMap({ positions: artifact.geometry.getAttribute("position").array as Float32Array });
+    const { sheet, rest, base } = vessel;
+    const pos = sheet.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const out = pos.array as Float32Array;
+    for (let v = 0; v < base.length; v++) {
+      const x = rest[v * 3], y = rest[v * 3 + 1], z = rest[v * 3 + 2];
+      const f = wall(x, y, z) / (base[v] || 1);
+      out[v * 3] = x * f; out[v * 3 + 1] = y * f; out[v * 3 + 2] = z * f;
+    }
+    pos.needsUpdate = true;
+    computeMeshNormals(out, sheet.geometry.index!.array, vessel.normals);
+    const n = sheet.geometry.getAttribute("normal") as THREE.BufferAttribute;
+    (n.array as Float32Array).set(vessel.normals);
+    n.needsUpdate = true;
+  };
   const writeMorph = (m: number) => {
     const { rest, geometry } = artifact;
     const out = geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -703,6 +732,8 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     (n.array as Float32Array).set(normals);
     n.needsUpdate = true;
     written.current = m;
+    // the cloth is already settled for the sphere; it is moved only once the glass has left it (and once more on the way back)
+    if (m > 0.0005 || vesselMorphed.current) { followWall(); vesselMorphed.current = m > 0.0005; }
   };
 
   const waves = useMemo(() => ({
@@ -748,20 +779,58 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       // starts fully dissolved, and gathers itself over EMERGE_S
       uDissolve: { value: 1.2 },
       uBelow: { value: WRAP_TUNE_DEFAULT.filmBelow },
+      // the whole strip's alpha: 1 until the eye has gone under it, then it thins away for good
+      uFade: { value: 1 },
     };
   }, [waves]);
   const motesUniforms = useMemo(() => ({
     uTime: waves.uTime, uUnder: under, uWash: water.uWash, uPixel: { value: gl.getPixelRatio() },
   }), [waves, water, under, gl]);
-  const formUniforms = useMemo(() => ({
-    ...water,
-    uReveal: { value: 0 },
-    uFrost: { value: 0 },
-    uDye: { value: 0 },
-    uAir: { value: 0 },
-    uCore: { value: new THREE.Color(meshCoreFromOklch(DEFAULT_OKLCH)) },
-    uRim: { value: new THREE.Color(rimFromOklch(DEFAULT_OKLCH)) },
-  }), [water]);
+  /* The vessel's two materials. The refraction pass: everything on layer 0 —
+     the water, the film, the motes, the sheet inside the glass — is drawn to a
+     target the glass's walls then sample (FRONT_LAYER), displaced along their
+     normals; the touch pass below takes the finished frame from there. */
+  const refract = useMemo(() => {
+    const target = new THREE.WebGLRenderTarget(1, 1, { samples: 4, depthBuffer: true, stencilBuffer: false });
+    const blit = new THREE.ShaderMaterial({
+      vertexShader: backdropVertex, fragmentShader: blitFragment,
+      uniforms: { tScene: { value: target.texture } },
+      depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blit);
+    quad.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(quad);
+    return { target, blit, quad, scene };
+  }, []);
+  useEffect(() => () => { refract.target.dispose(); refract.blit.dispose(); refract.quad.geometry.dispose(); }, [refract]);
+  // the strip inside is the strip that fell: the same seed for its tears and stains, the same edge print
+  const sheetU = useMemo(() => {
+    const u = createSheetUniformSet(filmUniforms.uEdgePrint.value);
+    u.uReveal.value = 0;
+    u.uDevelop.value = PRINT_EARLY ? 1.45 : 0;
+    return u;
+  }, [filmUniforms]);
+  const glassU = useMemo(() => {
+    const u = createGlassUniformSet(refract.target.texture);
+    u.uReveal.value = 0;
+    return u;
+  }, [refract]);
+  const vesselTune = useMemo(() => ({ ...VESSEL_TUNE }), []);
+  const vesselKey = useMemo(() => keyFrom(VESSEL_TUNE.keyAzimuth, VESSEL_TUNE.keyElevation), []);
+  const vesselPatches = useMemo(() => seedDirections(filmUniforms.uSeed.value, 3, 1.1), [filmUniforms]);
+  const writeVessel = (haze: number, above: THREE.Color, below: THREE.Color) => {
+    vesselTune.haze = haze;
+    const seed = filmUniforms.uSeed.value;
+    const air = [above.r, above.g, above.b] as const;
+    writeSheetUniforms(sheetU, {
+      tune: vesselTune, seed, sheet: vessel.sheet, sheetMode: "draped", face: "glass", key: vesselKey,
+      edgePrint: filmUniforms.uEdgePrint.value, groundY: vessel.groundY, reflect: -1, air,
+    });
+    writeGlassUniforms(glassU, { tune: vesselTune, seed, key: vesselKey, patches: vesselPatches, room: VESSEL_ROOM, groundY: vessel.groundY, reflect: -1, air });
+    glassU.uAboveColor.value.copy(above);
+    glassU.uBelowColor.value.copy(below);
+  };
   // the point cloud (only with ?cloud=1): its uniforms and material live in wrapCloud.ts
   const particleUniforms = useMemo(() => createCloudUniforms(WRAP_TUNE_DEFAULT), []);
   const particleMaterial = useMemo(() => createCloudMaterial(particleUniforms), [particleUniforms]);
@@ -800,42 +869,75 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
   useEffect(() => () => { touch.target.dispose(); touch.material.dispose(); touch.quad.geometry.dispose(); }, [touch]);
   useEffect(() => {
     const dpr = gl.getPixelRatio();
-    touch.target.setSize(Math.round(size.width * dpr), Math.round(size.height * dpr));
+    const w = Math.max(1, Math.round(size.width * dpr)), h = Math.max(1, Math.round(size.height * dpr));
+    touch.target.setSize(w, h);
+    refract.target.setSize(w, h);
     touch.material.uniforms.uAspect.value = size.width / size.height;
-  }, [touch, gl, size]);
+  }, [touch, refract, gl, size]);
+  /* Three binds a material's uniform holders once, when its program is first
+     acquired, and never reads `material.uniforms` again. A Fast Refresh (any
+     save while the lab is open) recomputes every memo above, so the materials
+     are handed new uniform objects and the new frame loop writes those — while
+     the GPU keeps the holders from before, frozen at the pond's values: the
+     water's underside stayed teal above the horizon and the volume stayed
+     clear, the page showing through below it. Forgetting what the renderer
+     kept for each material makes it bind the current holders on its next draw;
+     the compiled programs are cached and are not rebuilt. Effects re-run on a
+     refresh whatever their deps, so this runs then, and harmlessly at mount. */
+  useEffect(() => {
+    scene.traverse((o) => {
+      const { material } = o as THREE.Mesh;
+      if (material) gl.properties.remove(material);
+    });
+  }, [gl, scene]);
+  /* The glass's shaders are heavy; compiled off the frame at mount, with the
+     form shown for the moment it takes to collect them, so the form does not
+     surface into a long frame. */
+  useEffect(() => {
+    const body = form.current;
+    if (!body) return;
+    const was = body.visible;
+    body.visible = true;
+    camera.layers.enableAll();
+    const pending = gl.compileAsync(scene, camera).catch(() => undefined);
+    body.visible = was;
+    void pending;
+  }, [gl, scene, camera]);
   useFrame(({ gl: renderer, scene, camera: view }) => {
-    renderer.setRenderTarget(touch.target);
-    renderer.render(scene, view);
+    const body = form.current;
+    if (body && body.visible) {
+      glassU.uResolution.value.set(refract.target.width, refract.target.height);
+      view.layers.set(0);
+      renderer.setRenderTarget(refract.target);
+      renderer.render(scene, view);
+      renderer.setRenderTarget(touch.target);
+      renderer.render(refract.scene, touch.camera);
+      renderer.clearDepth();
+      view.layers.set(FRONT_LAYER);
+      renderer.autoClear = false;
+      renderer.render(scene, view);
+      renderer.autoClear = true;
+      view.layers.enableAll();
+    } else {
+      view.layers.enableAll();
+      renderer.setRenderTarget(touch.target);
+      renderer.render(scene, view);
+    }
     renderer.setRenderTarget(null);
     renderer.render(touch.scene, touch.camera);
   }, 1);
 
-  /* On confirm: the print that will develop on the form — the shared
-     `MemoryPhotoLayer` look on a copy of the form's geometry, patched to
-     develop rather than fade in — and, with ?cloud=1, the point cloud. */
-  const buildWrap = (filmMesh: THREE.Mesh, formMesh: THREE.Mesh, texture: THREE.Texture, size: THREE.Vector2) => {
+  /* On confirm, with ?cloud=1: the point cloud. The print itself needs nothing
+     built — it develops into the strip already inside the glass (setDevelop). */
+  const buildWrap = (filmMesh: THREE.Mesh, texture: THREE.Texture, size: THREE.Vector2) => {
+    if (!CLOUD) return;
     const { rest } = artifact;
-    const uv = buildPhotoUv(rest.sphere, MODEL_SPACE);
-    if (CLOUD) {
-      setParticleGeometry(buildCloudGeometry({
-        sphere: rest.sphere, vertexCount: rest.vertexCount, uv,
-        positions: formMesh.geometry.getAttribute("position").array as Float32Array,
-        filmMesh, texture, stripSize: size,
-        count: tune.current.cloudCount, releaseS: tune.current.releaseS,
-      }));
-    }
-
-    // the print: shares the form's geometry, developing from nothing
-    formMesh.geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
-    // a little of the film's fade stays with it: less color, a touch more presence
-    const material = createMemoryPhotoMaterial(texture, 1, { ...MEMORY_PHOTO_FILTER_DEFAULTS, saturate: 0.6, contrast: 1.06, opacity: 0.62 });
-    developOnForm(material);
-    const overlay = new THREE.Mesh(formMesh.geometry, material);
-    overlay.scale.setScalar(1.012);
-    overlay.renderOrder = 10;
-    overlay.frustumCulled = false;
-    formMesh.add(overlay);
-    photoMaterial.current = material;
+    setParticleGeometry(buildCloudGeometry({
+      sphere: rest.sphere, vertexCount: rest.vertexCount, uv: buildPhotoUv(rest.sphere, MODEL_SPACE),
+      positions: artifact.geometry.getAttribute("position").array as Float32Array,
+      filmMesh, texture, stripSize: size,
+      count: tune.current.cloudCount, releaseS: tune.current.releaseS,
+    }));
   };
   const motes = useMemo(() => {
     const count = 700;
@@ -880,14 +982,12 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
           wrapped.current = false;
           riseAt.current = null; risen.current = false; broke.current = false;
           s.rise = false;
-          if (film.current) film.current.visible = true;
           onRewound("wrapping");
         }
       } else {
         if (!wrapped.current) {
           wrapped.current = true;
-          if (film.current) film.current.visible = false;
-          setDevelop(photoMaterial.current, knobs, 1);
+          setDevelop(sheetU, 1);
           s.rise = true;
           onWrapped();
         }
@@ -913,6 +1013,8 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       const image = request.texture.image as { width: number; height: number };
       filmUniforms.uPhoto.value = prepareFilmPhoto(request.texture);
       filmUniforms.uImageAspect.value = image.width / image.height;
+      sheetU.uPhoto.value = filmUniforms.uPhoto.value;
+      sheetU.uImageAspect.value = filmUniforms.uImageAspect.value;
       filmUniforms.uDevelop.value = 1.45;
       filmUniforms.uDissolve.value = 0;
       filmUniforms.uFloat.value = 1;
@@ -925,6 +1027,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       };
       landedAt.current = longAgo;
       settled.current = true;
+      filmGone.current = 1;
       hold.current = 1;
       descentAt.current = longAgo;
       reachedBottom.current = true;
@@ -946,21 +1049,26 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     scratch.wrapCamera.set(0, knobs.cameraY, knobs.cameraZ);
     scratch.wrapLook.set(0, knobs.lookY, knobs.lookZ);
     scratch.wrapForm.set(0, knobs.formY, knobs.formZ);
-    if (riseAt.current === null) {
-      RISE_PATH.points[0].copy(scratch.wrapCamera);
-      RISE_LOOK.points[0].copy(scratch.wrapLook);
-      RISE_FORM.points[0].copy(scratch.wrapForm);
-    }
+    if (riseAt.current === null) RISE_FORM.points[0].copy(scratch.wrapForm);
     if (riseAt.current !== null) {
       const k = Math.min(1, (t - riseAt.current) / RISE_S);
       const u = flowProgress(k, 0, 1);
-      cameraAt.copy(RISE_PATH.getPoint(u));
-      lookAt.copy(RISE_LOOK.getPoint(u));
       formAt.copy(RISE_FORM.getPoint(u));
+      // the eye follows: it keeps the offset it had to the form at the wrap and goes up with it,
+      // looking at the form itself (the wrap's look was a little under it), lifting a little as it nears the surface
+      const toForm = smoothProgress(k, 0, 0.35);
+      const lift = knobs.riseAbove * smoothProgress(k, 0.1, knobs.riseViewUntil);
+      cameraAt.copy(scratch.wrapCamera).sub(scratch.wrapForm).add(formAt);
+      cameraAt.y += lift;
+      lookAt.copy(scratch.wrapLook).sub(scratch.wrapForm).multiplyScalar(1 - toForm).add(formAt);
       // carry the wrap's slow sink into the start of the rise, so there is no step
       const carry = knobs.viewSink * (1 - smoothProgress(k, 0, 0.45));
       cameraAt.y -= carry;
       lookAt.y -= carry * 0.8;
+      // and as the form comes up to the surface the eye crosses to the pond view, where it is named
+      const settle = smoothProgress(k, knobs.riseViewUntil, Math.max(knobs.riseViewUntil + 0.05, knobs.riseViewBack));
+      cameraAt.lerp(POND_CAMERA, settle);
+      lookAt.lerp(POND_LOOK, settle);
       if (k >= 1 && !risen.current) { risen.current = true; onRisen(); }
     } else if (wrapAt.current !== null) {
       const k = flowProgress(t - wrapAt.current, 0, WRAP_MOVE_S);
@@ -981,15 +1089,13 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       lookAt.copy(DESCENT_LOOK.getPoint(u));
       if (k >= 1 && !reachedBottom.current) { reachedBottom.current = true; onUnder(); }
     }
-    // the orbit: once the wrap has begun, the view can be turned about its look point to watch from another side;
-    // the rise takes its own turn (from below, looking up at the form against the light), and lets it go as it surfaces
+    // the orbit: once the wrap has begun, the view can be turned about its look point to watch from another
+    // side; it is let go over the rise's crossing to the pond view, so the named memory is seen from the pond
     let yawDeg = knobs.orbitYaw, pitchDeg = knobs.orbitPitch;
     if (riseAt.current !== null) {
       const k = Math.min(1, (t - riseAt.current) / RISE_S);
-      const into = smoothProgress(k, 0, 0.22);
       const held = 1 - smoothProgress(k, knobs.riseViewUntil, Math.max(knobs.riseViewUntil + 0.05, knobs.riseViewBack));
-      yawDeg = THREE.MathUtils.lerp(knobs.orbitYaw, knobs.riseYaw * held, into);
-      pitchDeg = THREE.MathUtils.lerp(knobs.orbitPitch, knobs.risePitch * held, into);
+      yawDeg *= held; pitchDeg *= held;
     }
     if (wrapAt.current !== null && (yawDeg !== 0 || pitchDeg !== 0)) {
       const offset = scratch.v.copy(cameraAt).sub(lookAt);
@@ -1025,6 +1131,12 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
 
     const camY = camera.position.y;
     under.value = 1 - smoothProgress(camY, -0.35, 0.05);
+    // the film is passed through on the way down and left behind: it thins away under the eye and stays gone
+    if (film.current && descentAt.current !== null) {
+      filmGone.current = Math.max(filmGone.current, smoothProgress(-camY, FILM_GONE_DEPTH[0], FILM_GONE_DEPTH[1]));
+      filmUniforms.uFade.value = 1 - filmGone.current;
+      film.current.visible = filmGone.current < 0.999;
+    }
 
     /* The hands in the water. Each slot follows its hand with a little lag
        and keeps the hand's motion as a wake; a hand that leaves fades where it
@@ -1085,6 +1197,9 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
         const image = request.texture.image as { width: number; height: number };
         filmUniforms.uPhoto.value = prepareFilmPhoto(request.texture);
         filmUniforms.uImageAspect.value = image.width / image.height;
+        // the same picture waits in the strip inside the glass, to come up at the wrap
+        sheetU.uPhoto.value = filmUniforms.uPhoto.value;
+        sheetU.uImageAspect.value = filmUniforms.uImageAspect.value;
         developAt.current = t;
       }
       if (developAt.current !== null) {
@@ -1169,40 +1284,56 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
 
     /* The form. Its three signals follow the page's values with a little lag,
        the way the gesture pages smooth MediaPipe; growth is written to the
-       geometry only when it has actually moved. */
+       geometry only when it has actually moved. The distance step is the
+       vessel's haze; the colour pick reaches the glass through the room it
+       reflects, as it reaches the water. */
     const body = form.current;
     if (body) {
       const reveal = descentAt.current === null ? 0
         : smoothProgress(t - descentAt.current, FORM_REVEAL_S[0], FORM_REVEAL_S[1]);
-      formUniforms.uReveal.value = reveal;
       body.visible = reveal > 0.001;
       sm.morph = ease(sm.morph, s.morph, 7);
       sm.frost = ease(sm.frost, s.frost, 7);
       if (Math.abs(sm.morph - written.current) > 0.0015) writeMorph(sm.morph);
-      formUniforms.uFrost.value = sm.frost;
-      formUniforms.uDye.value = sm.dye;
-      // lighter and quieter than the editor's core tint, to sit on the paper
-      formUniforms.uCore.value.lerp(tint.set(meshCoreFromOklch({ ...s.oklch, l: Math.min(0.92, s.oklch.l + 0.05), c: s.oklch.c * 0.8 })), 1 - Math.exp(-4 * dt));
-      formUniforms.uRim.value.lerp(tint.set(rimFromOklch(s.oklch)), 1 - Math.exp(-4 * dt));
-      formUniforms.uAir.value = 1 - smoothProgress(-formAt.y, -0.2, 0.3);
+      const air = 1 - smoothProgress(-formAt.y, -0.2, 0.3);
+      const { roomAbove, roomBelow } = scratch;
+      roomAbove.copy(ROOM_WATER_ABOVE).lerp(ROOM_PAPER_ABOVE, sm.wash).lerp(ROOM_SKY, air);
+      roomBelow.copy(ROOM_WATER_BELOW).lerp(ROOM_PAPER_BELOW, sm.wash).lerp(ROOM_SURFACE, air);
+      const dye = water.uTintAmount.value * 0.4;
+      roomAbove.lerp(water.uTint.value, dye);
+      roomBelow.lerp(water.uTint.value, dye);
+      // the refraction's bend and smear are fractions of the screen, tuned with the vessel
+      // filling the lab's view; here it is smaller on screen, so they scale with its size
+      // or the picture inside would be smeared several times as much
+      const cam = camera as THREE.PerspectiveCamera;
+      const onScreen = body.scale.x / (Math.max(0.1, cam.position.distanceTo(body.position)) * Math.tan((cam.fov / 2) * Math.PI / 180));
+      const sizeK = Math.min(1.5, Math.max(0.15, onScreen / LAB_ON_SCREEN));
+      vesselTune.bend = VESSEL_TUNE.bend * sizeK;
+      vesselTune.glassSoft = VESSEL_TUNE.glassSoft * sizeK;
+      writeVessel(sm.frost, roomAbove, roomBelow);
+      sheetU.uReveal.value = reveal;
+      glassU.uReveal.value = reveal;
+      glassU.uTime.value = t;
+      if (mist.current) mist.current.visible = sm.frost * (VESSEL_TUNE.hazeMist + VESSEL_TUNE.hazeGlow) > 0.002;
       const bob = riseAt.current !== null && risen.current ? Math.sin(t * 0.9) * 0.03 : Math.sin(t * 0.6) * 0.05;
       body.position.set(formAt.x, formAt.y + bob, formAt.z);
       // for the wrap the form fills out — about twice its volume — and stays that size up through the rise
       const grown = wrapAt.current === null ? 0 : flowProgress(t - wrapAt.current, 0, WRAP_MOVE_S);
       body.scale.setScalar(0.9 * (0.86 + 0.14 * reveal) * (1 + knobs.grow * grown));
-      // it turns slowly; for the wrap it comes round to face the light, and holds
-      if (wrapAt.current !== null && riseAt.current === null) {
-        const home = Math.round(body.rotation.y / (Math.PI * 2)) * Math.PI * 2;
+      // while it is handled, wrapped and rising it holds with the picture toward the eye, as the gallery
+      // seats it (a slow turn would carry the picture away); once named it turns slowly
+      if (!risen.current) {
+        const home = OPEN_YAW + Math.round((body.rotation.y - OPEN_YAW) / (Math.PI * 2)) * Math.PI * 2;
         body.rotation.y = ease(body.rotation.y, home, 2.2);
-      } else body.rotation.y += dt * (risen.current ? 0.08 : 0.15);
+      } else body.rotation.y += dt * 0.08;
       body.updateMatrixWorld();
     }
 
     /* The wrap: the film lets go of its image from the top down and the print
-       develops on the form. With ?cloud=1 the image falls as points between. */
+       develops into the strip inside the glass. With ?cloud=1 the image falls as points between. */
     if (s.wrap && wrapAt.current === null && mesh && body && filmUniforms.uPhoto.value) {
       wrapAt.current = t;
-      buildWrap(mesh, body, filmUniforms.uPhoto.value, filmUniforms.uSize.value);
+      buildWrap(mesh, filmUniforms.uPhoto.value, filmUniforms.uSize.value);
     }
     if (wrapAt.current !== null && !wrapped.current) {
       // seconds since the film began to let go
@@ -1214,14 +1345,11 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
         setCloudUniforms(pu, particleMaterial, knobs, gl.getPixelRatio(), mesh ? mesh.position : null);
         if (body) { pu.uForm.value.copy(body.matrixWorld); pu.uFormAt.value.copy(body.position); }
       }
-      // the emulsion lets go: thin at first, then the rest, a little after the release
-      filmUniforms.uDissolve.value = Math.min(1.2, Math.max(0, clock + 0.3) / (knobs.releaseS + 1.2) * 1.2);
-      // the print develops on the form: darks first, the top leading
-      setDevelop(photoMaterial.current, knobs, smoothProgress(clock, knobs.overlayIn, Math.max(knobs.overlayIn + 0.1, knobs.overlayOut)));
+      // the print develops into the strip inside the glass: darks first (?print=wrap only; the film keeps its emulsion)
+      setDevelop(sheetU, smoothProgress(clock, knobs.overlayIn, Math.max(knobs.overlayIn + 0.1, knobs.overlayOut)));
       if (clock >= knobs.fallS) {
         wrapped.current = true;
-        if (mesh) mesh.visible = false;
-        setDevelop(photoMaterial.current, knobs, 1);
+        setDevelop(sheetU, 1);
         onWrapped();
       }
     } else if (body && CLOUD) {
@@ -1268,10 +1396,25 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       <shaderMaterial name="motes" transparent depthTest={false} depthWrite={false}
         vertexShader={motesVertex} fragmentShader={motesFragment} uniforms={motesUniforms} />
     </points>
-    <mesh ref={form} visible={false} renderOrder={4} geometry={artifact.geometry} frustumCulled={false}>
-      <shaderMaterial name="form" transparent depthTest={false} depthWrite={false}
-        vertexShader={formVertex} fragmentShader={formFragment} uniforms={formUniforms} />
-    </mesh>
+    {/* the vessel: the glass's walls refract the frame (FRONT_LAYER, drawn in the second pass),
+        the sheet inside is in the frame they refract; the mist stands off the glass at a distance */}
+    <group ref={form} visible={false} rotation={[0, OPEN_YAW, 0]}>
+      <mesh ref={glassMesh} geometry={artifact.geometry} renderOrder={4} frustumCulled={false} layers={FRONT_LAYER}>
+        <shaderMaterial name="glass-back" transparent depthWrite={false} side={THREE.BackSide}
+          vertexShader={glassVertex} fragmentShader={glassRefractFragment} uniforms={glassU} />
+      </mesh>
+      <mesh geometry={vessel.sheet.geometry} renderOrder={5} frustumCulled={false}>
+        <shaderMaterial name="sheet" transparent depthWrite={false} side={THREE.DoubleSide}
+          vertexShader={sheetVertex} fragmentShader={sheetFragment} uniforms={sheetU} />
+      </mesh>
+      <mesh geometry={artifact.geometry} renderOrder={6} frustumCulled={false} layers={FRONT_LAYER}>
+        <shaderMaterial name="glass-front" transparent depthWrite={false} side={THREE.FrontSide}
+          vertexShader={glassVertex} fragmentShader={glassRefractFragment} uniforms={glassU} />
+      </mesh>
+      <group ref={mist} visible={false}>
+        <Mist geometry={artifact.geometry} uniforms={glassU} layer={FRONT_LAYER} renderOrder={7} on />
+      </group>
+    </group>
     {CLOUD && particleGeometry && (
       <points ref={particles} geometry={particleGeometry} material={particleMaterial} renderOrder={6} frustumCulled={false} />
     )}
@@ -1321,38 +1464,13 @@ function map01(value: number, min: number, max: number): number {
 
 const loader = new THREE.TextureLoader();
 
-/* The print develops on the form rather than fading in flat: as on paper
-   in the tray, the darks come first, and here the top of the image — where
-   the sheet landed first — leads the rest. The overlay is the shared
-   `MemoryPhotoLayer` material; its fragment is patched where it computes
-   alpha. uDevelop is 0…1; uDarks and uSweep are how far each leads; uSoft
-   is how gradually any one part comes up. */
-function developOnForm(material: THREE.ShaderMaterial) {
-  Object.assign(material.uniforms, {
-    uDevelop: { value: 0 },
-    uDarks: { value: WRAP_TUNE_DEFAULT.developDarks },
-    uSweep: { value: WRAP_TUNE_DEFAULT.developSweep },
-    uSoft: { value: WRAP_TUNE_DEFAULT.developSoft },
-  });
-  material.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader
-      .replace("uniform float uFade;", "uniform float uFade;\nuniform float uDevelop;\nuniform float uDarks;\nuniform float uSweep;\nuniform float uSoft;")
-      .replace(
-        "float alpha = tex.a * uBaseOpacity * edge * uFade;",
-        `float devLuma = dot(tex.rgb, vec3(0.2126, 0.7152, 0.0722));
-  float need = devLuma * uDarks + (1.0 - vPhotoUv.y) * uSweep;
-  float reveal = smoothstep(need, need + uSoft, uDevelop * (1.0 + uDarks + uSweep + uSoft));
-  float alpha = tex.a * uBaseOpacity * edge * uFade * reveal;`,
-      );
-  };
-  material.needsUpdate = true;
-}
-function setDevelop(material: THREE.ShaderMaterial | null, k: WrapTune, progress: number) {
-  if (!material?.uniforms.uDevelop) return;
-  material.uniforms.uDevelop.value = Math.min(1, Math.max(0, progress));
-  material.uniforms.uDarks.value = k.developDarks;
-  material.uniforms.uSweep.value = k.developSweep;
-  material.uniforms.uSoft.value = Math.max(0.02, k.developSoft);
+/* The print develops into the strip inside the glass rather than fading in
+   flat: the sheet's `uDevelop` runs 0…1.45 and `stripFace` brings the image
+   up darks first, as the film's own window developed. By default the picture is
+   there from the start and the wrap leaves it; ?print=wrap develops it here. */
+function setDevelop(sheet: SheetUniformSet, progress: number) {
+  if (PRINT_EARLY) { sheet.uDevelop.value = 1.45; return; }
+  sheet.uDevelop.value = Math.min(1, Math.max(0, progress)) * 1.45;
 }
 
 /* The wrap's knobs, grouped as the panel shows them. Ranges are generous;
@@ -1368,24 +1486,19 @@ const WRAP_KNOBS: { group: string; knobs: Knob[] }[] = [
     { key: "formZ", label: "form depth (film at 2)", min: -2, max: 4, step: 0.05 },
     { key: "orbitYaw", label: "view turned (°)", min: -180, max: 180, step: 1 },
     { key: "orbitPitch", label: "view raised (°)", min: -80, max: 80, step: 1 },
-    { key: "riseYaw", label: "rise: view turned (°)", min: -180, max: 180, step: 1 },
-    { key: "risePitch", label: "rise: view raised (°)", min: -80, max: 80, step: 1 },
-    { key: "riseViewUntil", label: "rise: held until (of rise)", min: 0, max: 1, step: 0.01 },
-    { key: "riseViewBack", label: "rise: back to the pond by", min: 0.05, max: 1, step: 0.01 },
+    { key: "riseViewUntil", label: "rise: follows the form until (of rise)", min: 0, max: 1, step: 0.01 },
+    { key: "riseViewBack", label: "rise: at the pond view by", min: 0.05, max: 1, step: 0.01 },
+    { key: "riseAbove", label: "rise: eye lifts by", min: -1, max: 2, step: 0.05 },
     { key: "grow", label: "form grows by", min: 0, max: 1, step: 0.01 },
     { key: "viewSink", label: "view sinks over the wrap", min: 0, max: 1.2, step: 0.01 },
-    { key: "filmBelow", label: "film seen from below", min: 0, max: 1, step: 0.01 },
   ] },
   { group: "timing", knobs: [
-    { key: "releaseS", label: "emulsion lets go over (on again)", min: 0.3, max: 6, step: 0.1 },
+    ...(CLOUD ? [{ key: "releaseS", label: "cloud releases over (on again)", min: 0.3, max: 6, step: 0.1 } as const] : []),
     { key: "fallS", label: "wrap ends at", min: 3, max: 16, step: 0.1 },
   ] },
   { group: "print", knobs: [
     { key: "overlayIn", label: "print develops from", min: 0, max: 10, step: 0.1 },
     { key: "overlayOut", label: "print developed by", min: 0.5, max: 14, step: 0.1 },
-    { key: "developDarks", label: "darks lead by", min: 0, max: 2, step: 0.01 },
-    { key: "developSweep", label: "top leads by", min: 0, max: 2, step: 0.01 },
-    { key: "developSoft", label: "each part comes up over", min: 0.05, max: 1.5, step: 0.01 },
   ] },
   // the point cloud's knobs join the panel only when the cloud is on
   ...(CLOUD ? (CLOUD_KNOBS as { group: string; knobs: Knob[] }[]) : []),
@@ -1470,25 +1583,22 @@ function phaseBlocks(k: WrapTune): WrapBlock[] {
   const release = WRAP_MOVE_S * 0.5;
   const wrapEnds = release + k.fallS;
   const fallEnd = (_: WrapTune, s: number) => ({ fallS: s - release });
-  const releaseEnd = (_: WrapTune, s: number) => ({ releaseS: s - release });
   const motion: WrapBlock[] = CLOUD ? cloudPhaseBlocks(k, release) : [];
   const riseHeld = wrapEnds + RISE_S * k.riseViewUntil;
   return [
     { track: "camera", label: "draw back · form grows", from: 0, to: WRAP_MOVE_S, group: "framing" },
     { track: "camera", label: "view sinks", from: WRAP_MOVE_S, to: wrapEnds, group: "framing", setTo: fallEnd },
-    { track: "camera", label: "rise view held", from: wrapEnds, to: riseHeld, group: "framing",
+    { track: "camera", label: "follows the form", from: wrapEnds, to: riseHeld, group: "framing",
       setTo: (_, s) => ({ riseViewUntil: (s - wrapEnds) / RISE_S }) },
-    { track: "camera", label: "back to the pond", from: riseHeld, to: wrapEnds + RISE_S * k.riseViewBack, group: "framing",
+    { track: "camera", label: "to the pond view", from: riseHeld, to: wrapEnds + RISE_S * k.riseViewBack, group: "framing",
       setFrom: (_, s) => ({ riseViewUntil: (s - wrapEnds) / RISE_S }), setTo: (_, s) => ({ riseViewBack: (s - wrapEnds) / RISE_S }) },
-    { track: "film", label: "emulsion lets go", from: release, to: release + k.releaseS, group: "timing", setTo: releaseEnd },
-    { track: "film", label: "clear base", from: release + k.releaseS, to: wrapEnds, group: "framing", setFrom: releaseEnd, setTo: fallEnd },
     ...motion,
     { track: "print", label: "print develops", from: release + k.overlayIn, to: release + Math.max(k.overlayIn + 0.1, k.overlayOut), group: "print",
       setFrom: (_, s) => ({ overlayIn: s - release }), setTo: (_, s) => ({ overlayOut: s - release }) },
     { track: "rise", label: "rise · surface · named", from: wrapEnds, to: wrapEnds + RISE_S, group: "framing", setFrom: fallEnd },
   ];
 }
-const TRACKS = ["camera", "film", ...(CLOUD ? CLOUD_TRACKS : []), "print", "rise"];
+const TRACKS = ["camera", ...(CLOUD ? CLOUD_TRACKS : []), "print", "rise"];
 
 type Drag =
   | { kind: "seek" }
@@ -1858,7 +1968,7 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
       onPointerMove={pointerAsHand}
       onPointerLeave={pointerOut}>
       {ready && <Canvas camera={{ fov: 48, near: 0.1, far: 2400, position: POND_CAMERA.toArray() }}
-        dpr={[1, 1.5]} gl={{ antialias: true, alpha: true }} style={{ position: "absolute", inset: 0 }}>
+        dpr={[1, 2]} gl={{ antialias: true, alpha: true }} style={{ position: "absolute", inset: 0 }}>
         <Stage stage={stage} form={form} from={FROM} tune={tune} transport={transport} crossingRef={crossingRef} glowRef={glowRef} hintRef={hintRef} pickRef={pickRef} captionRef={captionRef}
           onFallStart={() => setPhase("falling")}
           onSettled={() => setPhase("floating")}

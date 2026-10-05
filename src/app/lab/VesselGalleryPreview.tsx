@@ -12,7 +12,7 @@ import {
   ROOM_DEFAULT, VESSEL_TUNE_DEFAULT, VesselPreview, buildGlass, fitSheetSize, smooth01,
   type Room, type VesselState, type VesselTune,
 } from "./VesselPreview";
-import { VesselArtifact } from "./VesselArtifact";
+import { VesselArtifact, preloadSeatPhotos } from "./VesselArtifact";
 import {
   DOLLY_IN, DOLLY_MAX, DOLLY_MIN, FIELD_FOCAL, FIELD_ORDER, FIELD_PLACES, blendSeat, easeFlight, fieldSeat, surfacingSeat,
   type FieldCamera, type FieldSeat,
@@ -50,6 +50,8 @@ const PHOTOS = Object.entries(
   import.meta.glob("../../assets/vessel-gallery/*.{jpg,jpeg,png,webp}", { eager: true, import: "default" }) as Record<string, string>,
 ).sort(([a], [b]) => a.localeCompare(b)).map(([, url]) => url);
 const FALLBACK = [photoA, photoB];
+// fetched and decoded as the module loads, so the seats open with their pictures already in the stock
+preloadSeatPhotos(PHOTOS.length ? PHOTOS : FALLBACK);
 
 /**
  * Which of the curated memories are seated, and the form each takes. `draw`
@@ -113,22 +115,31 @@ function baseState(i: number): VesselState {
 const BASE: VesselState[] = SEATS.map((_, i) => baseState(i));
 
 /**
- * The seats on the near side of the apex, drawn back: the outer foreground
- * seat used to come forward large enough to cover the first and second
- * neighbours. From the first neighbour on it is scaled down and moved further
- * out toward the lower right, so more of it is off the frame.
+ * The seats on the near side of the apex, drawn back. The curve's perspective
+ * makes the first newer neighbour larger than the apex and lays it over it
+ * (nearer seats draw on top), and the vessel fills its seat where the crystal
+ * did not — so the one being looked at was half covered. From the apex out
+ * the newer seats shrink (22% by the first neighbour, 28% by the second) and
+ * move out toward the lower right (.045w/.025h at the first, .09w/.1h at the
+ * second, so the first keeps clear of the apex and the second stays mostly
+ * off the frame); and the apex draws over its neighbours, the order falling
+ * off smoothly so a step never swaps two seats while they overlap.
  */
-function adjustCurveSeat(depth: SeatDepth, offset: number, viewport: { w: number; h: number }): SeatDepth {
-  if (offset <= 1) return depth;
-  const w = smooth01((offset - 1) / 1);
-  const scale = depth.scale * (1 - 0.28 * w);
+function adjustCurveSeat(depth: SeatDepth, offset: number, viewport: { w: number; h: number }): SeatPlace {
+  const order = Math.round(offset * 100 + 140 * Math.max(0, 1 - Math.abs(offset) / 0.8));
+  if (offset <= 0) return { ...depth, order };
+  const w1 = smooth01(Math.min(offset, 1));
+  const w2 = smooth01(Math.max(0, offset - 1));
+  const shrink = 0.22 * w1 + 0.06 * w2;
+  const scale = depth.scale * (1 - shrink);
   return {
     ...depth,
     scale,
-    size: depth.size * (1 - 0.28 * w),
-    x: depth.x + viewport.w * 0.09 * w,
-    y: depth.y + viewport.h * 0.1 * w,
+    size: depth.size * (1 - shrink),
+    x: depth.x + viewport.w * (0.045 * w1 + 0.045 * w2),
+    y: depth.y + viewport.h * (0.025 * w1 + 0.075 * w2),
     blurPx: depth.blurPx * (depth.scale / scale),
+    order,
   };
 }
 
@@ -412,7 +423,7 @@ export function VesselGalleryPreview() {
     if (share <= 0) return seated ? onCurve : surfacingSeat(place, driver.cam, viewport);
     const to = fieldSeat(place, driver.cam, viewport, driver.hover[i]);
     const from: FieldSeat = seated
-      ? { ...onCurve, haze: 0, order: Math.round(offset * 100), depth: FIELD_FOCAL / Math.max(onCurve.scale, 1e-3) }
+      ? { ...onCurve, haze: 0, order: onCurve.order ?? Math.round(offset * 100), depth: FIELD_FOCAL / Math.max(onCurve.scale, 1e-3) }
       : surfacingSeat(place, driver.cam, viewport);
     return blendSeat(from, to, share, viewport, VARIANT[i], driver.direction);
   }, [indexOf, driver]);
@@ -424,6 +435,8 @@ export function VesselGalleryPreview() {
   // and the field's progress live in the driver, and the gallery re-places its seats when this changes
   const override = useMemo<GalleryOverride>(() => ({
     items, renderArtifact, adjustSeat, wash: false, chrome,
+    // the gallery's own arrival tints the seats cyan through its sepia + hue-rotate for 1.8 s; the glass is clear
+    arrival: "plain",
     field: { on: fieldOn, progress: driver.whole, hovered: hoveredId, onHover: onFieldHover, onPick: onFieldPick },
   }), [items, renderArtifact, adjustSeat, chrome, fieldOn, hoveredId, onFieldHover, onFieldPick, driver, frame]);
 

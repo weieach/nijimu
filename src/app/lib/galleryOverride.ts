@@ -55,6 +55,13 @@ export interface GalleryOverride {
   renderArtifact: (item: ArchiveArtifact, seat: ArtifactSeat) => ReactNode;
   /** false leaves out the memory's colour wash behind the focused seat. */
   wash?: boolean;
+  /**
+   * How the seats arrive and leave. "water" is the gallery's own — a deep
+   * blur clearing, the colour tinted toward the water and back, the SVG
+   * refraction wobble over the apex. "plain" is a rise and a fade with none
+   * of that, for things that carry their own colour and are costly to filter.
+   */
+  arrival?: "water" | "plain";
   /** Adjusts where a seat sits and how large it is, given the curve's own answer and the seat's offset from the apex. */
   adjustSeat?: (depth: SeatDepth, offset: number, viewport: { w: number; h: number }, item: ArchiveArtifact) => SeatPlace;
   field?: GalleryField;

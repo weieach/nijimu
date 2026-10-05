@@ -426,7 +426,7 @@ export function PuddleDiveGallery({
      A carried rim wasn't moving at all, so it starts calm. */
   const [wobbling, setWobbling] = useState(false);
   useEffect(() => {
-    if (!waterEffect || phase === "diving" || reducedMotion || inkArrival) {
+    if (!waterEffect || phase === "diving" || reducedMotion || inkArrival || override?.arrival === "plain") {
       setWobbling(false);
       return;
     }
@@ -441,7 +441,7 @@ export function PuddleDiveGallery({
         : DIVE_TUNING.artifactResolveMs;
     const t = setTimeout(() => setWobbling(false), ms);
     return () => clearTimeout(t);
-  }, [arrival, phase, reducedMotion, waterEffect, !!inkArrival]);
+  }, [arrival, phase, reducedMotion, waterEffect, !!inkArrival, override?.arrival]);
 
   /* The neighbours outlive `neighborsVisible` going false: they have to stay
      mounted long enough to sink back out, or the rim would simply blink away. */
@@ -548,16 +548,21 @@ export function PuddleDiveGallery({
   const dissolveMs = Math.round(
     (reducedMotion ? DIVE_TUNING.reducedMs : DIVE_TUNING.surfaceMs) * 0.6,
   );
+  /* A preview's seats may ask to arrive plain: no tint toward the water, no
+     blur, no wobble — a rise and a fade. The glass vessels carry their own
+     colour and read the teal as a stain, and a 28px filter over ten canvases
+     compiling their shaders is what made it linger. */
+  const plain = override?.arrival === "plain";
   const artifactAnimation = !waterEffect
     ? "none"
     : phase === "diving"
       ? "none"
       : phase === "surfacing"
-        ? `${reducedMotion ? "diveDissolveReduced" : "diveDissolve"} ${dissolveMs}ms ease forwards`
+        ? `${reducedMotion ? "diveDissolveReduced" : plain ? "diveDissolvePlain" : "diveDissolve"} ${dissolveMs}ms ease forwards`
         : rimReady
           ? "none"
           : `${
-              reducedMotion ? "diveResolveReduced" : "diveResolve"
+              reducedMotion ? "diveResolveReduced" : plain ? "diveResolvePlain" : "diveResolve"
             } ${Math.round(resolveMs)}ms cubic-bezier(0.22, 1, 0.36, 1) backwards`;
 
   /* Chrome the carried arrival brings with it — the foot ruler, the arrows, the
@@ -1086,6 +1091,17 @@ export function PuddleDiveGallery({
             filter: blur(22px) sepia(0.5) hue-rotate(150deg) saturate(0.4) brightness(1.1) contrast(0.87);
             transform: translateY(34px) scale(0.94);
           }
+        }
+        /* The plain arrival a preview may ask for: the same rise, nothing
+           done to the colour and no blur — the thing is seen whole from its
+           first frame, only faint and a little low. Leaving, the reverse. */
+        @keyframes diveResolvePlain {
+          0% { opacity: 0; transform: translateY(22px) scale(0.96); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes diveDissolvePlain {
+          0% { opacity: 1; transform: translateY(0) scale(1); }
+          100% { opacity: 0; transform: translateY(26px) scale(0.95); }
         }
         /* the settled artifact's slow buoyant drift */
         @keyframes diveFloat {

@@ -555,6 +555,97 @@ should return later, the haze curve by depth, and whether a picked memory
 should also open (it only gathers the years round it). No reduced-motion
 path for the flight.
 
+**The arrival and the neighbours (2026-10-04, night).** The user saw the
+vessels open fluorescent cyan-green and read it as the pictures or shaders
+not yet loaded. It was the gallery's own arrival: `diveResolve` runs
+`sepia(.5) hue-rotate(150deg)` and a 28px blur over the seat for
+`artifactResolveMs` 1.8 s, and on grey glass the sepia turned by 150° is
+that green. `GalleryOverride` took `arrival?: "water" | "plain"`; the
+preview asks for `plain`, and `PuddleDiveGallery` then runs
+`diveResolvePlain`/`diveDissolvePlain` (a rise and a fade, nothing done to
+the colour, no blur) and skips the refraction wobble. Live routes have no
+override and keep the water. Two more things so the seats open whole:
+the photos are a module stock in `VesselArtifact.tsx` (`loadSeatPhoto`,
+`peekSeatPhoto`, `preloadSeatPhotos`; one prepared texture per URL for the
+visit, shared by the ten renderers, never disposed by a seat) and the
+preview preloads its set as its module loads, so a seat that mounts finds
+its picture already there; and each seat compiles its shaders off the frame
+(`gl.compileAsync` for the scene and the blit pass) before it draws
+anything — ten seats compiling on the same first frame was a long frame
+with half-linked canvases. The "compiled" mark is a ref read by the frame
+loop, not state: the frame an `invalidate()` asks for can run before React
+commits, and with state the demand seats drew nothing (seen: only the apex,
+which runs `always`). The newer neighbours: `adjustCurveSeat` shrinks the
++1 seat 22% and the +2 another 6%, moves them out by .045w each and down
+.025h/.075h, and gives the apex the top `order` with a smooth bump
+(`140·max(0, 1−|offset|/.8)`), so the selected vessel is no longer covered
+by the one to its right and the +1 still keeps air from the +2. Seen: a
+clear gap between apex and +1, the +2 partly off the right edge. Not yet
+judged by the user: the plain arrival's feel against the water's, whether
+the +1 wants to sit farther still, and whether the pictures should
+preload on the live routes too (they do not; nothing live imports the
+stock).
+
+**The vessel in the descent (2026-10-05).** The user's direction: the whole
+create flow will take the vessel look, starting with `/lab/descent`. The form
+that surfaces after the hold is now the vessel of `/lab/vessel` — thin
+refracting glass with the draped 35mm strip inside, the photo in the strip
+(the bundled still or the one chosen at the film stage) — in place of the
+old `formFragment` shell and the `MemoryPhotoLayer` overlay, which are gone
+from the lab. Everything else in the shot (hold, descent path, the three
+steps, confirm, rise, naming) is as it was. How it sits in the one canvas:
+the vessel is a `<group ref={form}>` of glass back wall / sheet / glass
+front wall (`glassVertex`/`glassRefractFragment`, `sheetVertex`/
+`sheetFragment` imported from `VesselPreview.tsx`, `FRONT_LAYER` for the
+glass) plus `Mist`; the post pass renders layer 0 (water, film, motes, the
+sheet) to `refract.target`, blits it into `touch.target`, draws the glass
+over it, then the touch quad to screen. Shared-module additions, all neutral
+for the lab and the gallery: `uReveal` folded into `reflectFade`
+(`REFLECT_GLSL`, 1 by default) so the vessel can come up out of the water;
+`uDevelop` on the sheet (`stripFace`'s develop, 1.45 by default) so a photo
+can develop into the strip; `buildWallMap` exported. The tune is
+`VESSEL_TUNE` (the gallery's: draped, face to the glass, perforations
+reduced, no table, `haze` written each frame); the room `VESSEL_ROOM`
+(#e6e7ea / #ffffff) is lerped per frame from the water's tones toward the
+paper tones with the wash and toward the sky as the form nears the surface,
+with 40% of the colour step's tint, so the colour pick reaches the glass
+through what it reflects. The distance step writes the vessel's `haze`
+(mist, softened photo, loosened edges; no post blur in the descent). The
+sheet is settled once on the sphere (`buildDrapedSheet`) and follows the
+morph by radial ratio against the live wall map (`followWall`, normals
+recomputed) — an approximation that holds for the BLOB sphere, not judged on
+lobed forms. The body opens turned `OPEN_YAW` (π) so the picture faces the
+eye and holds there through the steps, the wrap and the rise; it turns
+slowly only once named. Resolution: the canvas is `dpr [1, 2]` (was 1.5) and
+the refraction's `bend`/`glassSoft` are scaled by the vessel's size on
+screen relative to the lab's (`LAB_ON_SCREEN`, a ~1 radius at distance 9,
+fov 18) — unscaled, the picture inside was smeared several times over, the
+user's first report. The photo is in the strip from the moment the form
+surfaces (`PRINT_EARLY`, the default); `?print=wrap` keeps the earlier beat
+of it developing into the strip over `overlayIn…overlayOut` at the wrap.
+
+The end of the shot, same day: no dissolve, and no film overhead. The film
+keeps its emulsion (`uDissolve` is no longer written after the emergence;
+`releaseS` only drives the point cloud and its knob shows only with
+`?cloud=1`) and is passed through on the way down: it thins away as a plain
+fade (`uFade` on `filmFragment`) while the eye's depth goes 0.05 → 0.9
+(`FILM_GONE_DEPTH`, latched in `filmGone` so it never returns), so under the
+water there is nothing floating above the form — the user asked for the
+overhead strip to go. The timeline has no film track; `filmBelow` left the
+panel. The rise itself is a follow, not a path: the eye keeps
+the offset it had to the form at the wrap and goes up with it, its look
+sliding from the wrap's look point onto the form over the first .35, lifting
+`riseAbove` (.6) as it nears the surface; between `riseViewUntil` (.5) and
+`riseViewBack` (.92) camera and look lerp to `POND_CAMERA`/`POND_LOOK`, and
+any wrap orbit (`orbitYaw`/`orbitPitch`) is let go over the same span.
+`RISE_PATH`/`RISE_LOOK`, `riseYaw`/`risePitch` (the −18°/−49° turn from
+below, which the user found dizzying) are gone; `RISE_FORM` is now a straight
+rise under the film to `NAME_FORM_AT`. The camera crosses the surface
+during the lerp, so the `crossing` blur reads once more on the way up. Not
+yet judged by the user: the follow's feel and the three new defaults, the
+plain fade of the film, and the vessel's look under the water (body alpha
+over the washed water, the frost patches at .15).
+
 The lab is one shot, not the live route. Do not wire it in until asked.
 
 Done inside the lab since the first cut:

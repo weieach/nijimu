@@ -50,6 +50,41 @@ export interface VesselArtifactProps {
 interface Built { glass: Glass; sheet: Sheet; distance: number }
 const builds = new Map<string, Built>();
 
+/* ───────── the photos, shared by every seat that shows one ─────────
+   One texture per URL for the visit: a seat that mounts, leaves and comes
+   back (the field keeps all ten mounted, but the editor replaces the gallery)
+   does not fetch and decode its picture again, and the ten canvases share the
+   decoded image — each renderer uploads it once to its own context. The
+   preview preloads its set as it mounts, so by the time the dive has settled
+   the pictures are in the stock and nothing develops late. */
+export interface SeatPhoto { texture: THREE.Texture; aspect: number }
+const photos = new Map<string, SeatPhoto>();
+const photosLoading = new Map<string, Promise<SeatPhoto>>();
+
+export function loadSeatPhoto(url: string): Promise<SeatPhoto> {
+  const have = photos.get(url);
+  if (have) return Promise.resolve(have);
+  let pending = photosLoading.get(url);
+  if (!pending) {
+    pending = photoLoader.loadAsync(url).then((t) => {
+      const image = t.image as { width: number; height: number };
+      const photo = { texture: prepareFilmPhoto(t), aspect: image.width / image.height };
+      photos.set(url, photo);
+      photosLoading.delete(url);
+      return photo;
+    }, (err) => { photosLoading.delete(url); throw err; });
+    photosLoading.set(url, pending);
+  }
+  return pending;
+}
+/** The photo if it has already arrived. */
+export function peekSeatPhoto(url: string): SeatPhoto | undefined {
+  return photos.get(url);
+}
+export function preloadSeatPhotos(urls: string[]) {
+  for (const url of urls) loadSeatPhoto(url).catch(() => undefined);
+}
+
 /** The glass and its sheet for one memory, built once per key and kept; a new key for the same memory replaces the old build. */
 function buildVessel(key: string, form: ArtifactForm, morph: number, tune: VesselTune, sheetMode: SheetMode, seed: number, sheetSizeGiven?: number): Built {
   const have = builds.get(key);
@@ -90,7 +125,7 @@ function buildVessel(key: string, form: ArtifactForm, morph: number, tune: Vesse
 function VesselObject({
   form, morph, photoUrl, seed, tune, room, glassMode = "refract", sheetMode = "draped", face = "inside", focused, still, cacheKey, sheetSize, onPick,
 }: VesselArtifactProps) {
-  const { camera, gl, size, invalidate } = useThree();
+  const { camera, gl, scene, size, invalidate } = useThree();
   // opens with the eye on the sheet's side of the wall, so the picture faces the viewer squarely;
   // the pressed sheet has no one place, so it opens at a turn of its own
   const yaw = useRef(sheetMode === "draped" ? (-tune.anchorAngle * Math.PI) / 180 : hash2(seed, 3.1) * Math.PI * 2);
@@ -175,24 +210,40 @@ function VesselObject({
   writeSheetUniforms(sheetU, { tune, seed, sheet: built.sheet, sheetMode, face, key, edgePrint, groundY, reflect: -1, air });
   writeGlassUniforms(glassU, { tune, seed, key, patches, room, groundY, reflect: -1, air });
 
+  // the picture, from the shared stock: already there if it was preloaded, else set as it arrives
+  const photo = photoUrl ? peekSeatPhoto(photoUrl) : undefined;
+  sheetU.uPhoto.value = photo?.texture ?? BLANK_PHOTO;
+  sheetU.uImageAspect.value = photo?.aspect ?? 1.5;
   useEffect(() => {
-    sheetU.uPhoto.value = BLANK_PHOTO;
-    if (!photoUrl) return;
+    if (!photoUrl || photo) return;
     let live = true;
-    let texture: THREE.Texture | null = null;
-    photoLoader.loadAsync(photoUrl).then((t) => {
-      if (!live) { t.dispose(); return; }
-      texture = t;
-      const image = t.image as { width: number; height: number };
-      sheetU.uPhoto.value = prepareFilmPhoto(t);
-      sheetU.uImageAspect.value = image.width / image.height;
+    loadSeatPhoto(photoUrl).then((p) => {
+      if (!live) return;
+      sheetU.uPhoto.value = p.texture;
+      sheetU.uImageAspect.value = p.aspect;
       invalidate();
     }).catch(() => undefined);
-    return () => { live = false; texture?.dispose(); };
-  }, [photoUrl, sheetU, invalidate]);
+    return () => { live = false; };
+  }, [photoUrl, photo, sheetU, invalidate]);
+
+  /* The shaders are compiled off the frame before anything is drawn: ten
+     seats mounting together used to compile on the same first frame, a long
+     one, with each canvas showing whatever half of it had been linked. Until
+     this resolves the canvas stays clear, which the arrival's fade covers. */
+  // a ref, not state: the frame the invalidate asks for can run before React would commit a state change
+  const compiledFor = useRef<GlassMode | null>(null);
+  useEffect(() => {
+    let live = true;
+    camera.layers.enableAll();
+    Promise.all([gl.compileAsync(scene, camera), gl.compileAsync(pass.scene, pass.ortho)])
+      .catch(() => undefined)
+      .then(() => { if (live) { compiledFor.current = glassMode; invalidate(); } });
+    return () => { live = false; };
+  }, [gl, scene, camera, pass, glassMode, invalidate]);
 
   const refract = glassMode === "refract";
   useFrame(({ gl: renderer, scene, camera: view, clock }, dt) => {
+    if (compiledFor.current !== glassMode) return;
     if (focused && !still) yaw.current += tune.turn * Math.min(dt, 0.1);
     // the glow's clock: it moves only while the seat's frameloop runs (focused or moving); a still seat holds its frame
     glassU.uTime.value = clock.elapsedTime;
