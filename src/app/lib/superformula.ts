@@ -58,6 +58,8 @@ export interface ArtifactForm {
   side: SuperParams;
   /** Hybrids only: the categories the two sets were drawn from. */
   hybridOf?: [ArtifactCategory, ArtifactCategory];
+  /** Optional radial / vertical proportions for the semantic families; applied before normalization. */
+  proportion?: { radial: number; vertical: number };
 }
 
 /* ───────── categories ───────── */
@@ -360,7 +362,9 @@ export function isArtifactForm(value: unknown): value is ArtifactForm {
     typeof form === "object" &&
     (ARTIFACT_CATEGORIES as readonly string[]).includes(form.category) &&
     isParams(form.top) &&
-    isParams(form.side)
+    isParams(form.side) &&
+    (form.proportion === undefined || (!!form.proportion &&
+      [form.proportion.radial, form.proportion.vertical].every(v => Number.isFinite(v) && v >= 0.5 && v <= 1.5)))
   );
 }
 
@@ -379,7 +383,7 @@ const paramsKey = (p: SuperParams) => `${p.m},${p.n1},${p.n2},${p.n3}`;
 
 /** Two forms with the same key draw the same mesh. */
 export function formKey(form: ArtifactForm): string {
-  return `${paramsKey(form.top)}/${paramsKey(form.side)}`;
+  return `${paramsKey(form.top)}/${paramsKey(form.side)}` + (form.proportion ? `/scale:${form.proportion.radial},${form.proportion.vertical}` : "");
 }
 
 /** e.g. "flower · (7, 0.21, 1.72, 1.72) / (7, 0.19, 1.66, 1.66)" */
@@ -389,7 +393,7 @@ export function describeForm(form: ArtifactForm): string {
   const label = form.hybridOf
     ? `hybrid of ${CATEGORY_LABELS[form.hybridOf[0]]} / ${CATEGORY_LABELS[form.hybridOf[1]]}`
     : CATEGORY_LABELS[form.category];
-  return `${label} · ${set(form.top)} / ${set(form.side)}`;
+  return `${label} · ${set(form.top)} / ${set(form.side)}` + (form.proportion ? ` · radial ${n(form.proportion.radial)} / vertical ${n(form.proportion.vertical)}` : "");
 }
 
 /* ───────── mesh ───────── */
@@ -490,6 +494,15 @@ export function buildArtifactMesh(form: ArtifactForm): ArtifactMesh {
       sphere[v3] = dirX[j] * dirW[i];
       sphere[v3 + 1] = dirY[i];
       sphere[v3 + 2] = dirZ[j] * dirW[i];
+    }
+  }
+
+  // Proportions are part of the saved form and cache identity, never a viewer-only scale.
+  if (form.proportion) {
+    for (let k = 0; k < positions.length; k += 3) {
+      positions[k] *= form.proportion.radial;
+      positions[k + 1] *= form.proportion.vertical;
+      positions[k + 2] *= form.proportion.radial;
     }
   }
 

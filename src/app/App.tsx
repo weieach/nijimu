@@ -30,6 +30,7 @@ import { EditWeightPage } from "./components/EditWeightPage";
 import { EditColorPage } from "./components/EditColorPage";
 import { EditTexturePage } from "./components/EditTexturePage";
 import { StyleGuidePage } from "./components/StyleGuidePage";
+import { MemoryMeaningLab } from "./lab/MemoryMeaningLab";
 import { DescentPrototype } from "./lab/DescentPrototype";
 import { FilmPreview } from "./lab/FilmPreview";
 import { VesselPreview } from "./lab/VesselPreview";
@@ -109,6 +110,7 @@ function RootLayout() {
 const router = createBrowserRouter([
   { path: "/style", Component: StyleGuidePage },
   { path: "/lab/descent", Component: DescentPrototype },
+  { path: "/lab/meaning", Component: MemoryMeaningLab },
   { path: "/lab/film", Component: FilmPreview },
   { path: "/lab/vessel", Component: VesselPreview },
   {

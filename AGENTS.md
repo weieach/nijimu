@@ -4,6 +4,45 @@
 > codebase: what it is, how it's built, where things live, and the non-obvious
 > rules. Read it before making changes.
 
+## Transcript-to-form lab (2026-10-04)
+
+`/lab/meaning` is the new assessment/parameter study. Record a memory or paste the
+whole transcript, inspect four seeded family meshes, run “find its form”, and
+“take it to the water” carries the transcript, memory ID and assignment into
+`/lab/descent`. An unassessed transcript can also be carried there; assessment
+runs while the photo is chosen. Holding to descend freezes the current form,
+including a neutral fallback if the request has not finished. Late replies never
+replace a handled form. Naming saves the real transcript and assignment metadata.
+The production recording flow is not rerouted. Direct descent entry still works
+with a neutral form and offers a link to begin with a recorded memory.
+
+- `shared/memory-assessment.mjs` is the runtime schema/validator, used by server
+  and browser; `.d.mts` gives the frontend its types. Scores describe a memory,
+  not a personality: orientation, comfort, intensity, discomfort, disruption,
+  mixedness, evidence beats and insufficient evidence. Quotes must occur in the
+  full transcript. Joyful intensity CAN create sharpness, per the user.
+- `server/assess-memory.mjs` uses OpenAI Responses structured output (native fetch),
+  reusing transcription’s `OPENAI_API_KEY`, optional `ASSESS_MODEL` (default
+  `gpt-4.1-mini`), with `store: false`. POST `/api/assess-memory` has bounded input,
+  a provider timeout and no retries. No key, invalid response, refusal or timeout
+  falls back without inventing an interpretation. No transcript logging.
+- `src/app/lib/memoryShape.ts` owns the derived patterns, mapping and versions.
+  Four semantic families are separate from the twelve existing geometry labels;
+  they use `ArtifactForm` spherical products plus optional radial/vertical
+  `proportion` (included in mesh cache identity). Derivation and limits are
+  documented there and in README. Seeded variation never selects the family.
+- Near either category boundary the body softens; ties/insufficient evidence use
+  a neutral sphere. Mixedness stays in the evidence and is not random noise.
+  Slider/card choices are marked “manual study”, never presented as AI output.
+- Run `node scripts/check-memory-shape.mjs` for contract, mapping, finite geometry,
+  deterministic replay, stale transcript rejection, mocked provider, HTTP and
+  cancellation checks; also run existing superformula checks/typecheck/build.
+- Mocked API contract and real missing-key behavior were tested. A separate localhost
+  synthetic provider also exercised the full browser flow through photo, descent,
+  shaping, naming and gallery. `?camera=off` skips camera requests in the descent
+  lab; shape/distance sliders accept arrows and Home/End. Live interpretation quality
+  and the artistic family readings still require user judgement and calibration.
+
 ## Where work stands (2026-10-03, branch `10.3-Echo`)
 
 Continue on **`10.3-Echo`**. It was cut from `10.3-mesh-Gielis-superformula` at

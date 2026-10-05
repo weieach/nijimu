@@ -1,4 +1,5 @@
 import { MemoryEvent } from "../data/memoryData";
+import type { MemoryAssignment } from "./memoryShape";
 import type { ArtifactForm } from "./superformula";
 
 const KEY = "nijimu.memories.v1";
@@ -9,6 +10,8 @@ export interface SavedMemory {
   title: string;
   year: string;
   transcript: string;
+  /** Original assignment retained alongside the final hand-shaped form. */
+  assignment?: MemoryAssignment;
   highlightedWords: string[];
   /** The shape the user sculpted — replayed verbatim, never re-randomized. */
   shape: {

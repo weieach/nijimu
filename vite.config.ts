@@ -3,6 +3,7 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { polishApiPlugin } from './server/vite-plugin-polish.mjs'
+import { assessmentApiPlugin } from './server/vite-plugin-assessment.mjs'
 import { transcribeApiPlugin } from './server/vite-plugin-transcribe.mjs'
 
 // GitHub Project Page: https://<user>.github.io/<repo>/
@@ -21,6 +22,7 @@ export default defineConfig(({ mode }) => {
       // Dev-only /api endpoints; the keys never reach the client bundle
       polishApiPlugin({ apiKey: env.ANTHROPIC_API_KEY, model: env.POLISH_MODEL }),
       transcribeApiPlugin({ apiKey: env.OPENAI_API_KEY, model: env.TRANSCRIBE_MODEL }),
+      assessmentApiPlugin({ apiKey: env.OPENAI_API_KEY, model: env.ASSESS_MODEL || undefined }),
     ],
     resolve: {
       alias: {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { CHROME_GRAY } from "../lib/colors";
@@ -31,7 +31,9 @@ import {
   createMemoryPhotoMaterial,
 } from "../components/MemoryPhotoLayer";
 import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
-import { computeMeshNormals, createArtifactForm, type ArtifactForm } from "../lib/superformula";
+import { computeMeshNormals, type ArtifactForm } from "../lib/superformula";
+import { assignMemoryShape, isMemoryAssignment, type MemoryAssignment } from "../lib/memoryShape";
+import { requestMemoryAssessment } from "../lib/assessMemory";
 import { DEFAULT_OKLCH, meshCoreFromOklch, oklchToHex, rimFromOklch, sampleField, uvFromOklch, type Oklch } from "../lib/oklch";
 import { FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto } from "../lib/filmLook";
 import { SHEET_GLSL, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, sheetUniforms } from "./filmStrip";
@@ -204,6 +206,8 @@ const PHOTOS = [photoA, photoB];
    (0–1) set how the form was shaped and misted. */
 const PARAMS = new URLSearchParams(window.location.search);
 const SPEED = Number(PARAMS.get("speed")) || 1;
+/** Pointer/keyboard-only lab runs need not request the camera. */
+const CAMERA_ENABLED = PARAMS.get("camera") !== "off";
 const FROM: "wrap" | null = PARAMS.get("from") === "wrap" ? "wrap" : null;
 /** `?cloud=1`: the photo leaves the film as a point cloud (`wrapCloud.ts`). Off by default — not part of the shot. */
 const CLOUD = PARAMS.get("cloud") === "1";
@@ -685,6 +689,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
      which shares the geometry — follows every vertex. */
   const artifact = useMemo(() => createArtifactGeometry(artifactForm), [artifactForm]);
   const normals = useMemo(() => new Float32Array(artifact.rest.normals.length), [artifact]);
+  useEffect(() => { written.current = -1; }, [artifact]);
   useEffect(() => () => artifact.geometry.dispose(), [artifact]);
   const writeMorph = (m: number) => {
     const { rest, geometry } = artifact;
@@ -1633,15 +1638,30 @@ function Timeline({ transport, tune, onChange, onFocus }: {
 
 function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: RefObject<WrapTune>; transport: RefObject<Transport> }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [transcript] = useState(() => typeof location.state?.transcript === "string" ? location.state.transcript : "");
+  const [memoryId] = useState(() => typeof location.state?.memoryId === "string" ? location.state.memoryId : crypto.randomUUID());
+  const supplied = useRef(isMemoryAssignment(location.state?.memoryAssignment, transcript) ? location.state.memoryAssignment as MemoryAssignment : null);
+  const [assignment, setAssignment] = useState(() => supplied.current ?? assignMemoryShape(null, memoryId, "fallback", undefined, transcript));
+  const [assessmentPending, setAssessmentPending] = useState(!supplied.current && !!transcript.trim());
+  const [assessmentError, setAssessmentError] = useState<string | null>(null);
+  const assignmentLocked = useRef(!!supplied.current || FROM !== null);
+  useEffect(() => {
+    if (!transcript.trim() || assignmentLocked.current) { setAssessmentPending(false); return; }
+    const controller = new AbortController();
+    void requestMemoryAssessment(transcript, controller.signal).then(result => {
+      if (controller.signal.aborted || assignmentLocked.current) return;
+      setAssignment(assignMemoryShape(result.assessment, memoryId, "api", result.model, transcript));
+      setAssessmentError(result.error); setAssessmentPending(false);
+    });
+    return () => controller.abort();
+  }, [transcript, memoryId]);
+  const form = assignment.form;
   const stage = useRef<StageState>({
     request: null, holding: false, step: null,
     morph: FROM ? PREVIEW_MORPH : 0, frost: FROM ? PREVIEW_FROST : 0,
     oklch: DEFAULT_OKLCH, hands: [], wrap: false, rise: false,
   });
-  // The memory's form and id are fixed when the run starts, as the recording
-  // step fixes them on the live pond.
-  const [form] = useState(() => createArtifactForm());
-  const [memoryId] = useState(() => crypto.randomUUID());
   const hostRef = useRef<HTMLDivElement>(null);
   const crossingRef = useRef<HTMLDivElement>(null);
   const glowRef = useRef<HTMLDivElement>(null);
@@ -1719,7 +1739,7 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
      hold). The camera opens when the form surfaces; the drag below stays as
      the fallback when it is refused or no hand is seen. */
   const tracking = useHandTracking({
-    enabled: step !== null,
+    enabled: CAMERA_ENABLED && step !== null,
     videoRef,
     numHands: step === "shape" ? 2 : 1,
     onLandmarks: (hands) => {
@@ -1773,12 +1793,14 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
   const currentYear = new Date().getFullYear();
   const yearSettled = year.length === 4 && Number(year) <= currentYear;
   const canSave = phase === "naming" && memoryName.trim() !== "" && yearSettled;
+  const savedThisRun = useRef(false);
 
   /* Saved the way the naming rim saves, plus what the rim drops: the photo,
      the pick and the frost. The archive carries them; the gallery does not
      draw them yet. */
   const save = () => {
-    if (!canSave) return;
+    if (!canSave || savedThisRun.current) return;
+    savedThisRun.current = true;
     const oklch = stage.current.oklch;
     const matPresetIndex = Math.min(
       Math.round((((oklch.h % 360) + 360) % 360) / 360 * (MATERIAL_PRESETS.length - 1)),
@@ -1788,8 +1810,9 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
       id: memoryId,
       title: memoryName.trim(),
       year,
-      transcript: "",
-      highlightedWords: [],
+      transcript,
+      highlightedWords: Array.isArray(location.state?.highlightedWords) ? location.state.highlightedWords.filter((word: unknown) => typeof word === "string") : [],
+      assignment,
       shape: { form, matPresetIndex, fluidity: 0, evolve: stage.current.morph, bumpAmount: 0 },
       colorIndex: draftColorIndex(matPresetIndex),
       look: { ...(lifted ? { photoUrl: lifted } : {}), oklch, vividness: 1 - stage.current.frost },
@@ -1810,7 +1833,11 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
     }
   };
 
-  const setHolding = (holding: boolean) => { stage.current.holding = holding; };
+  const setHolding = (holding: boolean) => {
+    // Resolve once before descent. A late API result must never replace a handled form.
+    if (holding) { assignmentLocked.current = true; setAssessmentPending(false); }
+    stage.current.holding = holding;
+  };
   const choosing = phase === "choose" && !lifted && !loading;
 
   /* While the camera sees no hand, the pointer is the hand in the water. */
@@ -1847,6 +1874,11 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
         background: "rgba(232, 238, 236, 0.35)" }} />
 
       <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20 }}>lab — descent</p>
+      {(phase === "choose" || phase === "floating") && <div style={{ ...META, position: "absolute", top: 52, left: 28, zIndex: 20, maxWidth: 260 }}>
+        <Link to="/lab/meaning" state={{ transcript }} style={{ color: "inherit" }}>{transcript ? "read this memory again" : "begin with a recorded memory"}</Link>
+        {assessmentPending && <p>reading the memory… holding to descend will keep the current neutral form.</p>}
+        {assessmentError && <p>{assessmentError}</p>}
+      </div>}
 
       {/* The camera, a small mirrored window in the corner while the hands steer. */}
       <video ref={videoRef} playsInline muted aria-hidden
@@ -1914,7 +1946,15 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
 
       {/* ── the three steps, under the water ── */}
       {step && step !== "color" && (
-        <div role="slider" aria-label={`${step} — drag across`} aria-valuenow={Math.round((step === "shape" ? morph : frost) * 100)}
+        <div role="slider" tabIndex={0} aria-label={`${step} — drag across`} aria-valuemin={0} aria-valuemax={100}
+          aria-valuenow={Math.round((step === "shape" ? morph : frost) * 100)}
+          onKeyDown={(e) => {
+            const value = step === "shape" ? morph : frost;
+            const next = e.key === "Home" ? 0 : e.key === "End" ? 1
+              : e.key === "ArrowRight" || e.key === "ArrowUp" ? value + 0.05
+              : e.key === "ArrowLeft" || e.key === "ArrowDown" ? value - 0.05 : null;
+            if (next !== null) { e.preventDefault(); setSignal(next); }
+          }}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
             try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic events have no pointer to capture */ }
@@ -1998,7 +2038,11 @@ function DescentRun({ onAgain, tune, transport }: { onAgain: () => void; tune: R
       `}</style>
 
       {phase !== "choose" && (
-        <TextButton label="again" onClick={onAgain}
+        <TextButton label="again" onClick={() => {
+          // Replay the exact assignment; a second save is a new memory, not a duplicate id.
+          navigate(location.pathname + location.search, { replace: true, state: { ...location.state, transcript, memoryId: crypto.randomUUID(), memoryAssignment: assignment } });
+          onAgain();
+        }}
           style={{ position: "absolute", left: 28, bottom: 28, zIndex: 20, color: phase === "descending" ? "#e8eeec" : "#7b7b87",
             transition: "color 600ms ease" }} />
       )}
