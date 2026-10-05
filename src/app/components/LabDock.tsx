@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { useNavigate } from "react-router";
 import { CHROME_GRAY } from "../lib/colors";
 import { SANS } from "../lib/theme";
@@ -5,11 +6,12 @@ import { SHAPE_DISTANCE_PATH, SHAPE_FEELING_PATH, SHAPE_GROW_PATH } from "../lib
 
 /**
  * Shortcuts from the landing field to the editors that open on their own,
- * without walking the create flow. The four labs carry their own sliders;
+ * without walking the create flow. The labs carry their own controls;
  * the gallery lab is the dive gallery seated with vessels. The three shape
  * steps are the live ones; they open on a sample form.
  */
 const ENTRIES: { to: string; label: string; hint: string; icon: IconName }[] = [
+  { to: "/lab/meaning", label: "sorting algo", hint: "how a memory becomes a form", icon: "shape" },
   { to: "/lab/descent", label: "descent", hint: "the shot, with its knobs", icon: "descent" },
   { to: "/lab/film", label: "film", hint: "the photo's look", icon: "film" },
   { to: "/lab/vessel", label: "vessel", hint: "the glass, with its sliders", icon: "vessel" },
@@ -20,7 +22,7 @@ const ENTRIES: { to: string; label: string; hint: string; icon: IconName }[] = [
 ];
 
 /** Where the gap sits: after the labs, before the live steps. */
-const LIVE_FROM = 4;
+const LIVE_FROM = 5;
 
 type IconName = "descent" | "film" | "vessel" | "gallery" | "shape" | "color" | "distance";
 
@@ -110,8 +112,8 @@ export function LabDock() {
       }}
     >
       {ENTRIES.map((entry, i) => (
+        <Fragment key={entry.to}>
         <button
-          key={entry.to}
           type="button"
           title={entry.hint}
           onClick={() => navigate(entry.to)}
@@ -136,6 +138,8 @@ export function LabDock() {
           <Icon name={entry.icon} />
           {entry.label}
         </button>
+        {entry.to === "/lab/meaning" && <hr style={{ margin: "6px 8px", border: 0, borderTop: `1px solid ${CHROME_GRAY}`, opacity: 0.25 }} />}
+        </Fragment>
       ))}
     </nav>
   );

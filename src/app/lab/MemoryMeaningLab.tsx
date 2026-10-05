@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { useArtifactGeometry } from "../hooks/useArtifactGeometry";
@@ -10,6 +10,7 @@ import { FAMILY_LABELS, FAMILY_PATTERNS, MEMORY_FAMILIES, assignMemoryShape, fam
 import { MAX_TRANSCRIPT_LENGTH, SCORE_KEYS } from "../../../shared/memory-assessment.mjs";
 import { type ArtifactForm, type SuperParams } from "../lib/superformula";
 import { PillButton } from "../components/PillButton";
+import { PageHeader } from "../components/PageHeader";
 import { SANS, SERIF } from "../lib/theme";
 
 const INK = "#626d69";
@@ -85,14 +86,22 @@ export function MemoryMeaningLab() {
     intensity: family === "tower" || family === "floral" ? 1 : 0,
     comfort: family === "shell" || family === "bowl" ? 1 : 0,
   });
+  const placeOnMap = (outward: number, sharpness: number) => setScores({
+    ...blankScores,
+    orientation: Math.max(0, Math.min(1, outward)) * 2 - 1,
+    // A coordinate has no inferred emotional cause. With the other scores at
+    // zero, intensity maps directly to sharpness without a comfort offset.
+    intensity: Math.max(0, Math.min(1, sharpness)),
+  });
   const go = () => navigate(`/lab/descent${location.search}`, { state: {
     transcript, memoryId, highlightedWords: [],
     // An unassessed account starts reading while the photo is chosen. An explicit
     // fallback or a completed/manual reading is carried without another API call.
     ...((reading || error || pending) ? { memoryAssignment: assignment } : {}),
   } });
-  return <main style={{ minHeight: "100dvh", background: "#edf0eb", color: INK, padding: "26px clamp(18px, 4vw, 64px) 56px", boxSizing: "border-box" }}>
-    <header style={{ display: "flex", gap: 24, justifyContent: "space-between", ...small }}><span>lab — memory & form</span><Link to="/" style={{ color: "inherit" }}>back to nijimu</Link></header>
+  return <main style={{ minHeight: "100dvh", background: "#edf0eb", color: INK, padding: "80px clamp(18px, 4vw, 64px) 56px", boxSizing: "border-box" }}>
+    <PageHeader layout="absolute" />
+    <p style={small}>lab — memory & form</p>
     <h1 style={{ fontFamily: SERIF, fontWeight: 400, fontSize: "clamp(28px, 4vw, 46px)", margin: "32px 0 8px" }}>what shape does a memory hold?</h1>
     <p style={{ ...small, maxWidth: 690 }}>inward or outward. soft or sharp. intensity can be joyful, too. these four families are starting forms for your hands.</p>
     <section aria-label="four parameter families" className="meaning-families" style={{ display: "grid", gap: 16, margin: "26px 0 38px" }}>
@@ -133,7 +142,23 @@ export function MemoryMeaningLab() {
       </section>
       <section>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "center", gap: 8 }}>
-          <div role="img" aria-label={`memory map: outward ${assignment.coordinates.outward.toFixed(2)}, sharpness ${assignment.coordinates.sharpness.toFixed(2)}`} style={{ position: "relative", aspectRatio: "1", border: "1px solid #a9b4ad66", background: "#f4f5f166", borderRadius: 8 }}>
+          <div role="group" tabIndex={0} className="meaning-map"
+            aria-label={`memory map: outward ${assignment.coordinates.outward.toFixed(2)}, sharpness ${assignment.coordinates.sharpness.toFixed(2)}`}
+            aria-describedby="meaning-map-help" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
+            onClick={e => {
+              const bounds = e.currentTarget.getBoundingClientRect();
+              e.currentTarget.focus({ preventScroll: true });
+              // Match the marker's 24px inset; clicks in the label margin clamp
+              // to the nearest edge of the coordinate field.
+              placeOnMap((e.clientX - bounds.left - 24) / Math.max(1, bounds.width - 48), (e.clientY - bounds.top - 24) / Math.max(1, bounds.height - 48));
+            }}
+            onKeyDown={e => {
+              if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+              e.preventDefault();
+              const step = e.shiftKey ? 0.1 : 0.01;
+              placeOnMap(assignment.coordinates.outward + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0), assignment.coordinates.sharpness + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0));
+            }}
+            style={{ position: "relative", aspectRatio: "1", border: "1px solid #a9b4ad66", background: "#f4f5f166", borderRadius: 8, cursor: "crosshair", userSelect: "none" }}>
             <div style={{ position: "absolute", left: "50%", top: 24, bottom: 24, borderLeft: "1px solid #a9b4ad77" }} /><div style={{ position: "absolute", top: "50%", left: 24, right: 24, borderTop: "1px solid #a9b4ad77" }} />
             <span style={{ ...small, position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)" }}>rounded</span>
             <span style={{ ...small, position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)" }}>sharp</span>
@@ -142,6 +167,7 @@ export function MemoryMeaningLab() {
           </div>
           <FormView form={assignment.form} large />
         </div>
+        <p id="meaning-map-help" style={{ ...small, fontSize: 11 }}>click anywhere on the map to generate a form. arrow keys fine-tune its position; shift moves farther.</p>
         <p style={{ fontFamily: SERIF, fontSize: 25, margin: "4px 0 8px" }}>{assignment.family ? FAMILY_LABELS[assignment.family] : "a quiet, unassigned form"}</p>
         <p style={small}>{manual ? "manual study — this form was not inferred from the transcript" : assignment.family ? "a starting form; your hands can still change how it grows" : "a neutral starting point until the memory has been read"}</p>
         <div style={{ ...small, display: "flex", flexWrap: "wrap", gap: 14 }}>{MEMORY_FAMILIES.map(family => <span key={family}>{family} {Math.round(assignment.weights[family]*100)}%</span>)}</div>
@@ -158,6 +184,6 @@ export function MemoryMeaningLab() {
         <PillButton label={pending ? "continue with a neutral form" : "take it to the water"} onClick={go} disabled={!transcript.trim() || transcribing || recorder.isRecording} trailing="›" />
       </section>
     </div>
-    <style>{`.meaning-families { grid-template-columns: repeat(4, minmax(0,1fr)); } .meaning-workspace { grid-template-columns: 1fr 1fr; } @media (max-width: 850px) { .meaning-families { grid-template-columns: repeat(2,minmax(0,1fr)); } .meaning-workspace { grid-template-columns: 1fr; } }`}</style>
+    <style>{`.meaning-map:focus-visible { outline: 2px solid #657f73; outline-offset: 4px; } .meaning-families { grid-template-columns: repeat(4, minmax(0,1fr)); } .meaning-workspace { grid-template-columns: 1fr 1fr; } @media (max-width: 850px) { .meaning-families { grid-template-columns: repeat(2,minmax(0,1fr)); } .meaning-workspace { grid-template-columns: 1fr; } }`}</style>
   </main>;
 }

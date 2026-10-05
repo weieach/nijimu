@@ -110,7 +110,6 @@ function RootLayout() {
 const router = createBrowserRouter([
   { path: "/style", Component: StyleGuidePage },
   { path: "/lab/descent", Component: DescentPrototype },
-  { path: "/lab/meaning", Component: MemoryMeaningLab },
   { path: "/lab/film", Component: FilmPreview },
   { path: "/lab/vessel", Component: VesselPreview },
   {
@@ -134,6 +133,7 @@ const router = createBrowserRouter([
       },
       { path: MEMORY_FIELD_PATH, Component: HomePage },
       { path: "/lab/gallery", Component: VesselGalleryPreview },
+      { path: "/lab/meaning", Component: MemoryMeaningLab },
       { path: SHAPE_GROW_PATH, Component: ShapeGrowPage },
       { path: SHAPE_FEELING_PATH, Component: ShapeGrowPage },
       { path: SHAPE_DISTANCE_PATH, Component: ShapeGrowPage },
