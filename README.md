@@ -87,37 +87,32 @@ environment values. Only the transcript is sent for assessment, not the photo.
 The API uses [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 with response storage disabled, then validates ranges, bounded text and exact evidence quotes independently.
 
-### How the parameter families are derived
+### How the forms are derived
 
-For `a=b=1` and `n2=n3=n`, the radius on a lobe axis is 1, while the radius
-halfway to the next axis is `2^((n/2 - 1)/n1)`. Thus `n<2` creates valleys,
-`n>2` creates bulges, and `n=2` makes a circle. Reducing `n1` amplifies the
-valley/bulge. The longitude curve describes the cross-section around the body;
-the latitude curve describes its silhouette from bottom to top. These relations
-come directly from the formula implemented in `superformula.ts`.
+The map is hand-drawn: eighteen kept vessel shapes (Y-01…Y-20, see
+`docs/lab/y-shapes.md`) placed on the two axes, `MAP_ANCHORS` in
+`src/app/lib/memoryShape.ts`. Measured on their meshes, outward follows the
+profile (more profile lobes, side `m` 13–20 against 0–8 inward; rims wider than
+the waist; lopsided `n2≠n3` cross-sections) and sharpness follows the
+protrusions (how far the form reaches past its mean radius; more cross-section
+lobes). Both trends are refitted by least squares from the anchors at load
+(`MAP_TRENDS`).
 
-Full-strength base tuples below are `(m, n1, n2, n3)`:
-
-| Family | Longitude / top | Latitude / side | Radial : vertical proportion | Visual intention |
-|---|---|---|---|---|
-| Shell | `(6, .9, 1.45, 1.45)` | `(2, .8, 1.25, 1.25)` | `.95 : 1.05` | Soft ribs around a gathered dome |
-| Bowl | `(4, 2, 2, 2)` | `(6, 1.8, 3.8, 3.8)` | `1.15 : .9` | Circular cross-section with smooth flares around a waist |
-| Tower | `(4, .75, 1.25, 1.25)` | `(8, .65, .85, .85)` | `.75 : 1.25` | Narrow body, pinched profile bands, stacked tiers |
-| Floral | `(6, .32, .5, .5)` | `(2, .55, .9, .9)` | `1.15 : .9` | Deep radial valleys and projecting petals |
-
-`FAMILY_PATTERNS` in `src/app/lib/memoryShape.ts` is the tuning source. Seeded
-variation is ±6% in exponents, with 4/6/8 longitude ribs for shell/floral;
-`n2=n3` and even `m` preserve closure. Proportion is an explicit scale after the
-formula and before normalization, saved with the form. These are closed
-silhouettes, not literal hollow bowls or spiral shells. All four families remain
-star-shaped about their centre, compatible with the existing radial wall map.
+A point takes the form of its nearest anchor (the seed may pick among anchors
+within .06 of the nearest), then leans the rest of the way: the profile's `m`
+moves by the outward slope (at most ±3), and the radius is raised to a power
+`k` (`n1 → n1/k`, `k` in .6…1.5) so the reach matches the sharpness slope.
+The seed then varies the anchor within `VARIATION`: exponents by about
+×0.84…1.2 (n2 = n3 kept equal), an uneven a/b by ±8%, the profile's `m` by up
+to 1.2 lobes; the cross-section's `m` is left alone so closed seams stay closed.
+Kept shapes with fractional `m` keep their open seams.
 
 The assessment returns inward/outward orientation independently of positivity.
 Sharpness is `clamp(max(intensity, .7*discomfort + .3*disruption) - .15*comfort)`;
 joyful intensity can therefore be sharp. The coefficients are artistic starting
-values, not psychological measures. Bilinear quadrant weights select the family;
-a small winning margin softens its exponents toward the circular `n=2` state,
-and a tie uses a neutral sphere. The weights are not confidence probabilities.
+values, not psychological measures. Bilinear quadrant weights name the family
+(none at a tie, though the map still gives the form); only a missing or
+insufficient reading uses a neutral sphere. The weights are not confidence probabilities.
 Mixed feelings remain visible in the evidence; they do not add arbitrary spikes.
 
 Each assignment records its model/rubric/mapping version, seed, source, transcript

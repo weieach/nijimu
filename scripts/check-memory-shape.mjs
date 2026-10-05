@@ -35,28 +35,38 @@ assert.equal(shape.assignMemoryShape({ ...assessment, orientation: 1, intensity:
 assert.equal(shape.assignMemoryShape({ ...assessment, orientation: -1, intensity: 0.1, discomfort: 1, disruption: 1, comfort: 0 }, "one").family, "tower", "quiet pain can be sharp");
 assert.equal(shape.assignMemoryShape({ ...assessment, insufficientEvidence: true }, "one").family, null);
 assert.equal(shape.assignMemoryShape(null, "one").family, null);
-assert.equal(shape.assignMemoryShape({ ...assessment, orientation: 0 }, "one").family, null, "ties have a neutral transition");
+const tie = shape.assignMemoryShape({ ...assessment, orientation: 0, intensity: 0.5, comfort: 0 }, "one");
+assert.equal(tie.family, null, "a tie has no family label");
+assert.ok(tie.anchor && geometry.isArtifactForm(tie.form), "the map still gives a tie its form");
+assert.equal(shape.assignMemoryShape(null, "one").anchor, null, "no reading keeps the neutral sphere");
+assert.equal(geometry.formKey(shape.assignMemoryShape(null, "one").form), geometry.formKey(geometry.baseForm("sphere")));
 assert.equal(JSON.stringify(assigned), JSON.stringify(shape.assignMemoryShape(assessment, "one", "api", "test", transcript)), "saved mapping repeats exactly");
-assert.notEqual(geometry.formKey(shape.familyForm("shell", "one")), geometry.formKey(shape.familyForm("shell", "two")), "variation stays within the family");
-for (const family of shape.MEMORY_FAMILIES) {
-  for (let i = 0; i < 24; i++) {
-    const strength = i < 12 ? 1 : (i-12)/12;
-    const form = shape.familyForm(family, `${family}|${i}`, strength);
-    assert.ok(geometry.isArtifactForm(form));
-    assert.ok(geometry.closesAround(form.top), "closed seam");
-    for (const set of [form.top, form.side]) {
-      for (let k = 0; k < 120; k++) {
-        const r = geometry.superRadius(k*Math.PI/60, set);
-        assert.ok(r > 0.05 && r < 4, `${family} avoids needles / radius clamp: ${r}`);
-      }
+assert.notEqual(geometry.formKey(shape.familyForm("shell", "one")), geometry.formKey(shape.familyForm("shell", "two")), "variation stays local");
+// The trends the map was drawn with: outward adds profile flares, sharp reaches farther.
+assert.ok(shape.MAP_TRENDS.sideM.bOut > 0, "outward has more profile lobes");
+assert.ok(shape.MAP_TRENDS.reach.bSharp > 0, "sharp reaches farther past its body");
+for (const a of shape.MAP_ANCHORS) {
+  const at = shape.formAt(a.outward, a.sharpness, "anchor");
+  assert.equal(at.anchor, a.id, `${a.id} is its own nearest`);
+  assert.equal(at.form.top.m, a.form.top.m);
+  assert.ok(Math.abs(at.form.side.m - a.form.side.m) <= shape.VARIATION.profile + 0.05, `${a.id} keeps its profile near its own`);
+  const room = Math.exp(shape.VARIATION.exponent) + 0.001;
+  for (const set of ["top", "side"]) for (const key of ["n1", "n2", "n3"]) {
+    const ratio = at.form[set][key] / a.form[set][key];
+    assert.ok(ratio < room && ratio > 1 / room, `${a.id} ${set}.${key} stays within the seed's room at its own place`);
+  }
+}
+for (let i = 0; i <= 10; i++) {
+  for (let j = 0; j <= 10; j++) {
+    for (const seed of ["a", "b"]) {
+      const { form } = shape.formAt(i / 10, j / 10, seed);
+      assert.ok(geometry.isArtifactForm(form), `form at ${i / 10},${j / 10}`);
+      const mesh = geometry.buildArtifactMesh(form);
+      assert.ok(mesh.vertexCount <= 30000);
+      assert.ok([...mesh.positions, ...mesh.normals, ...mesh.sphere].every(Number.isFinite));
+      assert.ok(Math.max(...mesh.positions.map(Math.abs)) <= 1.000001);
+      assert.ok(mesh.index.every(index => index < mesh.vertexCount));
     }
-    const mesh = geometry.buildArtifactMesh(form);
-    assert.ok(mesh.vertexCount <= 30000);
-    assert.ok([...mesh.positions, ...mesh.normals, ...mesh.sphere].every(Number.isFinite));
-    assert.ok(Math.max(...mesh.positions.map(Math.abs)) <= 1.000001);
-    assert.ok(mesh.index.every(index => index < mesh.vertexCount));
-    if (strength === 1 && family === "tower") assert.ok(mesh.size[1] > Math.max(mesh.size[0],mesh.size[2])*1.3, "tower gathers vertically");
-    if (strength === 1 && family === "floral") assert.ok(Math.max(mesh.size[0],mesh.size[2]) > mesh.size[1]*1.6, "floral extends outward");
   }
 }
 // Scale participates in cache identity, with legacy forms unchanged.

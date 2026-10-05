@@ -1,7 +1,9 @@
 /*
  * Gielis' superformula — the mesh of every memory artifact.
  *
- *   r(φ) = ( |cos(mφ/4) / a|^n2 + |sin(mφ/4) / b|^n3 )^(−1/n1),   a = b = 1
+ *   r(φ) = ( |cos(mφ/4) / a|^n2 + |sin(mφ/4) / b|^n3 )^(−1/n1)
+ *
+ * a and b default to 1, which is the curve every sampled category draws.
  *
  * Two evaluations make a solid (the spherical product): r1 over longitude
  * draws the top-down cross-section, r2 over latitude the side profile.
@@ -30,6 +32,10 @@ export interface SuperParams {
   /** The two halves of each lobe. Equal is symmetric; ~1 straight, ~2 smooth, large flat-sided. */
   n2: number;
   n3: number;
+  /** Scales the cosine half. Absent is 1, the curve the categories draw. */
+  a?: number;
+  /** Scales the sine half. Absent is 1. */
+  b?: number;
 }
 
 export const ARTIFACT_CATEGORIES = [
@@ -342,6 +348,8 @@ export const DEFAULT_ARTIFACT_FORM: ArtifactForm = baseForm("sphere");
 
 /* ───────── validation / identity ───────── */
 
+const isScale = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v) && v > 0);
+
 function isParams(value: unknown): value is SuperParams {
   const p = value as SuperParams | null;
   return (
@@ -351,7 +359,9 @@ function isParams(value: unknown): value is SuperParams {
     p.m >= 0 &&
     p.n1 > 0 &&
     p.n2 > 0 &&
-    p.n3 > 0
+    p.n3 > 0 &&
+    isScale(p.a) &&
+    isScale(p.b)
   );
 }
 
@@ -379,7 +389,7 @@ export function formFromState(state: unknown): ArtifactForm | null {
   return null;
 }
 
-const paramsKey = (p: SuperParams) => `${p.m},${p.n1},${p.n2},${p.n3}`;
+const paramsKey = (p: SuperParams) => `${p.m},${p.n1},${p.n2},${p.n3},${p.a ?? 1},${p.b ?? 1}`;
 
 /** Two forms with the same key draw the same mesh. */
 export function formKey(form: ArtifactForm): string {
@@ -389,7 +399,11 @@ export function formKey(form: ArtifactForm): string {
 /** e.g. "flower · (7, 0.21, 1.72, 1.72) / (7, 0.19, 1.66, 1.66)" */
 export function describeForm(form: ArtifactForm): string {
   const n = (v: number) => String(Math.round(v * 100) / 100);
-  const set = (p: SuperParams) => `(${n(p.m)}, ${n(p.n1)}, ${n(p.n2)}, ${n(p.n3)})`;
+  const set = (p: SuperParams) => {
+    const core = [n(p.m), n(p.n1), n(p.n2), n(p.n3)];
+    if ((p.a ?? 1) !== 1 || (p.b ?? 1) !== 1) core.push(n(p.a ?? 1), n(p.b ?? 1));
+    return `(${core.join(", ")})`;
+  };
   const label = form.hybridOf
     ? `hybrid of ${CATEGORY_LABELS[form.hybridOf[0]]} / ${CATEGORY_LABELS[form.hybridOf[1]]}`
     : CATEGORY_LABELS[form.category];
@@ -405,7 +419,9 @@ const HALF_PI = Math.PI / 2;
 
 export function superRadius(angle: number, p: SuperParams): number {
   const t = (p.m * angle) / 4;
-  const sum = Math.pow(Math.abs(Math.cos(t)), p.n2) + Math.pow(Math.abs(Math.sin(t)), p.n3);
+  const a = p.a ?? 1;
+  const b = p.b ?? 1;
+  const sum = Math.pow(Math.abs(Math.cos(t)) / a, p.n2) + Math.pow(Math.abs(Math.sin(t)) / b, p.n3);
   const r = Math.pow(sum, -1 / p.n1);
   // also catches NaN and the Infinity of an empty sum
   return r < R_MAX ? r : R_MAX;

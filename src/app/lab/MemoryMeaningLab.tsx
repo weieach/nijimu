@@ -6,7 +6,7 @@ import { useArtifactGeometry } from "../hooks/useArtifactGeometry";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
 import { requestTranscription } from "../lib/transcribe";
 import { requestMemoryAssessment } from "../lib/assessMemory";
-import { FAMILY_LABELS, FAMILY_PATTERNS, MEMORY_FAMILIES, assignMemoryShape, familyForm, type MemoryAssessment, type MemoryShapeFamily } from "../lib/memoryShape";
+import { FAMILY_CENTERS, FAMILY_LABELS, FAMILY_NOTES, MAP_ANCHORS, MEMORY_FAMILIES, assignMemoryShape, formAt, type MemoryAssessment, type MemoryShapeFamily } from "../lib/memoryShape";
 import { MAX_TRANSCRIPT_LENGTH, SCORE_KEYS } from "../../../shared/memory-assessment.mjs";
 import { type ArtifactForm, type SuperParams } from "../lib/superformula";
 import { PillButton } from "../components/PillButton";
@@ -34,7 +34,7 @@ function FormView({ form, large = false }: { form: ArtifactForm; large?: boolean
     </Canvas>
   </div>;
 }
-const params = (s: SuperParams) => `${s.m}, ${s.n1}, ${s.n2}, ${s.n3}`;
+const params = (s: SuperParams) => `${s.m}, ${s.n1}, ${s.n2}, ${s.n3}` + ((s.a ?? 1) !== 1 || (s.b ?? 1) !== 1 ? `, ${s.a ?? 1}, ${s.b ?? 1}` : "");
 const blankScores: MemoryAssessment = { orientation: 0, comfort: 0, intensity: 0, discomfort: 0, disruption: 0, mixedness: 0, insufficientEvidence: false, summary: "manual parameter study", beats: [{ quote: "manual", reading: "manually positioned on the map", orientation: 0, intensity: 0 }] };
 
 /** Assessment and parameter study, deliberately separate from the production journey. */
@@ -81,11 +81,7 @@ export function MemoryMeaningLab() {
   const setScores = (next: MemoryAssessment) => {
     request.current?.abort(); revision.current++; setPending(false); setManual(true); setReading({ ...next, beats: next.beats.length ? next.beats : blankScores.beats }); setModel(undefined); setError(null);
   };
-  const chooseFamily = (family: MemoryShapeFamily) => setScores({ ...blankScores,
-    orientation: family === "shell" || family === "tower" ? -1 : 1,
-    intensity: family === "tower" || family === "floral" ? 1 : 0,
-    comfort: family === "shell" || family === "bowl" ? 1 : 0,
-  });
+  const chooseFamily = (family: MemoryShapeFamily) => placeOnMap(FAMILY_CENTERS[family].outward, FAMILY_CENTERS[family].sharpness);
   const placeOnMap = (outward: number, sharpness: number) => setScores({
     ...blankScores,
     orientation: Math.max(0, Math.min(1, outward)) * 2 - 1,
@@ -105,12 +101,15 @@ export function MemoryMeaningLab() {
     <h1 style={{ fontFamily: SERIF, fontWeight: 400, fontSize: "clamp(28px, 4vw, 46px)", margin: "32px 0 8px" }}>what shape does a memory hold?</h1>
     <p style={{ ...small, maxWidth: 690 }}>inward or outward. soft or sharp. intensity can be joyful, too. these four families are starting forms for your hands.</p>
     <section aria-label="four parameter families" className="meaning-families" style={{ display: "grid", gap: 16, margin: "26px 0 38px" }}>
-      {MEMORY_FAMILIES.map(family => <article key={family} style={{ border: "1px solid #a9b4ad55", borderRadius: 8, padding: "8px 14px 16px" }}>
-        <FormView form={familyForm(family, seed)} />
-        <button style={{ ...button, border: 0, padding: 0, fontFamily: SERIF, fontSize: 21 }} onClick={() => chooseFamily(family)}>{FAMILY_LABELS[family]}</button>
-        <p style={{ ...small, minHeight: 38 }}>{FAMILY_PATTERNS[family].note}</p>
-        <p style={{ ...small, fontSize: 10, margin: 0 }}>top ({params(FAMILY_PATTERNS[family].top)})<br />side ({params(FAMILY_PATTERNS[family].side)})</p>
-      </article>)}
+      {MEMORY_FAMILIES.map(family => {
+        const card = formAt(FAMILY_CENTERS[family].outward, FAMILY_CENTERS[family].sharpness, seed);
+        return <article key={family} style={{ border: "1px solid #a9b4ad55", borderRadius: 8, padding: "8px 14px 16px" }}>
+          <FormView form={card.form} />
+          <button style={{ ...button, border: 0, padding: 0, fontFamily: SERIF, fontSize: 21 }} onClick={() => chooseFamily(family)}>{FAMILY_LABELS[family]}</button>
+          <p style={{ ...small, minHeight: 38 }}>{FAMILY_NOTES[family]}</p>
+          <p style={{ ...small, fontSize: 10, margin: 0 }}>from {card.anchor}<br />top ({params(card.form.top)})<br />side ({params(card.form.side)})</p>
+        </article>;
+      })}
     </section>
     <div className="meaning-workspace" style={{ display: "grid", gap: 40, alignItems: "start" }}>
       <section>
@@ -141,7 +140,7 @@ export function MemoryMeaningLab() {
         </div>
       </section>
       <section>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.7fr) minmax(0, 1fr)", alignItems: "center", gap: 8 }}>
           <div role="group" tabIndex={0} className="meaning-map"
             aria-label={`memory map: outward ${assignment.coordinates.outward.toFixed(2)}, sharpness ${assignment.coordinates.sharpness.toFixed(2)}`}
             aria-describedby="meaning-map-help" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
@@ -163,15 +162,16 @@ export function MemoryMeaningLab() {
             <span style={{ ...small, position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)" }}>rounded</span>
             <span style={{ ...small, position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)" }}>sharp</span>
             <span style={{ ...small, position: "absolute", left: 6, top: "50%", transform: "translateY(-120%)" }}>inward</span><span style={{ ...small, position: "absolute", right: 6, top: "50%", transform: "translateY(-120%)" }}>outward</span>
+            {MAP_ANCHORS.map(a => <span key={a.id} aria-hidden style={{ position: "absolute", width: 4, height: 4, borderRadius: "50%", background: INK, left: `calc(24px + (100% - 48px) * ${a.outward})`, top: `calc(24px + (100% - 48px) * ${a.sharpness})`, transform: "translate(-50%, -50%)", pointerEvents: "none", opacity: assignment.anchor === a.id ? 0.8 : 0.3 }} />)}
             <span style={{ position: "absolute", width: 10, height: 10, borderRadius: "50%", background: "#657f73", left: `calc(24px + (100% - 48px) * ${assignment.coordinates.outward})`, top: `calc(24px + (100% - 48px) * ${assignment.coordinates.sharpness})`, transform: "translate(-50%, -50%)", transition: "left .4s, top .4s" }} />
           </div>
           <FormView form={assignment.form} large />
         </div>
-        <p id="meaning-map-help" style={{ ...small, fontSize: 11 }}>click anywhere on the map to generate a form. arrow keys fine-tune its position; shift moves farther.</p>
-        <p style={{ fontFamily: SERIF, fontSize: 25, margin: "4px 0 8px" }}>{assignment.family ? FAMILY_LABELS[assignment.family] : "a quiet, unassigned form"}</p>
+        <p id="meaning-map-help" style={{ ...small, fontSize: 11 }}>click anywhere on the map to generate a form. arrow keys fine-tune its position; shift moves farther. the faint marks are the kept shapes: a point takes the nearest one and leans with the axes — more profile flares outward, deeper reach toward sharp.</p>
+        <p style={{ fontFamily: SERIF, fontSize: 25, margin: "4px 0 8px" }}>{assignment.family ? FAMILY_LABELS[assignment.family] : assignment.anchor ? "between the families" : "a quiet, unassigned form"}</p>
         <p style={small}>{manual ? "manual study — this form was not inferred from the transcript" : assignment.family ? "a starting form; your hands can still change how it grows" : "a neutral starting point until the memory has been read"}</p>
         <div style={{ ...small, display: "flex", flexWrap: "wrap", gap: 14 }}>{MEMORY_FAMILIES.map(family => <span key={family}>{family} {Math.round(assignment.weights[family]*100)}%</span>)}</div>
-        <p style={{ ...small, fontSize: 10 }}>family weights express position, not certainty. drag the form to turn it.<br />top ({params(assignment.form.top)}) · side ({params(assignment.form.side)})</p>
+        <p style={{ ...small, fontSize: 10 }}>family weights express position, not certainty. drag the form to turn it.<br />{assignment.anchor ? `from ${assignment.anchor} · ` : ""}top ({params(assignment.form.top)}) · side ({params(assignment.form.side)})</p>
         <button style={button} onClick={() => setVariation(v => v+1)}>another variation</button>
         <details style={{ margin: "22px 0", ...small }}>
           <summary style={{ cursor: "pointer" }}>study the interpretation</summary>
