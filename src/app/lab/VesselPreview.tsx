@@ -8,7 +8,7 @@ import { FILM_LOOK_DEFAULT, FILM_LOOK_GLSL, filmLookUniforms, prepareFilmPhoto, 
 import { SHEET_GLSL, STOCKS, STRIP_FACE_GLSL, STRIP_GLSL, STRIP_MM, createEdgePrint, setStock, sheetUniforms, stockHex } from "./filmStrip";
 import { createArtifactGeometry } from "../hooks/useArtifactGeometry";
 import {
-  ARTIFACT_CATEGORIES, CATEGORY_LABELS, computeMeshNormals, createArtifactForm, describeForm, type ArtifactCategory, type ArtifactForm,
+  ARTIFACT_CATEGORIES, CATEGORY_LABELS, computeMeshNormals, createArtifactForm, describeForm, formKey, isArtifactForm, type ArtifactCategory, type ArtifactForm, type SuperParams,
 } from "../lib/superformula";
 import photoA from "../../assets/memory-photo.jpg";
 import photoB from "../../assets/memory-photo-02.png";
@@ -49,7 +49,9 @@ import photoB from "../../assets/memory-photo-02.png";
  *
  * ?morph= (0–1) sets how far the form has grown from its sphere (the "form"
  * group's knob; its categories redraw the form as the shape step's picker
- * does), ?frost= the strength the frost knob opens at, ?form= the seed the
+ * does). The same group writes the superformula itself — cross-section and
+ * profile, each m, n1, n2, n3, a, b — and keeps a library of shapes, the
+ * permanent Y set plus whatever is saved in this browser. ?frost= the strength the frost knob opens at, ?form= the seed the
  * form is drawn from, ?category= its category, ?yaw= the turn it opens at in degrees (180 is
  * the far face), ?turn= the turn speed (0 holds it still), ?photo=0|1 the
  * bundled still, or an image URL, ?glass=frost the first glass look (the
@@ -86,6 +88,7 @@ const TURN = PARAMS.has("turn") && Number.isFinite(Number(PARAMS.get("turn"))) ?
     it, negative up at it from under the table (the table and its reflection fade
     as the eye goes under). The opening one is ?pitch=, else the still life's 4°. */
 export const PITCH_MIN = -35, PITCH_MAX = 85;
+const DISTANCE_MIN = 5, DISTANCE_MAX = 16;
 const PITCH = PARAMS.has("pitch") && Number.isFinite(Number(PARAMS.get("pitch")))
   ? Math.min(PITCH_MAX, Math.max(PITCH_MIN, Number(PARAMS.get("pitch")))) : 4;
 
@@ -113,6 +116,13 @@ export interface VesselTune {
   bend: number; glassSoft: number; bodyAlpha: number; thickDark: number; highlight: number;
   // light
   keyAzimuth: number; keyElevation: number; keyIntensity: number;
+  // two catches of the room, sliding slowly over the glass
+  flowGain: number; flowSpeed: number; flowSoft: number; flowLift: number; flowRise: number; flowApart: number;
+  flowFeather: number; flowSheer: number;
+  /** 0 is white light; 1… is STOCKS[n − 1], the core its base, the two lights' rims its cool and warm ends. */
+  flowStock: number; flowTint: number;
+  // the glass's own surface: a fine texture (TEXTURES), how much it tilts the light, its grain, the matte it leaves
+  texKind: number; texAmount: number; texScale: number; texMatte: number;
   // camera (the eye orbits the form; the light stays in the room)
   pitch: number; distance: number; turn: number;
   // scene
@@ -158,6 +168,9 @@ export const VESSEL_TUNE_DEFAULT: VesselTune = {
   envAbove: 1, envBelow: 0.84, horizon: 0.06, horizonSoft: 0.35,
   bend: 0.75, glassSoft: 0.64, bodyAlpha: 0.85, thickDark: 0.21, highlight: 0.34,
   keyAzimuth: -32, keyElevation: 64, keyIntensity: 1.08,
+  flowGain: 1.21, flowSpeed: 0.8, flowSoft: 0.3, flowLift: 0.49, flowRise: 0.35, flowApart: 2.15,
+  flowFeather: 0.75, flowSheer: 0.3, flowStock: 1, flowTint: 0.25,
+  texKind: 0, texAmount: 0, texScale: 0.3, texMatte: 0,
   pitch: PITCH, distance: 9, turn: TURN,
   ground: 0.5, warmth: 0.4,
   haze: unitParam("haze", 0), hazeBlur: 7, hazePhoto: 2.6, hazeMist: 0.5, hazeSpread: 0.16, hazeWash: 0.5, hazeEdge: 0.85,
@@ -901,6 +914,30 @@ const GLASS_COMMON_GLSL = /* glsl */ `
   uniform float uStreakRound;
   uniform float uStreakUp;
   uniform float uStreakFlicker;
+  /* two highlights set into the room and sliding round it: how bright, how fast
+     (rad/s), how wide each one is (rad), the height it travels through and how
+     far it climbs and falls around that, and how far apart the two are set (rad) */
+  uniform float uFlowGain;
+  uniform float uFlowSpeed;
+  uniform float uFlowSoft;
+  uniform float uFlowLift;
+  uniform float uFlowRise;
+  uniform float uFlowApart;
+  /* how long the light's edge runs out (0 a clean spot, 1 a long soft fall-off),
+     how much it asserts over what is behind it, and its colours: the core, and
+     the rim of the first light and of the second */
+  uniform float uFlowFeather;
+  uniform float uFlowSheer;
+  uniform vec3 uFlowCore;
+  uniform vec3 uFlowEdgeA;
+  uniform vec3 uFlowEdgeB;
+  /* the surface's fine texture: which (0 none, 1 satin, 2 sandblast, 3 brushed,
+     4 ripple, 5 hammered), how far it tilts the surface, its grain (1 as drawn,
+     larger finer), and the matte veil it leaves on the glass */
+  uniform float uTexKind;
+  uniform float uTexAmount;
+  uniform float uTexScale;
+  uniform float uTexMatte;
   varying vec3 vNormalW;
   varying vec3 vViewW;
   varying vec3 vModel;
@@ -1016,6 +1053,78 @@ const GLASS_COMMON_GLSL = /* glsl */ `
   }
   /* What the glow is made of: whiter than the air, a touch cool. */
   vec3 glowColor() { return mix(vec3(1.0, 1.0, 1.0), uAir, .25) * vec3(.985, 1.0, 1.01); }
+  /* Two catches of light in the room, read off the clock so nothing is stored.
+     Each turns, and its height rises and falls on a slower beat than the turn,
+     the two out of step — so a light climbs as it comes round instead of
+     staying on one line. The glass lights where it reflects that way. */
+  vec3 catchLight(vec3 n, vec3 v) {
+    if (uFlowGain <= 0.0) return vec3(0.0);
+    vec3 refl = normalize(reflect(-v, n));
+    float soft = max(uFlowSoft, 0.02);
+    // the feather trades the spot's core for a wide, low tail, so the light has no edge
+    float wide = soft * (1.0 + 3.0 * uFlowFeather);
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 2; i++) {
+      float phase = uTime * uFlowSpeed + float(i) * uFlowApart;
+      // half the turn's rate, so a light is still climbing when it has come back round
+      float lift = clamp(uFlowLift + sin(phase * 0.5 + float(i) * 2.2) * uFlowRise, -1.05, 1.15);
+      float cl = cos(lift), sl = sin(lift);
+      vec3 L = normalize(vec3(sin(phase) * cl, sl, cos(phase) * cl));
+      float d = acos(clamp(dot(refl, L), -1.0, 1.0));
+      float core = exp(-(d * d) / (soft * soft));
+      float tail = exp(-(d * d) / (wide * wide));
+      float spot = core * (1.0 - .65 * uFlowFeather) + tail * .45 * uFlowFeather;
+      // the core takes the stock's base, the fall-off the light's own end of it
+      vec3 rim = i == 0 ? uFlowEdgeA : uFlowEdgeB;
+      vec3 tint = mix(rim, uFlowCore, core / max(core + tail * uFlowFeather, 1e-3));
+      sum += tint * spot * (i == 0 ? 1.0 : .82);
+    }
+    return sum * uFlowGain * (1.0 - uHazeEdge);
+  }
+  /* A light laid over the glass without clipping to a flat white disc: screened, so
+     it brightens what is there and saturates softly. */
+  vec3 addLight(vec3 color, vec3 light) { return 1.0 - (1.0 - color) * (1.0 - clamp(light, 0.0, 1.0)); }
+
+  /* The surface's fine texture, as a height over the form (model space, so it stays
+     on the glass as the eye goes round). Each is soft — a matte rather than a pattern. */
+  float texCell(vec3 q) {
+    vec3 i = floor(q), f = fract(q);
+    float best = 8.0;
+    for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+      vec3 o = vec3(float(x), float(y), float(z));
+      vec3 c = o + vec3(gHash(i + o), gHash(i + o + 17.3), gHash(i + o + 31.7)) - f;
+      best = min(best, dot(c, c));
+    }
+    return best;
+  }
+  float texHeight(vec3 p) {
+    float s = uTexScale;
+    if (uTexKind < 1.5) {
+      vec3 q = p * 14.0 * s;
+      return gNoise(q) * .65 + gNoise(q * 2.03 + 7.1) * .35;
+    }
+    if (uTexKind < 2.5) return gNoise(p * 120.0 * s);
+    if (uTexKind < 3.5) return gNoise(vec3(p.x * 55.0, p.y * 2.5, p.z * 55.0) * s);
+    if (uTexKind < 4.5) return .5 + .5 * sin(p.y * 16.0 * s + gNoise(p * 3.0) * 2.5);
+    return smoothstep(0.0, .8, texCell(p * 9.0 * s));
+  }
+  /* The normal the texture tilts the light by; the smooth normal carries the rim and
+     the silhouette, so the outline stays clean. */
+  float texFreq() {
+    float f = uTexKind < 1.5 ? 14.0 : uTexKind < 2.5 ? 120.0 : uTexKind < 3.5 ? 55.0 : uTexKind < 4.5 ? 16.0 : 9.0;
+    return f * max(uTexScale, .1);
+  }
+  vec3 texNormal(vec3 n) {
+    if (uTexKind < .5 || uTexAmount <= 0.0) return n;
+    float freq = texFreq();
+    float e = .15 / freq;
+    float h = texHeight(vModel);
+    vec3 grad = vec3(texHeight(vModel + vec3(e, 0.0, 0.0)) - h, texHeight(vModel + vec3(0.0, e, 0.0)) - h, texHeight(vModel + vec3(0.0, 0.0, e)) - h) / e;
+    // a slope per unit of the pattern, not of the form, so the knob means the same at every grain
+    grad /= freq;
+    grad -= n * dot(grad, n);
+    return normalize(n - grad * uTexAmount * .9);
+  }
   // how much frost sits here, 0–1
   float frostAt(vec3 dir) {
     float breath = 0.0;
@@ -1055,10 +1164,17 @@ export const glassFragment = /* glsl */ `
     vec3 milk = vec3(.885, .90, .905) * (.95 + .07 * n.y);
     color = mix(color, milk, frost * .85);
     alpha = mix(alpha, .5 + .3 * fresnel, frost);
+    // the surface's fine texture: a matte veil, and the light caught by its tilt
+    vec3 nt = texNormal(n);
+    color = mix(color, milk, uTexMatte * .35);
+    alpha += uTexMatte * .15;
 
-    float spec = pow(max(0.0, dot(reflect(-v, n), uKey)), 28.0) * .28 * uKeyIntensity * (1.0 - uHazeEdge);
+    float spec = pow(max(0.0, dot(reflect(-v, nt), uKey)), 28.0) * .28 * uKeyIntensity * (1.0 - uHazeEdge);
     color += spec;
     alpha += spec * .7;
+    vec3 flow = catchLight(nt, v);
+    color = addLight(color, flow);
+    alpha += max(flow.r, max(flow.g, flow.b)) * .65 * uFlowSheer;
     color = mix(color, uAir, uHazeWash * .5);
     alpha *= 1.0 - uHazeWash * .25;
     // the luminous edge
@@ -1141,18 +1257,25 @@ export const glassRefractFragment = /* glsl */ `
     // toward the edge, so what is behind is drawn in toward the axis
     vec2 suv = gl_FragCoord.xy / uResolution;
     vec3 nv = normalize((viewMatrix * vec4(n, 0.0)).xyz);
-    vec2 shift = -nv.xy * uBend * (.004 + .05 * g * g) * vec2(uResolution.y / uResolution.x, 1.0);
+    vec2 aspect = vec2(uResolution.y / uResolution.x, 1.0);
+    vec2 shift = -nv.xy * uBend * (.004 + .05 * g * g) * aspect;
+    // the surface's fine texture tilts the view a hair wherever it is, face-on too,
+    // so what is behind reads through it as through a satin or a hammered pane
+    vec3 nt = texNormal(n);
+    vec3 nvt = normalize((viewMatrix * vec4(nt, 0.0)).xyz);
+    shift -= (nvt.xy - nv.xy) * .025 * aspect;
     // the far wall sits behind the sheet, so it must not bend the sheet: no shift there
     shift *= 1.0 - back;
-    // at a distance the view through the glass is smeared a little further everywhere
-    float smear = uGlassSoft * (.002 + .05 * thick * thick) + uHazePhoto * .004;
+    // at a distance the view through the glass is smeared a little further everywhere,
+    // and a matte surface scatters it a little too
+    float smear = uGlassSoft * (.002 + .05 * thick * thick) + uHazePhoto * .004 + uTexMatte * .012;
     vec4 frame = behind(clamp(suv + shift, .002, .998), smear);
     vec3 body = mix(env(0.0), frame.rgb / max(frame.a, 1e-3), frame.a);
     // the feet: the glass is thickest low down where it stands
     float foot = smoothstep(.25, 1.0, thick) * (.35 + .65 * low) * mix(1.0, .5, back);
     body *= 1.0 - uThickDark * .7 * foot * (1.0 - uHazeWash);
     // at a grazing angle the surface reflects the room instead
-    vec3 refl = env(reflect(-v, n).y);
+    vec3 refl = env(reflect(-v, nt).y);
     float mirror = pow(g, 4.0) * uRim * .6 * (1.0 - uHazeEdge * .7);
     vec3 color = mix(body, refl, mirror);
     // the live bubble's rim: a dark line just inside the silhouette (its rimPower
@@ -1171,6 +1294,9 @@ export const glassRefractFragment = /* glsl */ `
     vec3 milk = vec3(.885, .90, .905) * (.95 + .07 * n.y);
     color = mix(color, milk, frost * .85);
     alpha = mix(alpha, .5 + .3 * fresnel, frost);
+    // a matte surface: the room's own pale veil over the glass
+    color = mix(color, mix(milk, env(0.0), .5), uTexMatte * .25 * (1.0 - back));
+    alpha += uTexMatte * .12 * (1.0 - back);
 
     // the bubble's film ring: a thin bright line just inside the silhouette (its
     // filmPower 20), where the surface turns toward a large soft key
@@ -1179,6 +1305,10 @@ export const glassRefractFragment = /* glsl */ `
     float line = film * toward * uHighlight * uKeyIntensity * mix(1.0, .3, back) * (1.0 - uHazeEdge);
     color += line * .9;
     alpha += line * .6;
+    // the two catches of the room, quieter through the far wall
+    vec3 flow = catchLight(nt, v) * mix(1.0, .35, back);
+    color = addLight(color, flow);
+    alpha += max(flow.r, max(flow.g, flow.b)) * .55 * uFlowSheer;
     alpha *= mix(1.0, .55, back);
     // and the body fades toward the air
     color = mix(color, uAir, uHazeWash * .5);
@@ -1495,6 +1625,21 @@ export function createGlassUniformSet(scene: THREE.Texture) {
     uStreakRound: { value: 0 },
     uStreakUp: { value: 0 },
     uStreakFlicker: { value: 0 },
+    uFlowGain: { value: 0 },
+    uFlowSpeed: { value: 0 },
+    uFlowSoft: { value: 0.4 },
+    uFlowLift: { value: 0.49 },
+    uFlowRise: { value: 0.35 },
+    uFlowApart: { value: 2.15 },
+    uFlowFeather: { value: 0 },
+    uFlowSheer: { value: 1 },
+    uFlowCore: { value: new THREE.Vector3(1, 1, 1) },
+    uFlowEdgeA: { value: new THREE.Vector3(1, 1, 1) },
+    uFlowEdgeB: { value: new THREE.Vector3(1, 1, 1) },
+    uTexKind: { value: 0 },
+    uTexAmount: { value: 0 },
+    uTexScale: { value: 1 },
+    uTexMatte: { value: 0 },
   };
 }
 export type GlassUniformSet = ReturnType<typeof createGlassUniformSet>;
@@ -1559,6 +1704,22 @@ export interface GlassWrite {
   /** What the glass fades toward at a distance, and the mist's colour (`airFor`). */
   air: readonly [number, number, number];
 }
+type Rgb = [number, number, number];
+/** The light's colours from a stock: each tint brought to full brightness (a hue,
+ *  not a dimming), then drawn away from white by `depth` — the stocks are greys,
+ *  so at 0 they are only a breath of colour. Stock 0 is white light. */
+export function flowColors(stock: number, depth: number): { core: Rgb; a: Rgb; b: Rgb } {
+  const s = STOCKS[Math.round(stock) - 1];
+  if (!s) return { core: [1, 1, 1], a: [1, 1, 1], b: [1, 1, 1] };
+  const tint = (c: readonly number[], k: number): Rgb => {
+    const top = Math.max(c[0], c[1], c[2]);
+    const push = 1 + 6 * depth * k;
+    const f = (v: number) => Math.max(0, 1 - (1 - v / top) * push);
+    return [f(c[0]), f(c[1]), f(c[2])];
+  };
+  return { core: tint(s.base, 0.5), a: tint(s.low, 1), b: tint(s.high, 1) };
+}
+
 /** The knobs written into a glass's uniforms. */
 export function writeGlassUniforms(u: GlassUniformSet, w: GlassWrite) {
   const { tune } = w;
@@ -1580,6 +1741,22 @@ export function writeGlassUniforms(u: GlassUniformSet, w: GlassWrite) {
   u.uStreakRound.value = tune.streakRound;
   u.uStreakUp.value = tune.streakUp;
   u.uStreakFlicker.value = tune.streakFlicker;
+  u.uFlowGain.value = tune.flowGain;
+  u.uFlowSpeed.value = tune.flowSpeed;
+  u.uFlowSoft.value = tune.flowSoft;
+  u.uFlowLift.value = tune.flowLift;
+  u.uFlowRise.value = tune.flowRise;
+  u.uFlowApart.value = tune.flowApart;
+  u.uFlowFeather.value = tune.flowFeather;
+  u.uFlowSheer.value = tune.flowSheer;
+  const light = flowColors(tune.flowStock, tune.flowTint);
+  u.uFlowCore.value.fromArray(light.core);
+  u.uFlowEdgeA.value.fromArray(light.a);
+  u.uFlowEdgeB.value.fromArray(light.b);
+  u.uTexKind.value = Math.round(tune.texKind);
+  u.uTexAmount.value = tune.texAmount;
+  u.uTexScale.value = tune.texScale;
+  u.uTexMatte.value = tune.texMatte;
   u.uAir.value.set(w.air[0], w.air[1], w.air[2]);
   u.uKey.value.copy(w.key);
   u.uKeyIntensity.value = tune.keyIntensity;
@@ -1906,6 +2083,9 @@ function Stage({ tune, mode, sheetMode, face, show, backdrop, room, url, seed, f
 /* ───────── the panel ───────── */
 
 interface Knob { key: keyof VesselTune; label: string; min: number; max: number; step: number; only?: SheetMode }
+/** The glass's surface textures, by `texKind` — the order `texHeight` reads them in. */
+const TEXTURES = ["clear", "satin", "sandblast", "brushed", "ripple", "hammered"] as const;
+
 const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
   // the form itself, as the shape step has it: a category, a deviation inside it, and how far it has grown from its sphere
   { group: "form", knobs: [
@@ -1946,6 +2126,12 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "frostStrength", label: "frost strength", min: 0, max: 1, step: 0.01 },
     { key: "rim", label: "rim", min: 0, max: 1.5, step: 0.01 },
     { key: "thickness", label: "thickness variation", min: 0, max: 1, step: 0.01 },
+  ] },
+  // the glass's fine surface; the kind is chosen above these
+  { group: "surface", knobs: [
+    { key: "texAmount", label: "texture  (how far it tilts the light)", min: 0, max: 1, step: 0.01 },
+    { key: "texScale", label: "grain  (larger is finer)", min: 0.3, max: 3, step: 0.01 },
+    { key: "texMatte", label: "matte  (a pale veil, softens what is behind)", min: 0, max: 1, step: 0.01 },
   ] },
   // shown only under the refraction look
   { group: "refraction", knobs: [
@@ -2014,10 +2200,22 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "keyElevation", label: "key elevation °", min: 0, max: 90, step: 1 },
     { key: "keyIntensity", label: "intensity", min: 0, max: 2, step: 0.01 },
   ] },
+  // two highlights in the room, sliding slowly over the glass
+  { group: "flow", knobs: [
+    { key: "flowGain", label: "highlights  (0 is none)", min: 0, max: 2, step: 0.01 },
+    { key: "flowSpeed", label: "flow  rad/s  (0 holds them)", min: 0, max: 0.8, step: 0.01 },
+    { key: "flowSoft", label: "size  rad", min: 0.08, max: 1.2, step: 0.01 },
+    { key: "flowLift", label: "height  (the middle it travels through)", min: -0.4, max: 1.1, step: 0.01 },
+    { key: "flowRise", label: "rise  (how far the height travels; 0 holds it)", min: 0, max: 0.9, step: 0.01 },
+    { key: "flowApart", label: "apart  rad", min: 0.3, max: 3.14, step: 0.01 },
+    { key: "flowFeather", label: "feather  (0 a clean spot, 1 no edge)", min: 0, max: 1, step: 0.01 },
+    { key: "flowSheer", label: "sheer  (0 only lights what is behind)", min: 0, max: 1, step: 0.01 },
+    { key: "flowTint", label: "colour depth", min: 0, max: 1, step: 0.01 },
+  ] },
   // the eye: orbiting, so the light on the form changes as it would walking round it
   { group: "camera", knobs: [
     { key: "pitch", label: "pitch °  (down on it … up at it)", min: PITCH_MIN, max: PITCH_MAX, step: 0.5 },
-    { key: "distance", label: "distance", min: 5, max: 16, step: 0.1 },
+    { key: "distance", label: "distance", min: DISTANCE_MIN, max: DISTANCE_MAX, step: 0.1 },
     { key: "turn", label: "turn  rad/s", min: 0, max: 0.4, step: 0.005 },
   ] },
   { group: "scene", knobs: [
@@ -2025,6 +2223,94 @@ const KNOBS: { group: string; knobs: Knob[]; only?: SheetMode }[] = [
     { key: "warmth", label: "background warmth", min: 0, max: 1, step: 0.01 },
   ] },
 ];
+
+/** m is linear; the exponents span orders of magnitude, so they ride a log slider. */
+const FORM_SLIDERS: { key: keyof SuperParams; label: string; min: number; max: number; step?: number; log?: boolean }[] = [
+  { key: "m", label: "m  symmetry", min: 0, max: 24, step: 0.05 },
+  { key: "n1", label: "n1  pinch", min: 0.1, max: 60, log: true },
+  { key: "n2", label: "n2  one half", min: 0.1, max: 60, log: true },
+  { key: "n3", label: "n3  the other", min: 0.1, max: 60, log: true },
+  { key: "a", label: "a", min: 0.4, max: 2, step: 0.05 },
+  { key: "b", label: "b", min: 0.4, max: 2, step: 0.05 },
+];
+
+const sliderPos = (value: number, min: number, max: number, log?: boolean) => {
+  if (!log) return Math.min(max, Math.max(min, value));
+  const v = Math.min(max, Math.max(min, value));
+  const lo = Math.log(min), hi = Math.log(max);
+  return (Math.log(v) - lo) / (hi - lo);
+};
+const sliderValue = (pos: number, min: number, max: number, log?: boolean) => {
+  const raw = log ? Math.exp(Math.log(min) + pos * (Math.log(max) - Math.log(min))) : pos;
+  return Math.round(Math.min(max, Math.max(min, raw)) * 1000) / 1000;
+};
+
+/** A shape kept on the vessel: the superformula sliders, plus how far it has grown. */
+interface SavedShape {
+  id: string;
+  name: string;
+  form: ArtifactForm;
+  morph: number;
+}
+
+const FORM_LIBRARY_KEY = "nijimu.lab.form.library";
+
+const presetParams = (m: number, n1: number, n2: number, n3: number, a: number, b: number): SuperParams => ({ m, n1, n2, n3, a, b });
+const yShape = (n: number, top: SuperParams, side: SuperParams, category: ArtifactCategory = "hybrid"): SavedShape => ({
+  id: `y-${String(n).padStart(2, "0")}`,
+  name: `Y-${String(n).padStart(2, "0")}`,
+  morph: 1,
+  form: { category, top, side },
+});
+
+/** Kept on the vessel for good. Cross-section first, then the profile. These are not stored
+    in the browser, so removing a saved shape cannot drop them. */
+const Y_SHAPES: SavedShape[] = [
+  yShape(1, presetParams(8, 1.7, 6.4, 1.3, 1.2, 0.5), presetParams(0, 0.1, 3.3, 0.1, 1.25, 1.05)),
+  yShape(2, presetParams(6, 4.1, 7.3, 7.3, 1, 1), presetParams(5, 0.789, 0.2, 0.2, 1, 1)),
+  yShape(3, presetParams(10, 1.506, 1.033, 0.88, 1.55, 0.95), presetParams(3.95, 0.969, 0.573, 2.197, 1, 1)),
+  yShape(4, presetParams(8, 1, 1, 1, 1, 1), presetParams(4.3, 1, 1, 1, 1, 1)),
+  yShape(5, presetParams(8, 0.3, 1.6, 2.3, 1.1, 1), presetParams(0, 0.3, 5, 2.3, 1.1, 1.2)),
+  yShape(6, presetParams(8, 20, 6.3, 9.5, 1.35, 0.55), presetParams(7.8, 1.5, 0.2, 0.6, 1.3, 0.7)),
+  yShape(7, presetParams(0, 0.1, 0.1, 1, 0.95, 0.95), presetParams(13.3, 1.6, 0.5, 8.3, 1.35, 1.4)),
+  yShape(8, presetParams(16, 20, 6.3, 3.3, 1.45, 0.75), presetParams(2.6, 0.7, 0.1, 0.7, 0.85, 1.25)),
+  yShape(9, presetParams(0.4, 1.7, 0.1, 5.5, 0.9, 0.9), presetParams(1.4, 0.6, 0.3, 0.4, 0.5, 0.5)),
+  yShape(10, presetParams(6, 3, 0.9, 1.9, 1, 1.1), presetParams(12.2, 7.9, 17.3, 2.4, 1.3, 0.85)),
+  yShape(11, presetParams(7, 0.2, 1.7, 1.7, 1, 1), presetParams(9.2, 4.8, 20, 1.9, 1.3, 0.8)),
+  yShape(12, presetParams(20.9, 4.034, 6.4, 1.3, 1.2, 0.5), presetParams(20.3, 0.805, 0.994, 9.386, 1.5, 0.65)),
+  yShape(13, presetParams(20.9, 4.034, 6.4, 1.3, 1.2, 0.5), presetParams(4.3, 0.805, 0.994, 9.386, 1.5, 0.65)),
+  yShape(14, presetParams(7.9, 4.734, 8.975, 1.377, 1.15, 0.5), presetParams(7.75, 3.309, 2.645, 1.933, 1.3, 0.65)),
+  yShape(20, presetParams(0, 0.47, 1.734, 0.95, 1.1, 1), presetParams(0, 0.915, 1.825, 1.825, 1, 1), "flower"),
+];
+const yName = (name: string) => Y_SHAPES.some((s) => s.name === name);
+
+const cloneForm = (form: ArtifactForm): ArtifactForm => ({
+  category: form.category,
+  top: { ...form.top },
+  side: { ...form.side },
+  ...(form.hybridOf ? { hybridOf: [form.hybridOf[0], form.hybridOf[1]] } : {}),
+  ...(form.proportion ? { proportion: { ...form.proportion } } : {}),
+});
+
+const isSavedShape = (value: unknown): value is SavedShape => {
+  const s = value as SavedShape | null;
+  return !!s && typeof s.id === "string" && typeof s.name === "string" && isArtifactForm(s.form) && typeof s.morph === "number" && Number.isFinite(s.morph);
+};
+
+const loadFormLibrary = (): SavedShape[] => {
+  let saved: SavedShape[] = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(FORM_LIBRARY_KEY) ?? "[]") as unknown;
+    if (Array.isArray(raw)) saved = raw.filter(isSavedShape);
+  } catch { /* an unreadable library starts empty */ }
+  const own = saved.filter((s) => !yName(s.name) && !s.id.startsWith("y-") && !s.id.startsWith("preset-"));
+  if (own.length !== saved.length) writeFormLibrary(own);
+  return own;
+};
+
+const writeFormLibrary = (shapes: SavedShape[]) => {
+  localStorage.setItem(FORM_LIBRARY_KEY, JSON.stringify(shapes));
+};
 
 /** /lab/vessel — the memory as a glass vessel with the film inside, with its knobs. */
 /** Everything the panel can set — what an editor hands back to whoever opened it. */
@@ -2090,10 +2376,39 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
     formDraws.current++;
     setForm(createArtifactForm({ seed: `${FORM_SEED}|${category}|${formDraws.current}`, category }));
   };
+  const setFormParam = (set: "top" | "side", key: keyof SuperParams, value: number) => {
+    setForm((f) => ({ ...f, [set]: { ...f[set], [key]: value } }));
+  };
+  const [library, setLibrary] = useState<SavedShape[]>(loadFormLibrary);
+  const [shapeName, setShapeName] = useState("");
+  const [shapeSaved, setShapeSaved] = useState(false);
+  const saveShape = () => {
+    const base = shapeName.trim() || CATEGORY_LABELS[form.category];
+    if (yName(base)) return;
+    const taken = new Set(library.map((s) => s.name));
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+    const next = [{ id: `${Date.now()}`, name, form: cloneForm(form), morph: tune.morph }, ...library];
+    setLibrary(next);
+    writeFormLibrary(next);
+    setShapeName("");
+    setShapeSaved(true);
+    window.setTimeout(() => setShapeSaved(false), 1600);
+  };
+  const recallShape = (entry: SavedShape) => {
+    setForm(cloneForm(entry.form));
+    setTune((t) => ({ ...t, morph: entry.morph }));
+  };
+  const removeShape = (id: string) => {
+    const next = library.filter((s) => s.id !== id);
+    setLibrary(next);
+    writeFormLibrary(next);
+  };
   const held = useRef(false);
   const drag = useRef(0);
   const lastX = useRef(0);
   const lastY = useRef(0);
+  const viewRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const takeFile = (file: File | undefined) => {
@@ -2146,6 +2461,51 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
     if (dy !== 0) setTune((t) => ({ ...t, pitch: Math.min(PITCH_MAX, Math.max(PITCH_MIN, t.pitch - dy * 0.25)) }));
   };
 
+  // Trackpad zoom. A pinch arrives as a wheel with ctrl held; a two-finger
+  // swipe arrives as a plain wheel. Either one moves the camera in or out,
+  // and the distance knob follows. A sideways swipe is left alone.
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return;
+    const zoomBy = (px: number) => {
+      setTune((t) => ({
+        ...t,
+        distance: Math.min(DISTANCE_MAX, Math.max(DISTANCE_MIN, t.distance + px * 0.012)),
+      }));
+    };
+    const onWheel = (e: WheelEvent) => {
+      const pinch = e.ctrlKey || e.metaKey;
+      if (!pinch && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      const line = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+      zoomBy(e.deltaY * line);
+    };
+    let span = 0;
+    const fingerSpan = (touches: TouchList) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) span = fingerSpan(e.touches);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      const next = fingerSpan(e.touches);
+      zoomBy(-(next - span) * 0.35);
+      span = next;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+    };
+  }, []);
+
   return (
     <main onDragOver={(e) => e.preventDefault()} onDrop={onDrop}
       style={{ position: "relative", width: "100%", height: "100dvh", overflow: "hidden", background: backdropCss(backdrop) }}>
@@ -2162,7 +2522,7 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
         : <p style={{ ...META, position: "absolute", top: 26, left: 28, margin: 0, zIndex: 20, color: ink }}>lab — vessel</p>}
 
       {/* hold to stop the turn, drag across to turn, up and down to look down on it or up at it */}
-      <button type="button" aria-label="hold to stop the turn, drag to look round the form"
+      <button type="button" ref={viewRef} aria-label="hold to stop the turn, drag to look round the form, two fingers to zoom"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
         onContextMenu={(e) => e.preventDefault()}
@@ -2211,6 +2571,67 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
                     {describeForm(form)}
                   </span>
                   <TextButton label="another form" onClick={() => drawForm(form.category)} style={{ fontSize: NOTE_SIZE, flexShrink: 0 }} />
+                </div>
+                {(["top", "side"] as const).map((set) => (
+                  <div key={set} style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                    <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.5 }}>
+                      {set === "top" ? "cross-section" : "profile"}
+                    </span>
+                    {FORM_SLIDERS.map(({ key, label, min, max, step, log }) => {
+                      const value = form[set][key] ?? 1;
+                      return (
+                        <label key={key} style={{ display: "block" }}>
+                          <span style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY }}>
+                            <span>{label}</span>
+                            <span style={{ opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>
+                              {value >= 10 ? value.toFixed(1) : value.toFixed(2)}
+                            </span>
+                          </span>
+                          <input type="range" className="vessel-range" aria-label={`${set} ${key}`}
+                            min={log ? 0 : min} max={log ? 1 : max} step={log ? 0.001 : step ?? 0.05}
+                            value={sliderPos(value, min, max, log)}
+                            onChange={(e) => setFormParam(set, key, sliderValue(Number(e.target.value), min, max, log))} />
+                        </label>
+                      );
+                    })}
+                  </div>
+                ))}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                  <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.5 }}>library</span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                    <input aria-label="shape name" placeholder="name this shape" value={shapeName}
+                      onChange={(e) => setShapeName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveShape(); }}
+                      style={{ flex: 1, minWidth: 0, border: "none", borderBottom: "1px solid rgba(123, 123, 135, 0.35)",
+                        background: "transparent", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY,
+                        padding: "2px 0", outline: "none" }} />
+                    <TextButton label={shapeSaved ? "saved" : "save"} onClick={saveShape} style={{ fontSize: NOTE_SIZE, flexShrink: 0 }} />
+                  </div>
+                  {[...Y_SHAPES, ...library].map((entry) => {
+                    const kept = entry.id.startsWith("y-");
+                    const on = formKey(entry.form) === formKey(form) && Math.abs(entry.morph - tune.morph) < 0.001;
+                    return (
+                      <div key={entry.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                          <button type="button" aria-pressed={on} onClick={() => recallShape(entry)}
+                            style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", textAlign: "left",
+                              fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: on ? 1 : 0.7,
+                              textDecoration: on ? "underline" : "none", textUnderlineOffset: 4,
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {entry.name}
+                          </button>
+                          {kept
+                            ? <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.35, flexShrink: 0 }}>kept</span>
+                            : <TextButton label="remove" onClick={() => removeShape(entry.id)} style={{ fontSize: NOTE_SIZE, flexShrink: 0, opacity: 0.55 }} />}
+                        </div>
+                        <span style={{ fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY, opacity: 0.45,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          title={describeForm(entry.form)}>
+                          {describeForm(entry.form)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2273,6 +2694,42 @@ export function VesselPreview({ initial, onChange, onBack, backLabel = "back", y
                     </button>
                   );
                 })}
+              </div>
+            )}
+            {group === "surface" && (
+              <div role="radiogroup" aria-label="surface texture" style={{ display: "flex", flexWrap: "wrap", columnGap: 16, rowGap: 6, marginBottom: 4 }}>
+                {TEXTURES.map((name, i) => {
+                  const on = i === Math.round(tune.texKind);
+                  return (
+                    <button key={name} type="button" role="radio" aria-checked={on} onClick={() => setTune((t) => ({ ...t, texKind: i }))}
+                      style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", fontFamily: SANS, fontSize: NOTE_SIZE,
+                        color: CHROME_GRAY, opacity: on ? 1 : 0.5, textDecoration: on ? "underline" : "none", textUnderlineOffset: 4 }}>
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {group === "flow" && (
+              <div style={{ marginBottom: 4 }}>
+                <span style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: NOTE_SIZE, color: CHROME_GRAY }}>
+                  <span>light</span>
+                  <span style={{ opacity: 0.6 }}>{STOCKS[Math.round(tune.flowStock) - 1]?.name ?? "white"}</span>
+                </span>
+                <div role="radiogroup" aria-label="light colour" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                  {[null, ...STOCKS].map((s, i) => {
+                    const on = i === Math.round(tune.flowStock);
+                    const { core, a, b } = flowColors(i, tune.flowTint);
+                    return (
+                      <button key={s?.name ?? "white"} type="button" role="radio" aria-checked={on} aria-label={s?.name ?? "white"}
+                        onClick={() => setTune((t) => ({ ...t, flowStock: i }))}
+                        style={{ width: 44, height: 22, padding: 0, borderRadius: 3, cursor: "pointer",
+                          border: `1px solid rgba(123, 123, 135, ${on ? 0.7 : 0.22})`,
+                          boxShadow: on ? "0 0 0 2px rgba(236, 237, 236, 1), 0 0 0 3px rgba(123, 123, 135, 0.35)" : "none",
+                          background: `linear-gradient(100deg, ${stockHex(a)}, ${stockHex(core)} 50%, ${stockHex(b)})` }} />
+                    );
+                  })}
+                </div>
               </div>
             )}
             {group === "scene" && (
