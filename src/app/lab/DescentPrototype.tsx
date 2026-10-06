@@ -127,20 +127,22 @@ const WASH_IN_S: [number, number] = [4.6, 9.0];
    that fall onto the form) is kept whole in `wrapCloud.ts` and is **not part
    of the shot** unless `?cloud=1` is on the URL; its knobs extend these. */
 interface WrapTune extends CloudTune {
-  // framing: the camera and its look while the print develops; the form's seat (formZ under the film, which rests at z 2);
-  // how far the view sinks over the wrap
-  cameraY: number; cameraZ: number; lookY: number; lookZ: number; formY: number; formZ: number; viewSink: number;
+  // framing: the camera and its look at the end of the draw-back; the form's seat (formZ under the film, which rests at z 2).
+  // The form sits formY − lookY below the look point: how far it settles down the frame as the view draws back
+  cameraY: number; cameraZ: number; lookY: number; lookZ: number; formY: number; formZ: number;
   // the view turned about the look point, in degrees — to watch the fall from another side; the shot itself does not change
   orbitYaw: number; orbitPitch: number;
-  // the rise: the eye keeps the wrap's offset to the form and goes up with it, looking at it, until
-  // riseViewUntil of the rise; between there and riseViewBack it crosses to the pond view, where the memory is named.
+  // the rise: the form's centre reaches the surface at riseSurfaceAt of the rise (it slows as it nears it), comes up
+  // riseBob above its seat and settles back. The eye keeps the wrap's offset to the form and goes up with it, looking
+  // at it, until riseViewUntil; between there and riseViewBack it eases to the pond view, where the memory is named.
   // riseAbove lifts the eye's offset a little as it follows, so the form is seen from slightly above by the surface
-  riseViewUntil: number; riseViewBack: number; riseAbove: number;
+  riseSurfaceAt: number; riseBob: number; riseViewUntil: number; riseViewBack: number; riseAbove: number;
   /** How much the form grows for the wrap, as a fraction of its size: .3 is 1.3× across, ~2.2× the volume. */
   grow: number;
   /** Seen from under the water the film is backlit; this is how much of its image still shows (was .42). */
   filmBelow: number;
-  // timing: the cloud (?cloud=1 only) releases over releaseS, fixed when it is built — on "again"; the wrap ends at fallS
+  // timing (?cloud=1 only): the cloud releases over releaseS, fixed when it is built — on "again" — and has fallen by fallS,
+  // which is then when the rise begins; without the cloud the rise follows the draw-back directly
   releaseS: number; fallS: number;
   // the print develops into the strip inside the glass over overlayIn…overlayOut (seconds after the
   // emulsion begins to let go) — darks first, as the film's own develop brings an image up
@@ -148,9 +150,9 @@ interface WrapTune extends CloudTune {
 }
 const WRAP_TUNE_DEFAULT: WrapTune = {
   ...CLOUD_TUNE_DEFAULT,
-  cameraY: -3.0, cameraZ: 8.6, lookY: -1.1, lookZ: 2.0, formY: -2.8, formZ: 2.0, viewSink: 0.45,
+  cameraY: -3.0, cameraZ: 8.6, lookY: -2.35, lookZ: 2.0, formY: -2.8, formZ: 2.0,
   orbitYaw: 0, orbitPitch: 0,
-  riseViewUntil: 0.5, riseViewBack: 0.92, riseAbove: 0.6,
+  riseSurfaceAt: 0.55, riseBob: 0.14, riseViewUntil: 0.55, riseViewBack: 1.0, riseAbove: 0.6,
   grow: 0.3,
   filmBelow: 0.6,
   releaseS: 2.2, fallS: 8.0,
@@ -175,8 +177,34 @@ const WRAP_CAMERA = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.cameraY, WRAP_TUNE_DE
 const WRAP_LOOK = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.lookY, WRAP_TUNE_DEFAULT.lookZ);
 const WRAP_FORM_AT = new THREE.Vector3(0, WRAP_TUNE_DEFAULT.formY, WRAP_TUNE_DEFAULT.formZ);
 const WRAP_MOVE_S = 2.2;
+/** When the wrap ends and the rise begins: as the draw-back ends, with nothing held between
+    (only the point cloud, when on, needs its fall to finish first). */
+const wrapEndsFor = (k: { fallS: number }) => (CLOUD ? WRAP_MOVE_S * 0.5 + k.fallS : WRAP_MOVE_S);
 /* The rise: up through the surface, to the seat where the memory is named. */
-const RISE_S = 6.0;
+const RISE_S = 9.0;
+/** How fast the form is still going when its centre meets the surface, relative to its underwater pace
+    (the cubic below arrives at the surface at this slope; ~.6 of its mid-water speed). */
+const RISE_TOUCH = 0.9;
+/** The rise's way along its path by k (0…1 of RISE_S), given where the surface lies on the path
+    (`surface`, a fraction of it), when the centre should reach it (`at`), and how far the form comes up past
+    its seat (`bob`, as a fraction of the way above the surface). Under the water a cubic lifts it out of
+    rest, carries it and slows it toward the surface; above, it keeps slowing (a power curve that takes up
+    the surface's speed, so there is no step), overshoots by `bob` late in the way and settles back onto its
+    seat, as a buoyant thing does — exactly 1 at the end. */
+function riseProgress(k: number, surface: number, at: number, bob: number): number {
+  const S = Math.min(0.95, Math.max(0.05, surface));
+  const kS = Math.min(0.9, Math.max(0.1, at));
+  if (k < kS) {
+    const x = k / kS;
+    return S * (x * x * (3 - 2 * x) + RISE_TOUCH * (x * x * x - x * x));
+  }
+  const x = Math.min(1, (k - kS) / (1 - kS));
+  // the slope the surface hands over, in the way above it
+  const p = Math.max(1.2, (S * RISE_TOUCH * (1 - kS)) / (kS * (1 - S)));
+  const sinx = Math.sin(Math.PI * x);
+  const bump = (sinx * sinx * x * x) / 0.334; // 0 at both ends with their slopes, 1 at its peak near .62
+  return S + (1 - S) * (1 - Math.pow(1 - x, p) + bob * bump);
+}
 /** The film thins away as the eye passes under it on the way down (camera depth, world units) and does not return. */
 const FILM_GONE_DEPTH: [number, number] = [0.05, 0.9];
 const NAME_FORM_AT = new THREE.Vector3(0, 0.95, 2.0);
@@ -980,7 +1008,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
        confirm, so moving the clock is enough — except for what latched on the
        way: the wrap's end, the rise's start and end, the film hidden, the
        surface broken. Those are set to where the target time would have them. */
-    const wrapEnds = WRAP_MOVE_S * 0.5 + knobs.fallS;
+    const wrapEnds = wrapEndsFor(knobs);
     tr.length = wrapEnds + RISE_S + 0.5;
     tr.active = wrapAt.current !== null;
     if (tr.seek !== null && wrapAt.current !== null) {
@@ -997,7 +1025,6 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       } else {
         if (!wrapped.current) {
           wrapped.current = true;
-          setDevelop(sheetU, 1);
           s.rise = true;
           onWrapped();
         }
@@ -1062,8 +1089,12 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     if (riseAt.current === null) RISE_FORM.points[0].copy(scratch.wrapForm);
     if (riseAt.current !== null) {
       const k = Math.min(1, (t - riseAt.current) / RISE_S);
-      const u = flowProgress(k, 0, 1);
-      formAt.copy(RISE_FORM.getPoint(u));
+      // it slows as it nears the surface, comes up gently past its seat and settles back
+      const climb = NAME_FORM_AT.y - scratch.wrapForm.y;
+      const surface = -scratch.wrapForm.y / climb;
+      const u = riseProgress(k, surface, knobs.riseSurfaceAt, knobs.riseBob / Math.max(0.2, NAME_FORM_AT.y));
+      formAt.copy(RISE_FORM.getPoint(Math.min(1, u)));
+      if (u > 1) formAt.y += (u - 1) * climb;
       // the eye follows: it keeps the offset it had to the form at the wrap and goes up with it,
       // looking at the form itself (the wrap's look was a little under it), lifting a little as it nears the surface
       const toForm = smoothProgress(k, 0, 0.35);
@@ -1071,11 +1102,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       cameraAt.copy(scratch.wrapCamera).sub(scratch.wrapForm).add(formAt);
       cameraAt.y += lift;
       lookAt.copy(scratch.wrapLook).sub(scratch.wrapForm).multiplyScalar(1 - toForm).add(formAt);
-      // carry the wrap's slow sink into the start of the rise, so there is no step
-      const carry = knobs.viewSink * (1 - smoothProgress(k, 0, 0.45));
-      cameraAt.y -= carry;
-      lookAt.y -= carry * 0.8;
-      // and as the form comes up to the surface the eye crosses to the pond view, where it is named
+      // and as the form comes up through the surface the eye eases over to the pond view, where it is named
       const settle = smoothProgress(k, knobs.riseViewUntil, Math.max(knobs.riseViewUntil + 0.05, knobs.riseViewBack));
       cameraAt.lerp(POND_CAMERA, settle);
       lookAt.lerp(POND_LOOK, settle);
@@ -1085,10 +1112,6 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       cameraAt.copy(DESCENT_PATH.getPoint(1)).lerp(scratch.wrapCamera, k);
       lookAt.copy(DESCENT_LOOK.getPoint(1)).lerp(scratch.wrapLook, k);
       formAt.lerp(scratch.wrapForm, k);
-      // then the view sinks a little with the grains
-      const sink = smoothProgress(t - wrapAt.current, WRAP_MOVE_S, WRAP_MOVE_S + knobs.fallS) * knobs.viewSink;
-      cameraAt.y -= sink;
-      lookAt.y -= sink * 0.8;
     } else if (descentAt.current === null) {
       cameraAt.copy(POND_CAMERA);
       lookAt.copy(POND_LOOK);
@@ -1325,7 +1348,9 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       glassU.uReveal.value = reveal;
       glassU.uTime.value = t;
       if (mist.current) mist.current.visible = sm.frost * (VESSEL_TUNE.hazeMist + VESSEL_TUNE.hazeGlow) > 0.002;
-      const bob = riseAt.current !== null && risen.current ? Math.sin(t * 0.9) * 0.03 : Math.sin(t * 0.6) * 0.05;
+      // one slow drift throughout, quieting as it comes to rest on the surface (a change of rhythm at the naming read as a jolt)
+      const calm = riseAt.current === null ? 0 : smoothProgress((t - riseAt.current) / RISE_S, 0.6, 1);
+      const bob = Math.sin(t * 0.6) * (0.05 - 0.02 * calm);
       body.position.set(formAt.x, formAt.y + bob, formAt.z);
       // for the wrap the form fills out — about twice its volume — and stays that size up through the rise
       const grown = wrapAt.current === null ? 0 : flowProgress(t - wrapAt.current, 0, WRAP_MOVE_S);
@@ -1345,8 +1370,13 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       wrapAt.current = t;
       buildWrap(mesh, filmUniforms.uPhoto.value, filmUniforms.uSize.value);
     }
+    if (wrapAt.current !== null) {
+      // the print develops into the strip inside the glass on the wrap's clock, into the rise if it
+      // runs that long: darks first (?print=wrap only; the default has the picture there already)
+      const clock = t - wrapAt.current - WRAP_MOVE_S * 0.5;
+      setDevelop(sheetU, smoothProgress(clock, knobs.overlayIn, Math.max(knobs.overlayIn + 0.1, knobs.overlayOut)));
+    }
     if (wrapAt.current !== null && !wrapped.current) {
-      // seconds since the film began to let go
       const clock = t - wrapAt.current - WRAP_MOVE_S * 0.5;
       if (CLOUD) {
         const pu = particleUniforms;
@@ -1355,11 +1385,9 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
         setCloudUniforms(pu, particleMaterial, knobs, gl.getPixelRatio(), mesh ? mesh.position : null);
         if (body) { pu.uForm.value.copy(body.matrixWorld); pu.uFormAt.value.copy(body.position); }
       }
-      // the print develops into the strip inside the glass: darks first (?print=wrap only; the film keeps its emulsion)
-      setDevelop(sheetU, smoothProgress(clock, knobs.overlayIn, Math.max(knobs.overlayIn + 0.1, knobs.overlayOut)));
-      if (clock >= knobs.fallS) {
+      // the rise follows the draw-back directly; nothing is held between
+      if (t - wrapAt.current >= wrapEnds) {
         wrapped.current = true;
-        setDevelop(sheetU, 1);
         onWrapped();
       }
     } else if (body && CLOUD) {
@@ -1496,15 +1524,18 @@ const WRAP_KNOBS: { group: string; knobs: Knob[] }[] = [
     { key: "formZ", label: "form depth (film at 2)", min: -2, max: 4, step: 0.05 },
     { key: "orbitYaw", label: "view turned (°)", min: -180, max: 180, step: 1 },
     { key: "orbitPitch", label: "view raised (°)", min: -80, max: 80, step: 1 },
+    { key: "riseSurfaceAt", label: "rise: reaches the surface at (of rise)", min: 0.1, max: 0.9, step: 0.01 },
+    { key: "riseBob", label: "rise: comes up past its seat by", min: 0, max: 0.6, step: 0.01 },
     { key: "riseViewUntil", label: "rise: follows the form until (of rise)", min: 0, max: 1, step: 0.01 },
     { key: "riseViewBack", label: "rise: at the pond view by", min: 0.05, max: 1, step: 0.01 },
     { key: "riseAbove", label: "rise: eye lifts by", min: -1, max: 2, step: 0.05 },
     { key: "grow", label: "form grows by", min: 0, max: 1, step: 0.01 },
-    { key: "viewSink", label: "view sinks over the wrap", min: 0, max: 1.2, step: 0.01 },
   ] },
   { group: "timing", knobs: [
-    ...(CLOUD ? [{ key: "releaseS", label: "cloud releases over (on again)", min: 0.3, max: 6, step: 0.1 } as const] : []),
-    { key: "fallS", label: "wrap ends at", min: 3, max: 16, step: 0.1 },
+    ...(CLOUD ? [
+      { key: "releaseS", label: "cloud releases over (on again)", min: 0.3, max: 6, step: 0.1 } as const,
+      { key: "fallS", label: "cloud has fallen by", min: 3, max: 16, step: 0.1 } as const,
+    ] : []),
   ] },
   { group: "print", knobs: [
     { key: "overlayIn", label: "print develops from", min: 0, max: 10, step: 0.1 },
@@ -1542,7 +1573,7 @@ function WrapTunePanel({ tune, onChange, focus }: { tune: WrapTune; onChange: (n
         <aside aria-label="wrap knobs" style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 250, padding: "56px 24px 28px 22px",
           boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 8, zIndex: 35, overflowY: "auto",
           borderLeft: "1px solid rgba(123, 123, 135, 0.14)", background: "rgba(236, 237, 236, 0.55)", backdropFilter: "blur(6px)" }}>
-          {WRAP_KNOBS.map(({ group, knobs }) => (
+          {WRAP_KNOBS.filter((g) => g.knobs.length > 0).map(({ group, knobs }) => (
             <section key={group} ref={(el) => { sections.current[group] = el; }}
               style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8, scrollMarginTop: 56 }}>
               <p style={{ ...META, margin: "0 0 2px", color: CHROME_GRAY,
@@ -1591,13 +1622,13 @@ function clampKnobs(k: WrapTune, next: Partial<WrapTune>): WrapTune {
 }
 function phaseBlocks(k: WrapTune): WrapBlock[] {
   const release = WRAP_MOVE_S * 0.5;
-  const wrapEnds = release + k.fallS;
-  const fallEnd = (_: WrapTune, s: number) => ({ fallS: s - release });
+  const wrapEnds = wrapEndsFor(k);
+  const fallEnd = CLOUD ? (_: WrapTune, s: number) => ({ fallS: s - release }) : undefined;
   const motion: WrapBlock[] = CLOUD ? cloudPhaseBlocks(k, release) : [];
   const riseHeld = wrapEnds + RISE_S * k.riseViewUntil;
   return [
     { track: "camera", label: "draw back · form grows", from: 0, to: WRAP_MOVE_S, group: "framing" },
-    { track: "camera", label: "view sinks", from: WRAP_MOVE_S, to: wrapEnds, group: "framing", setTo: fallEnd },
+    ...(CLOUD ? [{ track: "camera", label: "held for the cloud", from: WRAP_MOVE_S, to: wrapEnds, group: "framing", setTo: fallEnd } as WrapBlock] : []),
     { track: "camera", label: "follows the form", from: wrapEnds, to: riseHeld, group: "framing",
       setTo: (_, s) => ({ riseViewUntil: (s - wrapEnds) / RISE_S }) },
     { track: "camera", label: "to the pond view", from: riseHeld, to: wrapEnds + RISE_S * k.riseViewBack, group: "framing",
@@ -1605,7 +1636,10 @@ function phaseBlocks(k: WrapTune): WrapBlock[] {
     ...motion,
     { track: "print", label: "print develops", from: release + k.overlayIn, to: release + Math.max(k.overlayIn + 0.1, k.overlayOut), group: "print",
       setFrom: (_, s) => ({ overlayIn: s - release }), setTo: (_, s) => ({ overlayOut: s - release }) },
-    { track: "rise", label: "rise · surface · named", from: wrapEnds, to: wrapEnds + RISE_S, group: "framing", setFrom: fallEnd },
+    { track: "rise", label: "rises · slows", from: wrapEnds, to: wrapEnds + RISE_S * k.riseSurfaceAt, group: "framing", setFrom: fallEnd,
+      setTo: (_, s) => ({ riseSurfaceAt: (s - wrapEnds) / RISE_S }) },
+    { track: "rise", label: "surfaces · settles · named", from: wrapEnds + RISE_S * k.riseSurfaceAt, to: wrapEnds + RISE_S, group: "framing",
+      setFrom: (_, s) => ({ riseSurfaceAt: (s - wrapEnds) / RISE_S }) },
   ];
 }
 const TRACKS = ["camera", ...(CLOUD ? CLOUD_TRACKS : []), "print", "rise"];

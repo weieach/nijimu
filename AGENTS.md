@@ -641,7 +641,33 @@ any wrap orbit (`orbitYaw`/`orbitPitch`) is let go over the same span.
 `RISE_PATH`/`RISE_LOOK`, `riseYaw`/`risePitch` (the −18°/−49° turn from
 below, which the user found dizzying) are gone; `RISE_FORM` is now a straight
 rise under the film to `NAME_FORM_AT`. The camera crosses the surface
-during the lerp, so the `crossing` blur reads once more on the way up. Not
+during the lerp, so the `crossing` blur reads once more on the way up.
+Later the same night: `viewSink` (the wrap's slow sink of the view) is
+removed — the wrap's view holds still after the draw-back. The rise is
+slower (`RISE_S` 9) and springy: the form's progress along `RISE_FORM` and
+the crossing to the pond view both go through `springProgress` (eased out
+of rest, ~4% overshoot near .7, exactly 1 at the end), so the form comes up
+a little past its seat and settles; defaults `riseViewUntil` .45,
+`riseViewBack` 1. The bob is one slow drift throughout, quieting over the
+last 40% of the rise (it used to change rhythm at the naming, a jolt).
+Then the held beat went too: the rise begins as the draw-back ends
+(`wrapEndsFor` → `WRAP_MOVE_S`; only with `?cloud=1` does `fallS` still
+hold the view until the points have fallen), so confirm → draw back 2.2 s →
+rise 9 s → named. With `?print=wrap` the develop now runs on the wrap's
+clock into the rise rather than being forced done at the wrap's end. The
+"timing" knob group is empty without the cloud and is not drawn. The
+surfacing was then slowed (the user saw a hard cut: the form shot through
+the surface at 1.4 u/s and the eye's spring to the pond view began on the
+same beat): `springProgress` is gone; the form's way is `riseProgress(k,
+surface, riseSurfaceAt, bob)` — under the water a cubic lifts it from rest
+to ~.75 u/s and slows it to ~.5 at the surface (`RISE_TOUCH` .9 of its
+slope), above it a power curve that takes up that slope and keeps slowing,
+with a late bump of `riseBob` (.14 world units) past the seat and back; the
+centre meets the surface at `riseSurfaceAt` (.55 of the rise, knob, also
+the split of the rise track), the eye now eases (smoothstep, no spring) to
+the pond view from `riseViewUntil` (.55). And the draw-back is subtler: the
+form used to settle 1.7 under the look point (the old film-overhead
+framing), now .45 — `lookY` −2.35 — about a quarter of the drop. Not
 yet judged by the user: the follow's feel and the three new defaults, the
 plain fade of the film, and the vessel's look under the water (body alpha
 over the washed water, the frost patches at .15).
