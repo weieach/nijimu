@@ -629,6 +629,16 @@ interface StageProps {
   onRewound: (to: "wrapping" | "rising") => void;
 }
 
+/** Made once and kept for the component's life — through a Fast Refresh too,
+    which recomputes every memo. For the uniform sets that carry the shot's own
+    state (the chosen photo, how far it has developed, the strip's seed, the
+    ripples), so a save while the lab is open does not take them back to the start. */
+function useKept<T>(make: () => T): T {
+  const kept = useRef<T | null>(null);
+  if (kept.current === null) kept.current = make();
+  return kept.current;
+}
+
 function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, glowRef, hintRef, pickRef, captionRef, onFallStart, onSettled, onDescend, onUnder, onWrapped, onRisen, onRewound }: StageProps) {
   const { camera, size, gl, scene } = useThree();
   const time = useRef(0);
@@ -736,13 +746,13 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     if (m > 0.0005 || vesselMorphed.current) { followWall(); vesselMorphed.current = m > 0.0005; }
   };
 
-  const waves = useMemo(() => ({
+  const waves = useKept(() => ({
     uTime: { value: 0 },
     uDrops: { value: Array.from({ length: POND_DROP_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) },
     uTrails: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailControls: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailTimes: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector2(-99, 0)) },
-  }), []);
+  }));
   const under = useMemo(() => ({ value: 0 }), []);
   const water = useMemo(() => ({
     uWash: { value: 0 },
@@ -756,7 +766,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     uInvProjection: { value: new THREE.Matrix4() },
     uCameraWorld: { value: new THREE.Matrix4() },
   }), [waves, water, under]);
-  const filmUniforms = useMemo(() => {
+  const filmUniforms = useKept(() => {
     // one seed for the strip's tears and stains and for where the light gets in
     const seed = Math.random() * 10;
     const look = filmLookUniforms();
@@ -782,7 +792,7 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
       // the whole strip's alpha: 1 until the eye has gone under it, then it thins away for good
       uFade: { value: 1 },
     };
-  }, [waves]);
+  });
   const motesUniforms = useMemo(() => ({
     uTime: waves.uTime, uUnder: under, uWash: water.uWash, uPixel: { value: gl.getPixelRatio() },
   }), [waves, water, under, gl]);
@@ -805,12 +815,12 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
   }, []);
   useEffect(() => () => { refract.target.dispose(); refract.blit.dispose(); refract.quad.geometry.dispose(); }, [refract]);
   // the strip inside is the strip that fell: the same seed for its tears and stains, the same edge print
-  const sheetU = useMemo(() => {
+  const sheetU = useKept(() => {
     const u = createSheetUniformSet(filmUniforms.uEdgePrint.value);
     u.uReveal.value = 0;
     u.uDevelop.value = PRINT_EARLY ? 1.45 : 0;
     return u;
-  }, [filmUniforms]);
+  });
   const glassU = useMemo(() => {
     const u = createGlassUniformSet(refract.target.texture);
     u.uReveal.value = 0;
