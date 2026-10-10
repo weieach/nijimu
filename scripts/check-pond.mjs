@@ -108,8 +108,8 @@ assert.ok(pondSource.includes("(ribbons - .5) * .022 + fibers * .006"), "ambient
 assert.ok(pondSource.includes("float train = cos(trail / wavelength"), "one dispersive train, not rings that each start again from nothing");
 assert.ok(pondSource.includes("float dimple ="), "the touch itself lands on the same frame as the press");
 assert.ok(!pondSource.includes("repeating-radial-gradient"), "the water is simulated, never a drawn-on pattern");
-assert.ok(pondSource.includes("vec2 surface = p - rippleField(p).yz"), "ripple displaces the water texture");
-assert.ok(pondSource.includes("vec2 flow = p - ripple.yz"), "the existing waves move with the same displacement");
+assert.ok(pondSource.includes("vec2 flow = flowAt(ripple, p)"), "ripple and wind share one flow");
+assert.ok(pondSource.includes("return p - ripple.yz * 1.8"), "a ripple drags the surface along with it");
 const pondPageSource = readFileSync(new URL("../src/app/components/MemoryPondPage.tsx", import.meta.url), "utf8");
 assert.ok(!pondPageSource.includes('background: "#7d9290"'), "prompt dots are removed");
 assert.ok(!pondSource.includes("createFlowLake"), "the later flow-map engine is not active");

@@ -313,35 +313,46 @@ const waterVertex = /* glsl */ `
   }
 `;
 
-/* Above: the pond's surface shading, unchanged. Below: Snell's window — the
-   sky only reaches the eye inside ~48° of straight up; beyond it the surface
-   mirrors the depths. */
+/* Above: the pond's surface shading, the same as PerspectivePond. Below:
+   Snell's window — the sky only reaches the eye inside ~48° of straight up;
+   beyond it the surface mirrors the depths. */
 const waterFragment = /* glsl */ `
   ${POND_WAVES_GLSL}
   ${VOLUME_GLSL}
   varying vec3 vWorld;
   void main() {
     vec2 p = vWorld.xz;
-    vec2 surface = p - rippleField(p).yz;
-    float h = waterHeight(p);
-    vec3 n = normalize(vec3((h - waterHeight(p + vec2(.035,0))) / .035, 1.0,
-      (h - waterHeight(p + vec2(0,.035))) / .035));
+    vec3 ripple = rippleField(p);
+    vec2 flow = flowAt(ripple, p);
+    float detail = 1.0 - smoothstep(.3, 1.1, length(fwidth(flow * 12.0)));
+    float stir = 1.0 + clamp(ripple.x * 40.0, -.7, 1.5);
+    float grain = detail * stir;
+    float h = swellFrom(ripple, p) + ripple.x + grainAt(flow) * grain;
+    float hx = waterHeight(p + vec2(.02, 0)) + grainAt(flow + vec2(.02, 0)) * grain;
+    float hz = waterHeight(p + vec2(0, .02)) + grainAt(flow + vec2(0, .02)) * grain;
+    vec3 n = normalize(vec3((h - hx) / .02, 1.0, (h - hz) / .02));
     vec3 eye = normalize(cameraPosition - vWorld);
     vec3 sky = vec3(.888, .902, .897);
     if (cameraPosition.y >= 0.0) {
       vec3 reflection = reflect(-eye, n);
       float fresnel = pow(1.0 - max(0.0, dot(n, eye)), 3.0);
-      vec3 deep = vec3(.49, .59, .59);
-      vec3 color = mix(deep, sky, .36 + fresnel * .56);
-      float clouds = noise(reflection.xz * 3.0 + vec2(uTime * .009, 0));
-      color += (clouds - .5) * .085;
-      float light = pow(max(0.0, dot(reflection, normalize(vec3(-.4, .65, -.8)))), 14.0);
-      color += light * vec3(.16, .15, .12);
-      color += (n.x * .6 + n.z) * .16;
-      vec2 drift = surface * vec2(.38, .65) + vec2(uTime * .018, -uTime * .012);
+      vec3 deep = sky * vec3(.76, .80, .80);
+      vec3 color = mix(deep, sky, .24 + fresnel * .66);
+      float clouds = noise(reflection.xz * 3.0 + WIND * uTime * .04);
+      color += (clouds - .5) * .06;
+      color += (n.x * .6 + n.z) * .14;
+      vec3 sunDir = normalize(vec3(0.0, .24, -1.0));
+      float toSun = max(0.0, dot(reflection, sunDir));
+      float light = pow(toSun, 220.0);
+      float glow = pow(toSun, 12.0);
+      float centre = exp(-(p.x * p.x / 16.0 + pow((p.y + 5.0) / 15.0, 2.0)));
+      float reach = (1.0 - smoothstep(-30.0, -60.0, p.y)) * (.25 + .75 * centre);
+      color += glow * reach * vec3(.05, .046, .036);
+      color += light * reach * (.45 + .55 * fresnel) * vec3(.38, .36, .32);
+      vec2 drift = flow * vec2(.38, .65) + WIND * uTime * .06;
       float bend = noise(drift * .7) * 2.0 - 1.0;
       float ribbons = noise(vec2(drift.x * .7, drift.y * 2.4 + bend * 1.3));
-      vec2 fibersUV = vec2(surface.x * 1.8, surface.y * 24.0 + bend * 5.0 - uTime * .15);
+      vec2 fibersUV = vec2(flow.x * 1.8, flow.y * 24.0 + bend * 5.0 + WIND.y * uTime * .6);
       float fiberAA = 1.0 - smoothstep(.3, 1.3, length(fwidth(fibersUV)));
       float fibers = (noise(fibersUV) - .5) * fiberAA;
       color += vec3((ribbons - .5) * .022 + fibers * .006);
@@ -780,6 +791,8 @@ function Stage({ stage, form: artifactForm, from, tune, transport, crossingRef, 
     uTrails: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailControls: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector4()) },
     uTrailTimes: { value: Array.from({ length: POND_TRAIL_SLOTS }, () => new THREE.Vector2(-99, 0)) },
+    uSheetDrop: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uSheetShape: { value: new THREE.Vector4(1, 1, 1, 0) },
   }));
   const under = useMemo(() => ({ value: 0 }), []);
   const water = useMemo(() => ({
